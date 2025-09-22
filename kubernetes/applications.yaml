@@ -1,0 +1,205 @@
+# Movie Analytics API Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: movie-api-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: movie-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: movie-api
+  namespace: movie-analytics
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: movie-api
+  template:
+    metadata:
+      labels:
+        app: movie-api
+    spec:
+      containers:
+      - name: movie-api
+        image: movie-analytics/api:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MONGODB_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: MONGODB_CONNECTION_STRING
+        envFrom:
+        - configMapRef:
+            name: movie-analytics-config
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Data Ingestion Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-ingestion-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: data-ingestion
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-ingestion
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-ingestion
+  template:
+    metadata:
+      labels:
+        app: data-ingestion
+    spec:
+      containers:
+      - name: data-ingestion
+        image: movie-analytics/ingestion:latest
+        ports:
+        - containerPort: 8001
+        env:
+        - name: TMDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: TMDB_API_KEY
+        envFrom:
+        - configMapRef:
+            name: movie-analytics-config
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        command: ["python", "-m", "src.ingestion.main"]
+        args: ["--mode", "continuous", "--batch-size", "100"]
+
+---
+# Spark Streaming Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-streaming-job
+  namespace: movie-analytics
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: spark-streaming
+        image: movie-analytics/streaming:latest
+        env:
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: MINIO_SECRET_KEY
+        - name: MONGODB_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: MONGODB_CONNECTION_STRING
+        envFrom:
+        - configMapRef:
+            name: movie-analytics-config
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        command: ["spark-submit"]
+        args: [
+          "--master", "spark://spark-master-service:7077",
+          "--deploy-mode", "client",
+          "--driver-memory", "1g",
+          "--executor-memory", "2g",
+          "--executor-cores", "2",
+          "--total-executor-cores", "4",
+          "/app/src/streaming/main.py"
+        ]
+
+---
+# CronJob for periodic data extraction
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: periodic-data-extraction
+  namespace: movie-analytics
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: data-extraction
+            image: movie-analytics/ingestion:latest
+            env:
+            - name: TMDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: movie-analytics-secrets
+                  key: TMDB_API_KEY
+            envFrom:
+            - configMapRef:
+                name: movie-analytics-config
+            command: ["python", "-m", "src.ingestion.main"]
+            args: ["--mode", "batch", "--batch-size", "500"]
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
+                cpu: "1000m"

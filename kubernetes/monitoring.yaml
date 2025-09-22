@@ -1,0 +1,278 @@
+# Grafana Service and Deployment for Monitoring
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: LoadBalancer
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.2.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: GRAFANA_USERNAME
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: movie-analytics-secrets
+              key: GRAFANA_PASSWORD
+        - name: GF_INSTALL_PLUGINS
+          value: "grafana-mongodb-datasource"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+        - name: grafana-config
+          mountPath: /etc/grafana/provisioning
+      volumes:
+      - name: grafana-storage
+        persistentVolumeClaim:
+          claimName: grafana-pvc
+      - name: grafana-config
+        configMap:
+          name: grafana-config
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: movie-analytics
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# Prometheus Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.47.0
+        ports:
+        - containerPort: 9090
+        args:
+        - "--config.file=/etc/prometheus/prometheus.yml"
+        - "--storage.tsdb.path=/prometheus/"
+        - "--web.console.libraries=/etc/prometheus/console_libraries"
+        - "--web.console.templates=/etc/prometheus/consoles"
+        - "--storage.tsdb.retention.time=200h"
+        - "--web.enable-lifecycle"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-storage
+          mountPath: /prometheus
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-storage
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: movie-analytics
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# ConfigMaps for monitoring configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: movie-analytics
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - "movie_analytics_rules.yml"
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'kafka'
+        static_configs:
+          - targets: ['kafka-service:9092']
+
+      - job_name: 'spark-master'
+        static_configs:
+          - targets: ['spark-master-service:8080']
+
+      - job_name: 'spark-worker'
+        static_configs:
+          - targets: ['spark-worker-service:8081']
+
+      - job_name: 'movie-api'
+        static_configs:
+          - targets: ['movie-api-service:8000']
+        metrics_path: '/metrics'
+
+      - job_name: 'mongodb'
+        static_configs:
+          - targets: ['mongodb-service:27017']
+
+      - job_name: 'minio'
+        static_configs:
+          - targets: ['minio-service:9000']
+
+  movie_analytics_rules.yml: |
+    groups:
+    - name: movie_analytics_alerts
+      rules:
+      - alert: HighKafkaLag
+        expr: kafka_consumer_lag_sum > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag detected"
+          description: "Kafka consumer lag is {{ $value }} messages"
+
+      - alert: SparkJobFailed
+        expr: spark_streaming_batch_processing_time > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Spark streaming job taking too long"
+          description: "Spark batch processing time is {{ $value }} seconds"
+
+      - alert: MongoDBConnectionFailed
+        expr: mongodb_connections_current < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MongoDB connection failed"
+          description: "No active MongoDB connections"
+
+      - alert: MinIOStorageHigh
+        expr: minio_disk_storage_used_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO storage usage high"
+          description: "MinIO storage usage is {{ $value }}%"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: movie-analytics
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus-service:9090
+      isDefault: true
+    - name: MongoDB
+      type: grafana-mongodb-datasource
+      access: proxy
+      url: mongodb://admin:password@mongodb-service:27017/moviedb?authSource=admin
+      jsonData:
+        database: moviedb
+
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+    - name: 'movie-analytics'
+      orgId: 1
+      folder: 'Movie Analytics'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      options:
+        path: /var/lib/grafana/dashboards

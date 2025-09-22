@@ -1,0 +1,199 @@
+# Spark Master Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: spark-master
+  ports:
+    - port: 7077
+      targetPort: 7077
+      name: spark
+    - port: 8080
+      targetPort: 8080
+      name: web-ui
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-master
+  template:
+    metadata:
+      labels:
+        app: spark-master
+    spec:
+      containers:
+      - name: spark-master
+        image: bitnami/spark:3.5.0
+        command: ["/opt/bitnami/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.master.Master"]
+        ports:
+        - containerPort: 7077
+        - containerPort: 8080
+        env:
+        - name: SPARK_MODE
+          value: "master"
+        - name: SPARK_MASTER_HOST
+          value: "spark-master-service"
+        - name: SPARK_MASTER_PORT
+          value: "7077"
+        - name: SPARK_MASTER_WEBUI_PORT
+          value: "8080"
+        - name: SPARK_DAEMON_MEMORY
+          value: "1g"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Spark Worker Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: spark-worker
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: web-ui
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+  namespace: movie-analytics
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spark-worker
+  template:
+    metadata:
+      labels:
+        app: spark-worker
+    spec:
+      containers:
+      - name: spark-worker
+        image: bitnami/spark:3.5.0
+        command: ["/opt/bitnami/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master-service:7077"]
+        ports:
+        - containerPort: 8081
+        env:
+        - name: SPARK_MODE
+          value: "worker"
+        - name: SPARK_MASTER_URL
+          value: "spark://spark-master-service:7077"
+        - name: SPARK_WORKER_WEBUI_PORT
+          value: "8081"
+        - name: SPARK_WORKER_MEMORY
+          value: "2g"
+        - name: SPARK_WORKER_CORES
+          value: "2"
+        - name: SPARK_DAEMON_MEMORY
+          value: "1g"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Spark History Server Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-history-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: spark-history
+  ports:
+    - port: 18080
+      targetPort: 18080
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-history
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-history
+  template:
+    metadata:
+      labels:
+        app: spark-history
+    spec:
+      containers:
+      - name: spark-history
+        image: bitnami/spark:3.5.0
+        command: ["/opt/bitnami/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.history.HistoryServer"]
+        ports:
+        - containerPort: 18080
+        env:
+        - name: SPARK_HISTORY_OPTS
+          value: "-Dspark.history.fs.logDirectory=/tmp/spark-events"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: spark-events
+          mountPath: /tmp/spark-events
+      volumes:
+      - name: spark-events
+        emptyDir: {}

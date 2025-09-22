@@ -1,0 +1,43 @@
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: movie-analytics-config
+  namespace: movie-analytics
+data:
+  ENVIRONMENT: "production"
+  TMDB_BASE_URL: "https://api.themoviedb.org/3"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-service:9092"
+  KAFKA_TOPICS_MOVIES: "movies"
+  KAFKA_TOPICS_PEOPLE: "people"
+  KAFKA_TOPICS_CREDITS: "credits"
+  KAFKA_TOPICS_REVIEWS: "reviews"
+  KAFKA_TOPICS_RATINGS: "ratings"
+  SCHEMA_REGISTRY_URL: "http://schema-registry-service:8081"
+  MINIO_ENDPOINT: "minio-service:9000"
+  MINIO_BUCKET_BRONZE: "bronze-data"
+  MINIO_BUCKET_SILVER: "silver-data"
+  MINIO_BUCKET_GOLD: "gold-data"
+  MONGODB_DATABASE: "moviedb"
+  SPARK_MASTER_URL: "spark://spark-master-service:7077"
+  SPARK_APP_NAME: "movie-analytics-pipeline"
+  GRAFANA_URL: "http://grafana-service:3000"
+  SUPERSET_URL: "http://superset-service:8088"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+---
+# Secret for sensitive data
+apiVersion: v1
+kind: Secret
+metadata:
+  name: movie-analytics-secrets
+  namespace: movie-analytics
+type: Opaque
+stringData:
+  TMDB_API_KEY: "your_tmdb_api_key_here"
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin"
+  MONGODB_CONNECTION_STRING: "mongodb://admin:password@mongodb-service:27017/moviedb?authSource=admin"
+  GRAFANA_USERNAME: "admin"
+  GRAFANA_PASSWORD: "admin"

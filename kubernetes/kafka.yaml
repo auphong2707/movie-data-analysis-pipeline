@@ -1,0 +1,171 @@
+# Kafka Services and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: zookeeper
+  ports:
+    - port: 2181
+      targetPort: 2181
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: kafka
+  ports:
+    - port: 9092
+      targetPort: 9092
+    - port: 9093
+      targetPort: 9093
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zookeeper
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+    spec:
+      containers:
+      - name: zookeeper
+        image: confluentinc/cp-zookeeper:7.5.0
+        ports:
+        - containerPort: 2181
+        env:
+        - name: ZOOKEEPER_CLIENT_PORT
+          value: "2181"
+        - name: ZOOKEEPER_TICK_TIME
+          value: "2000"
+        - name: ZOOKEEPER_SYNC_LIMIT
+          value: "2"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.5.0
+        ports:
+        - containerPort: 9092
+        - containerPort: 9093
+        env:
+        - name: KAFKA_BROKER_ID
+          value: "1"
+        - name: KAFKA_ZOOKEEPER_CONNECT
+          value: "zookeeper-service:2181"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://kafka-service:9092,PLAINTEXT_HOST://localhost:9093"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: "PLAINTEXT"
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"
+        - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+          value: "true"
+        - name: KAFKA_LOG_RETENTION_HOURS
+          value: "168"
+        - name: KAFKA_LOG_SEGMENT_BYTES
+          value: "1073741824"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: kafka-data
+          mountPath: /var/lib/kafka/data
+      volumes:
+      - name: kafka-data
+        emptyDir: {}
+
+---
+# Schema Registry Service and Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: schema-registry
+  ports:
+    - port: 8081
+      targetPort: 8081
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: schema-registry
+  template:
+    metadata:
+      labels:
+        app: schema-registry
+    spec:
+      containers:
+      - name: schema-registry
+        image: confluentinc/cp-schema-registry:7.5.0
+        ports:
+        - containerPort: 8081
+        env:
+        - name: SCHEMA_REGISTRY_HOST_NAME
+          value: "schema-registry"
+        - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+          value: "kafka-service:9092"
+        - name: SCHEMA_REGISTRY_LISTENERS
+          value: "http://0.0.0.0:8081"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"

@@ -1,0 +1,254 @@
+# Superset Service and Deployment for Visualization
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: superset
+  ports:
+    - port: 8088
+      targetPort: 8088
+  type: LoadBalancer
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+    spec:
+      containers:
+      - name: superset
+        image: apache/superset:3.0.0
+        ports:
+        - containerPort: 8088
+        env:
+        - name: SUPERSET_SECRET_KEY
+          value: "your-secret-key-here"
+        - name: SUPERSET_CONFIG_PATH
+          value: "/app/superset_config.py"
+        - name: SUPERSET_ENV
+          value: "production"
+        - name: DATABASE_DB
+          value: "superset"
+        - name: DATABASE_HOST
+          value: "superset-db-service"
+        - name: DATABASE_PASSWORD
+          value: "superset"
+        - name: DATABASE_USER
+          value: "superset"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_DIALECT
+          value: "postgresql"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: superset-config
+          mountPath: /app/superset_config.py
+          subPath: superset_config.py
+        command: ["/bin/bash"]
+        args: ["-c", "superset db upgrade && superset init && superset run -h 0.0.0.0 -p 8088"]
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: superset-config
+        configMap:
+          name: superset-config
+
+---
+# PostgreSQL for Superset metadata
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset-db-service
+  namespace: movie-analytics
+spec:
+  selector:
+    app: superset-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset-db
+  namespace: movie-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset-db
+  template:
+    metadata:
+      labels:
+        app: superset-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: "superset"
+        - name: POSTGRES_USER
+          value: "superset"
+        - name: POSTGRES_PASSWORD
+          value: "superset"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: superset-db-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: superset-db-data
+        persistentVolumeClaim:
+          claimName: superset-db-pvc
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: superset-db-pvc
+  namespace: movie-analytics
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# Superset Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-config
+  namespace: movie-analytics
+data:
+  superset_config.py: |
+    import os
+    from cachelib.redis import RedisCache
+
+    # Database configuration
+    SQLALCHEMY_DATABASE_URI = f"postgresql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{os.getenv('DATABASE_DB')}"
+
+    # Secret key
+    SECRET_KEY = os.getenv('SUPERSET_SECRET_KEY', 'your-secret-key-here')
+
+    # Cache configuration
+    CACHE_CONFIG = {
+        'CACHE_TYPE': 'SimpleCache',
+        'CACHE_DEFAULT_TIMEOUT': 300
+    }
+
+    # Additional datasources
+    ADDITIONAL_MODULE_DS_MAP = {}
+
+    # Feature flags
+    FEATURE_FLAGS = {
+        "DASHBOARD_NATIVE_FILTERS": True,
+        "DASHBOARD_CROSS_FILTERS": True,
+        "VERSIONED_EXPORT": True,
+        "EMBEDDABLE_CHARTS": True,
+        "SCHEDULED_QUERIES": True,
+        "SQL_VALIDATORS_BY_ENGINE": {
+            "postgresql": "PostgreSQLValidator",
+            "mysql": "MySQLValidator"
+        }
+    }
+
+    # Email configuration
+    SMTP_HOST = "localhost"
+    SMTP_STARTTLS = True
+    SMTP_SSL = False
+    SMTP_USER = "admin"
+    SMTP_PORT = 25
+    SMTP_PASSWORD = "admin"
+    SMTP_MAIL_FROM = "admin@superset.com"
+
+    # WebDriver configuration for reports
+    WEBDRIVER_BASEURL = "http://superset-service:8088/"
+    WEBDRIVER_BASEURL_USER_FRIENDLY = "http://superset-service:8088/"
+
+    # Enable public role
+    PUBLIC_ROLE_LIKE = "Gamma"
+    
+    # Row level security
+    ENABLE_ROW_LEVEL_SECURITY = True
+
+---
+# Job to create default Superset admin user
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: superset-init-admin
+  namespace: movie-analytics
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: superset-init
+        image: apache/superset:3.0.0
+        command: ["/bin/bash"]
+        args: ["-c", "sleep 60 && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin"]
+        env:
+        - name: SUPERSET_SECRET_KEY
+          value: "your-secret-key-here"
+        - name: DATABASE_DB
+          value: "superset"
+        - name: DATABASE_HOST
+          value: "superset-db-service"
+        - name: DATABASE_PASSWORD
+          value: "superset"
+        - name: DATABASE_USER
+          value: "superset"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_DIALECT
+          value: "postgresql"
+        volumeMounts:
+        - name: superset-config
+          mountPath: /app/superset_config.py
+          subPath: superset_config.py
+      volumes:
+      - name: superset-config
+        configMap:
+          name: superset-config

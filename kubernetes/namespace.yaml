@@ -1,0 +1,8 @@
+# Namespace for the movie analytics pipeline
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: movie-analytics
+  labels:
+    name: movie-analytics
+    purpose: movie-data-pipeline

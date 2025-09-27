@@ -4,7 +4,9 @@ Data cleansing and enrichment functions for Spark streaming.
 import re
 from typing import Optional, List, Dict, Any
 from pyspark.sql import DataFrame
+from pyspark.sql import Column
 from pyspark.sql.functions import *
+from pyspark.sql.functions import null
 from pyspark.sql.types import *
 import logging
 

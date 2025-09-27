@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import *
+from pyspark.sql.functions import null
 from pyspark.sql.types import *
 
 logger = logging.getLogger(__name__)

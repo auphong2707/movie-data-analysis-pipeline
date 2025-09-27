@@ -7,19 +7,29 @@ import sys
 import time
 from typing import Optional
 import threading
+import os
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from config.config import config
-from .tmdb_client import TMDBClient
-from .kafka_producer import MovieDataProducer
-from .data_extractor import DataExtractor
+from src.ingestion.tmdb_client import TMDBClient
+from src.ingestion.kafka_producer import MovieDataProducer
+from src.ingestion.data_extractor import DataExtractor
 
 # Configure logging
+log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, 'ingestion.log')
+
 logging.basicConfig(
     level=getattr(logging, config.log_level),
     format=config.log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('logs/ingestion.log')
+        logging.FileHandler(log_file)
     ]
 )
 

@@ -1,0 +1,15 @@
+{
+  "destinationDefinitionId": "8b746512-8c2e-6ac1-4adc-b59faafd473c",
+  "workspaceId": "YOUR_WORKSPACE_ID",
+  "connectionConfiguration": {
+    "instance": "mongodb://mongodb:27017",
+    "database": "movie_analysis",
+    "auth_type": {
+      "authorization": "none"
+    },
+    "tunnel_method": {
+      "tunnel_method": "NO_TUNNEL"
+    }
+  },
+  "name": "MongoDB Movies Destination"
+}

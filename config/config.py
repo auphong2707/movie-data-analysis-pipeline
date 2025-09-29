@@ -48,6 +48,12 @@ class Config:
         
         # Spark Configuration
         self.spark_master_url = os.getenv('SPARK_MASTER_URL', 'spark://localhost:7077')
+        
+        # Airbyte Configuration
+        self.airbyte_host = os.getenv('AIRBYTE_HOST', 'localhost')
+        self.airbyte_port = int(os.getenv('AIRBYTE_PORT', '8001'))
+        self.airbyte_workspace_id = os.getenv('AIRBYTE_WORKSPACE_ID')
+        self.airbyte_webapp_url = os.getenv('AIRBYTE_WEBAPP_URL', 'http://localhost:8000')
         self.spark_app_name = os.getenv('SPARK_APP_NAME', 'movie-analytics-pipeline')
         
         # Monitoring Configuration

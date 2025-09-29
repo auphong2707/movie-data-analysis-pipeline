@@ -1,0 +1,397 @@
+---
+# Airbyte Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: airbyte
+  labels:
+    name: airbyte
+---
+# Airbyte ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airbyte-config
+  namespace: airbyte
+data:
+  DATABASE_USER: "airbyte"
+  DATABASE_PASSWORD: "password"
+  AIRBYTE_VERSION: "0.50.33"
+  TRACKING_STRATEGY: "logging"
+  WORKER_ENVIRONMENT: "kubernetes"
+  LOG_LEVEL: "INFO"
+---
+# Airbyte Database PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airbyte-db-pvc
+  namespace: airbyte
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Airbyte Workspace PVC  
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airbyte-workspace-pvc
+  namespace: airbyte
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+---
+# Airbyte Data PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airbyte-data-pvc
+  namespace: airbyte
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Airbyte Database Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airbyte-db
+  namespace: airbyte
+  labels:
+    app: airbyte-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airbyte-db
+  template:
+    metadata:
+      labels:
+        app: airbyte-db
+    spec:
+      containers:
+      - name: airbyte-db
+        image: airbyte/db:0.50.33
+        ports:
+        - containerPort: 5432
+        env:
+        - name: CONFIG_DATABASE_USER
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_USER
+        - name: CONFIG_DATABASE_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_PASSWORD
+        - name: DATABASE_USER
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_USER
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_PASSWORD
+        volumeMounts:
+        - name: airbyte-db-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: airbyte-db-storage
+        persistentVolumeClaim:
+          claimName: airbyte-db-pvc
+---
+# Airbyte Database Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-db-svc
+  namespace: airbyte
+spec:
+  selector:
+    app: airbyte-db
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+---
+# Airbyte Temporal Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airbyte-temporal
+  namespace: airbyte
+  labels:
+    app: airbyte-temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airbyte-temporal
+  template:
+    metadata:
+      labels:
+        app: airbyte-temporal
+    spec:
+      containers:
+      - name: airbyte-temporal
+        image: airbyte/temporal:0.50.33
+        ports:
+        - containerPort: 7233
+        env:
+        - name: DB
+          value: "postgresql"
+        - name: DB_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_USER
+        - name: POSTGRES_PWD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_PASSWORD
+        - name: POSTGRES_SEEDS
+          value: "airbyte-db-svc:5432"
+        - name: DYNAMIC_CONFIG_FILE_PATH
+          value: "config/dynamicconfig/development.yaml"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: LOG_LEVEL
+        volumeMounts:
+        - name: airbyte-data-storage
+          mountPath: /etc/temporal/config/dynamicconfig
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: airbyte-data-storage
+        persistentVolumeClaim:
+          claimName: airbyte-data-pvc
+---
+# Airbyte Temporal Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-temporal-svc
+  namespace: airbyte
+spec:
+  selector:
+    app: airbyte-temporal
+  ports:
+  - port: 7233
+    targetPort: 7233
+  type: ClusterIP
+---
+# Airbyte Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airbyte-server
+  namespace: airbyte
+  labels:
+    app: airbyte-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airbyte-server
+  template:
+    metadata:
+      labels:
+        app: airbyte-server
+    spec:
+      containers:
+      - name: airbyte-server
+        image: airbyte/server:0.50.33
+        ports:
+        - containerPort: 8001
+        env:
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: AIRBYTE_VERSION
+        - name: CONFIG_DATABASE_USER
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_USER
+        - name: CONFIG_DATABASE_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_PASSWORD
+        - name: DATABASE_USER
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_USER
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: DATABASE_PASSWORD
+        - name: CONFIG_ROOT
+          value: "/data"
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: TRACKING_STRATEGY
+        - name: WEBAPP_URL
+          value: "http://airbyte-webapp-svc:80"
+        - name: WORKER_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: WORKER_ENVIRONMENT
+        - name: TEMPORAL_HOST
+          value: "airbyte-temporal-svc:7233"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: LOG_LEVEL
+        volumeMounts:
+        - name: airbyte-workspace-storage
+          mountPath: /tmp/workspace
+        - name: airbyte-data-storage
+          mountPath: /data
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+      volumes:
+      - name: airbyte-workspace-storage
+        persistentVolumeClaim:
+          claimName: airbyte-workspace-pvc
+      - name: airbyte-data-storage
+        persistentVolumeClaim:
+          claimName: airbyte-data-pvc
+---
+# Airbyte Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-server-svc
+  namespace: airbyte
+spec:
+  selector:
+    app: airbyte-server
+  ports:
+  - port: 8001
+    targetPort: 8001
+  type: ClusterIP
+---
+# Airbyte Webapp Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airbyte-webapp
+  namespace: airbyte
+  labels:
+    app: airbyte-webapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airbyte-webapp
+  template:
+    metadata:
+      labels:
+        app: airbyte-webapp
+    spec:
+      containers:
+      - name: airbyte-webapp
+        image: airbyte/webapp:0.50.33
+        ports:
+        - containerPort: 80
+        env:
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: AIRBYTE_VERSION
+        - name: API_URL
+          value: "/api/v1/"
+        - name: INTERNAL_API_HOST
+          value: "airbyte-server-svc:8001"
+        - name: CONNECTOR_BUILDER_API_HOST
+          value: "airbyte-connector-builder-server-svc:80"
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-config
+              key: TRACKING_STRATEGY
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+# Airbyte Webapp Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-webapp-svc
+  namespace: airbyte
+spec:
+  selector:
+    app: airbyte-webapp
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+# Airbyte Webapp Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: airbyte-webapp-ingress
+  namespace: airbyte
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+  - host: airbyte.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: airbyte-webapp-svc
+            port:
+              number: 80

@@ -1,5 +1,9 @@
 version: '3.8'
 
+networks:
+  movie-pipeline:
+    driver: bridge
+
 services:
   # Zookeeper for Kafka
   zookeeper:
@@ -14,6 +18,8 @@ services:
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - movie-pipeline
 
   # Kafka
   kafka:
@@ -40,6 +46,8 @@ services:
       KAFKA_MESSAGE_MAX_BYTES: 1000000
     volumes:
       - kafka-data:/var/lib/kafka/data
+    networks:
+      - movie-pipeline
 
   # Schema Registry
   schema-registry:
@@ -54,6 +62,8 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - movie-pipeline
 
   # MongoDB
   mongodb:
@@ -68,6 +78,8 @@ services:
       MONGO_INITDB_DATABASE: moviedb
     volumes:
       - mongodb-data:/data/db
+    networks:
+      - movie-pipeline
 
   # MinIO (S3-compatible storage)
   minio:
@@ -83,6 +95,8 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio-data:/data
+    networks:
+      - movie-pipeline
 
   # Apache Superset
   superset:
@@ -95,6 +109,8 @@ services:
       SUPERSET_SECRET_KEY: your-secret-key-here
     volumes:
       - superset-data:/app/superset_home
+    networks:
+      - movie-pipeline
 
   # Spark Master
   spark-master:
@@ -113,6 +129,8 @@ services:
     volumes:
       - ./spark/apps:/opt/bitnami/spark/apps
       - ./spark/jars:/opt/bitnami/spark/jars
+    networks:
+      - movie-pipeline
 
   # Spark Worker
   spark-worker:
@@ -133,6 +151,8 @@ services:
     volumes:
       - ./spark/apps:/opt/bitnami/spark/apps
       - ./spark/jars:/opt/bitnami/spark/jars
+    networks:
+      - movie-pipeline
 
   # Grafana for monitoring
   grafana:
@@ -145,6 +165,68 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - grafana-data:/var/lib/grafana
+    networks:
+      - movie-pipeline
+
+  # Movie Data Ingestion Service (can be replaced by Airbyte)
+  movie-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingestion
+    container_name: movie-ingestion
+    environment:
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/moviedb?authSource=admin
+    depends_on:
+      - kafka
+      - mongodb
+    volumes:
+      - ./config:/app/config
+      - ./src:/app/src
+    networks:
+      - movie-pipeline
+    profiles:
+      - legacy-ingestion  # Use with docker-compose --profile legacy-ingestion
+
+  # Movie Data Processing Service
+  movie-processing:
+    build:
+      context: .
+      dockerfile: Dockerfile.streaming
+    container_name: movie-processing
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/moviedb?authSource=admin
+    depends_on:
+      - kafka
+      - spark-master
+      - mongodb
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    networks:
+      - movie-pipeline
+
+  # API Serving Service
+  movie-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.serving
+    container_name: movie-api
+    environment:
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/moviedb?authSource=admin
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongodb
+    volumes:
+      - ./src:/app/src
+    networks:
+      - movie-pipeline
 
 volumes:
   zookeeper-data:

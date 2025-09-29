@@ -1,0 +1,2 @@
+# Add python-dotenv to requirements
+python-dotenv>=1.0.0

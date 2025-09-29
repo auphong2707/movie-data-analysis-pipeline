@@ -6,7 +6,7 @@ A comprehensive big data analytics pipeline for movie data using Kappa Architect
 
 This project implements a real-time movie data analytics pipeline with the following components:
 
-- **Data Ingestion**: TMDB/IMDb API clients with Kafka producers
+- **Data Ingestion**: Airbyte ETL platform with TMDB API connectors (or legacy direct API clients)
 - **Stream Processing**: Apache Spark Structured Streaming
 - **Storage**: MinIO (S3-compatible) with Bronze/Silver/Gold layers
 - **Serving**: MongoDB for fast queries
@@ -18,10 +18,15 @@ This project implements a real-time movie data analytics pipeline with the follo
 ```
 movie-data-analysis-pipeline/
 ├── src/
-│   ├── ingestion/          # Data ingestion from APIs
+│   ├── ingestion/          # Data ingestion (Airbyte integration + legacy)
 │   ├── streaming/          # Spark streaming jobs
 │   ├── storage/           # Storage layer management
 │   └── serving/           # NoSQL serving layer
+├── airbyte/               # Airbyte ETL configurations
+│   ├── sources/           # TMDB API source configs
+│   ├── destinations/      # Kafka/MongoDB destination configs
+│   ├── connections/       # Connection and sync configs
+│   └── transformations/   # dbt transformation models
 ├── config/                # Configuration files
 ├── kubernetes/            # K8s deployment manifests
 ├── spark/                 # Spark applications and JARs
@@ -45,27 +50,45 @@ movie-data-analysis-pipeline/
 docker-compose up -d
 ```
 
-2. Install Python dependencies:
+2. Start Airbyte services:
+```bash
+docker-compose -f airbyte/docker-compose.airbyte.yml up -d
+```
+
+3. Install Python dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables:
+4. Set up environment variables:
 ```bash
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env with your API keys and Airbyte configuration
 ```
 
-4. Run the ingestion pipeline:
+5. Configure Airbyte (see [Airbyte Setup Guide](docs/AIRBYTE_SETUP.md)):
+   - Access UI at http://localhost:8000
+   - Configure TMDB source and Kafka/MongoDB destinations
+   - Create connections and sync schedules
+
+6. Run the ingestion pipeline:
 ```bash
-python src/ingestion/main.py
+# Using Airbyte (recommended)
+python -m src.ingestion.main --airbyte batch
+
+# Using legacy extractor
+python -m src.ingestion.main --legacy batch
 ```
 
 ## Components
 
 ### Data Ingestion
-- TMDB API integration for movie metadata
-- Kafka producers for real-time streaming
+- **Airbyte ETL Platform** (Recommended): Robust, scalable ETL with built-in connectors
+  - TMDB API source with HTTP connector
+  - Error handling and retry mechanisms
+  - Incremental sync capabilities
+  - Web UI for pipeline management
+- **Legacy Direct Integration**: Custom TMDB API clients with Kafka producers
 - Support for multiple data types (movies, people, credits, reviews)
 
 ### Stream Processing
@@ -94,6 +117,16 @@ python src/ingestion/main.py
 ## Deployment
 
 See `kubernetes/` directory for production deployment manifests.
+
+### Airbyte Integration Benefits
+
+- **Reliability**: Built-in error handling, retries, and monitoring
+- **Scalability**: Better resource management and parallel processing  
+- **Maintainability**: Reduces custom code maintenance burden
+- **Features**: Incremental syncs, data deduplication, schema evolution
+- **UI**: Rich web interface for managing data pipelines
+
+For detailed Airbyte setup instructions, see [docs/AIRBYTE_SETUP.md](docs/AIRBYTE_SETUP.md).
 
 ## Contributing
 

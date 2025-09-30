@@ -154,6 +154,245 @@ services:
     networks:
       - movie-pipeline
 
+  # PostgreSQL for Airflow
+  postgres:
+    image: postgres:13
+    hostname: postgres
+    container_name: airflow-postgres
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+    networks:
+      - movie-pipeline
+
+  # Redis for Airflow Celery
+  redis:
+    image: redis:7.2-bookworm
+    hostname: redis
+    container_name: airflow-redis
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 30s
+      retries: 50
+    restart: always
+    networks:
+      - movie-pipeline
+
+  # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.10.3
+    hostname: airflow-webserver
+    container_name: airflow-webserver
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment: &airflow-common-env
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'movie-pipeline-secret-key'
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: 'UTC'
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: 1
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 10
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      # Environment variables for our pipeline
+      TMDB_API_KEY: ${TMDB_API_KEY}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MONGODB_URI: mongodb://admin:password@mongodb:27017/moviedb?authSource=admin
+      SPARK_MASTER_URL: spark://spark-master:7077
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    command: webserver
+    networks:
+      - movie-pipeline
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.10.3
+    hostname: airflow-scheduler
+    container_name: airflow-scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    restart: always
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - movie-pipeline
+
+  # Airflow Worker
+  airflow-worker:
+    image: apache/airflow:2.10.3
+    hostname: airflow-worker
+    container_name: airflow-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    restart: always
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - movie-pipeline
+
+  # Airflow Triggerer
+  airflow-triggerer:
+    image: apache/airflow:2.10.3
+    hostname: airflow-triggerer
+    container_name: airflow-triggerer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    restart: always
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - movie-pipeline
+
+  # Airflow Init
+  airflow-init:
+    image: apache/airflow:2.10.3
+    hostname: airflow-init
+    container_name: airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "${AIRFLOW_UID:-50000}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    networks:
+      - movie-pipeline
+
+  # Airflow CLI
+  airflow-cli:
+    image: apache/airflow:2.10.3
+    hostname: airflow-cli
+    container_name: airflow-cli
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config:/opt/airflow/config
+      - ./src:/opt/airflow/src
+    user: "${AIRFLOW_UID:-50000}:0"
+    profiles:
+      - debug
+    networks:
+      - movie-pipeline
+
   # Grafana for monitoring
   grafana:
     image: grafana/grafana:latest
@@ -236,3 +475,4 @@ volumes:
   minio-data:
   superset-data:
   grafana-data:
+  postgres-db-volume:

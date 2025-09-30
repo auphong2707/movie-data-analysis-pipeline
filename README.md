@@ -1,17 +1,64 @@
-# Movie Data Analytics Pipeline
+# Movie Data Analytics Pipeline - Updated with Apache Airflow
 
-A comprehensive big data analytics pipeline for movie data using Kappa Architecture.
+A comprehensive big data analytics pipeline for movie data using Kappa Architecture with **Apache Airflow** orchestration.
 
 ## Architecture Overview
 
-This project implements a real-time movie data analytics pipeline with the following components:
+This project implements a real-time movie data analytics pipeline with advanced orchestration using Apache Airflow:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   TMDB API      │    │     Kafka       │    │    MongoDB      │
+│   (Data Source) │    │  (Streaming)    │    │   (Storage)     │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          │                      │                      │
+┌─────────▼──────────────────────▼──────────────────────▼───────┐
+│                    Apache Airflow                             │
+│                  (Orchestration Layer)                        │
+│  ┌───────────────┐ ┌───────────────┐ ┌─────────────────────┐  │
+│  │  Data         │ │  Processing   │ │   Quality           │  │
+│  │ Ingestion     │ │  & Analytics  │ │  Monitoring         │  │
+│  │     DAG       │ │     DAG       │ │     DAG             │  │
+│  └───────────────┘ └───────────────┘ └─────────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
+          │                      │                      │
+          │                      │                      │
+┌─────────▼───────┐    ┌─────────▼───────┐    ┌─────────▼───────┐
+│  Apache Spark   │    │  Apache Superset│    │    Grafana      │
+│  (Processing)   │    │ (Visualization) │    │  (Monitoring)   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+## 🚀 New Features with Airflow
+
+### Advanced Orchestration
+- **Dependency Management**: Complex task dependencies with conditional execution
+- **Error Handling**: Sophisticated retry mechanisms and failure notifications
+- **Resource Management**: Intelligent task scheduling and resource allocation
+- **Monitoring**: Real-time pipeline monitoring with custom dashboards
+
+### Scheduling Capabilities
+- **Flexible Scheduling**: Cron-based scheduling with timezone support
+- **Backfilling**: Historical data processing capabilities
+- **Sensor-based Triggers**: Data availability-driven execution
+- **Manual Triggers**: On-demand pipeline execution
+
+### Quality Assurance
+- **Data Quality Monitoring**: Automated schema validation and data integrity checks
+- **Health Checks**: System component health monitoring
+- **Alerting**: Email and Slack notifications for failures and quality issues
+- **Reporting**: Comprehensive quality and performance reports
+
+## Components
 
 - **Data Ingestion**: Airbyte ETL platform with TMDB API connectors (or legacy direct API clients)
+- **Orchestration**: Apache Airflow for workflow management and scheduling
 - **Stream Processing**: Apache Spark Structured Streaming
 - **Storage**: MinIO (S3-compatible) with Bronze/Silver/Gold layers
 - **Serving**: MongoDB for fast queries
 - **Visualization**: Apache Superset and Grafana
-- **Orchestration**: Kubernetes deployment
+- **Deployment**: Docker Compose for local development, Kubernetes for production
 
 ## Project Structure
 
@@ -22,18 +69,35 @@ movie-data-analysis-pipeline/
 │   ├── streaming/          # Spark streaming jobs
 │   ├── storage/           # Storage layer management
 │   └── serving/           # NoSQL serving layer
+├── dags/                  # Airflow DAG definitions
+├── plugins/               # Airflow custom operators and hooks
+├── logs/                  # Airflow execution logs
 ├── airbyte/               # Airbyte ETL configurations
 │   ├── sources/           # TMDB API source configs
 │   ├── destinations/      # Kafka/MongoDB destination configs
 │   ├── connections/       # Connection and sync configs
 │   └── transformations/   # dbt transformation models
-├── config/                # Configuration files
+├── config/                # Configuration files (including Airflow)
 ├── kubernetes/            # K8s deployment manifests
 ├── spark/                 # Spark applications and JARs
 ├── tests/                 # Test suites
-├── docs/                  # Documentation
-└── docker-compose.yml     # Local development setup
+├── docs/                  # Documentation (including Airflow setup)
+└── docker-compose.yml     # Local development setup with Airflow
 ```
+
+## Services and Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| **Airflow Webserver** | 8090 | Workflow management UI |
+| **Kafka** | 9092 | Message streaming |
+| **Schema Registry** | 8081 | Avro schema management |
+| **MongoDB** | 27017 | Document database |
+| **MinIO** | 9000, 9001 | S3-compatible storage |
+| **Spark Master** | 8080, 7077 | Spark cluster management |
+| **Apache Superset** | 8088 | Data visualization |
+| **Grafana** | 3000 | Monitoring dashboards |
+| **Movie API** | 8000 | REST API for movie data |
 
 ## Quick Start
 
@@ -43,12 +107,64 @@ movie-data-analysis-pipeline/
 - Python 3.9+
 - Kubernetes cluster (for production)
 
-### Local Development
+### Local Development with Airflow
 
-1. Start the infrastructure:
+1. **Configure environment variables:**
+```bash
+cp .env.example .env
+# Edit .env with your TMDB API key and email settings
+```
+
+2. **Initialize Airflow:**
+```bash
+# Create required directories
+mkdir -p dags logs plugins
+
+# Set permissions (Linux/macOS)
+sudo chown -R 50000:0 dags logs plugins
+
+# Initialize Airflow database
+docker-compose up airflow-init
+```
+
+3. **Start the infrastructure:**
 ```bash
 docker-compose up -d
 ```
+
+4. **Access Airflow UI:**
+- URL: `http://localhost:8090`
+- Username: `admin`
+- Password: `admin`
+
+5. **Setup Airflow connections and variables:**
+```bash
+docker-compose exec airflow-webserver python /opt/airflow/config/airflow_config.py
+```
+
+6. **Enable and trigger DAGs:**
+- Navigate to Airflow UI
+- Enable the desired DAGs (toggle switches)
+- Trigger manually or wait for scheduled execution
+
+### Airflow DAGs
+
+The pipeline includes three main DAGs:
+
+1. **movie_data_ingestion** (Hourly)
+   - Extract trending and popular movies from TMDB
+   - Stream data to Kafka topics
+   - Monitor extraction metrics
+
+2. **movie_data_processing** (Daily)
+   - Process raw data with Spark
+   - Perform sentiment analysis
+   - Generate analytics and store in MongoDB
+
+3. **data_quality_monitoring** (Every 6 hours)
+   - Validate data schemas and integrity
+   - Monitor system health
+   - Generate quality reports and alerts
 
 2. Start Airbyte services:
 ```bash

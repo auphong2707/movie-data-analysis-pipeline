@@ -6,11 +6,15 @@ from pyspark.sql.types import *
 from pyspark.conf import SparkConf
 import logging
 
+# Import Iceberg configuration
+from config.iceberg_config import iceberg_config
+
 logger = logging.getLogger(__name__)
 
 def create_spark_session(app_name: str = "MovieAnalyticsPipeline", 
                         master_url: str = "local[*]",
-                        additional_configs: dict = None) -> SparkSession:
+                        additional_configs: dict = None,
+                        enable_iceberg: bool = True) -> SparkSession:
     """Create and configure Spark session for the movie analytics pipeline."""
     
     # Base configuration
@@ -41,17 +45,28 @@ def create_spark_session(app_name: str = "MovieAnalyticsPipeline",
     conf.set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     conf.set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     
+    # Apache Iceberg Configuration
+    if enable_iceberg:
+        logger.info("Enabling Apache Iceberg table format")
+        iceberg_configs = iceberg_config.get_spark_iceberg_configs()
+        for key, value in iceberg_configs.items():
+            conf.set(key, value)
+    
     # Additional configurations
     if additional_configs:
         for key, value in additional_configs.items():
             conf.set(key, value)
     
-    # Required JARs for Kafka and other dependencies
+    # Required JARs for Kafka, Iceberg and other dependencies
     jars = [
         "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1",
         "org.apache.kafka:kafka-clients:3.5.0",
         "org.apache.spark:spark-avro_2.12:3.4.1",
-        "com.johnsnowlabs.nlp:spark-nlp_2.12:5.1.4"
+        "com.johnsnowlabs.nlp:spark-nlp_2.12:5.1.4",
+        # Apache Iceberg dependencies
+        "org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.4.3",
+        "org.apache.hadoop:hadoop-aws:3.3.4",
+        "com.amazonaws:aws-java-sdk-bundle:1.12.262"
     ]
     conf.set("spark.jars.packages", ",".join(jars))
     

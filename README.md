@@ -55,7 +55,8 @@ This project implements a real-time movie data analytics pipeline with advanced 
 - **Data Ingestion**: Airbyte ETL platform with TMDB API connectors (or legacy direct API clients)
 - **Orchestration**: Apache Airflow for workflow management and scheduling
 - **Stream Processing**: Apache Spark Structured Streaming
-- **Storage**: MinIO (S3-compatible) with Bronze/Silver/Gold layers
+- **Storage**: MinIO (S3-compatible) with Bronze/Silver/Gold layers using **Apache Iceberg** table format
+- **Table Format**: Apache Iceberg for ACID transactions, schema evolution, and time travel
 - **Serving**: MongoDB for fast queries
 - **Visualization**: Apache Superset and Grafana
 - **Deployment**: Docker Compose for local development, Kubernetes for production
@@ -94,6 +95,7 @@ movie-data-analysis-pipeline/
 | **Schema Registry** | 8081 | Avro schema management |
 | **MongoDB** | 27017 | Document database |
 | **MinIO** | 9000, 9001 | S3-compatible storage |
+| **Hive Metastore** | 9083 | Iceberg catalog service |
 | **Spark Master** | 8080, 7077 | Spark cluster management |
 | **Apache Superset** | 8088 | Data visualization |
 | **Grafana** | 3000 | Monitoring dashboards |
@@ -243,6 +245,17 @@ See `kubernetes/` directory for production deployment manifests.
 - **UI**: Rich web interface for managing data pipelines
 
 For detailed Airbyte setup instructions, see [docs/AIRBYTE_SETUP.md](docs/AIRBYTE_SETUP.md).
+
+### Apache Iceberg Integration Benefits
+
+- **ACID Transactions**: Ensures data consistency across concurrent reads and writes
+- **Schema Evolution**: Add, drop, or rename columns without rewriting data
+- **Time Travel**: Query historical data snapshots for auditing and recovery
+- **Partition Evolution**: Change partitioning schemes without full rewrites
+- **Hidden Partitioning**: Users query without knowing partition details
+- **Improved Performance**: Better query performance through metadata optimization
+
+For detailed Iceberg setup instructions, see [docs/ICEBERG_SETUP.md](docs/ICEBERG_SETUP.md).
 
 ## Contributing
 

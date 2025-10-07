@@ -98,6 +98,43 @@ services:
     networks:
       - movie-pipeline
 
+  # PostgreSQL for Hive Metastore (Iceberg Catalog)
+  postgres-metastore:
+    image: postgres:13
+    hostname: postgres-metastore
+    container_name: postgres-metastore
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore
+    volumes:
+      - postgres-metastore-data:/var/lib/postgresql/data
+    networks:
+      - movie-pipeline
+
+  # Hive Metastore for Iceberg Catalog
+  hive-metastore:
+    image: apache/hive:4.0.0
+    hostname: hive-metastore
+    container_name: hive-metastore
+    depends_on:
+      - postgres-metastore
+    ports:
+      - "9083:9083"
+    environment:
+      DB_DRIVER: postgres
+      SERVICE_NAME: metastore
+      SERVICE_OPTS: "-Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver 
+                     -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres-metastore:5432/metastore
+                     -Djavax.jdo.option.ConnectionUserName=hive 
+                     -Djavax.jdo.option.ConnectionPassword=hive"
+    volumes:
+      - hive-metastore-data:/opt/hive/data
+    networks:
+      - movie-pipeline
+
   # Apache Superset
   superset:
     image: apache/superset:latest
@@ -476,3 +513,5 @@ volumes:
   superset-data:
   grafana-data:
   postgres-db-volume:
+  postgres-metastore-data:
+  hive-metastore-data:

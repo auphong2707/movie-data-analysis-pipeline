@@ -1,0 +1,358 @@
+# Repository Structure
+
+### **1. Configuration Layer**
+
+**`config.py`**
+
+- **Input**: Environment variables (.env file, system environment)
+- **Output**: Configuration object with validated settings for all components
+- **Purpose**: Centralized configuration management
+
+---
+
+**`schemas.py`**
+
+- **Input**: Schema definitions in Avro format
+- **Output**: Structured schema objects for data validation
+- **Purpose**: Data contract definitions
+
+---
+
+### **2. Data Ingestion Layer (ingestion)**
+
+**`tmdb_client.py`**
+
+- **Input**:
+    - TMDB API key
+    - API endpoint parameters (movie_id, page numbers, search queries)
+- **Output**:
+    - JSON responses from TMDB API (movies, people, credits, reviews)
+    - Rate-limited API calls (4 requests/second)
+- **Purpose**: External API data extraction
+
+---
+
+**`kafka_producer.py`**
+
+- **Input**:
+    - Movie/people/credits/reviews data (Python dictionaries)
+    - Kafka bootstrap servers configuration
+    - Schema registry URL
+- **Output**:
+    - Messages to Kafka topics (movies, people, credits, reviews)
+    - Delivery reports and statistics
+- **Purpose**: Stream data to Kafka for real-time processing
+
+---
+
+**`data_extractor.py`**
+
+- **Input**:
+    - TMDB client instance
+    - Kafka producer instance
+    - Extraction parameters (pages, time windows)
+- **Output**:
+    - Extracted data lists (movies, people, credits, reviews)
+    - Extraction statistics and metrics
+    - Data streamed to Kafka topics
+- **Purpose**: Orchestrates API extraction and Kafka publishing
+
+---
+
+**`main.py (Ingestion)`**
+
+- **Input**:
+    - Command line arguments (batch/continuous mode)
+    - Configuration settings
+- **Output**:
+    - Orchestrated data extraction pipeline
+    - Logged statistics and health status
+- **Purpose**: Main entry point for ingestion pipeline
+
+---
+
+### **3. Stream Processing Layer (streaming)**
+
+**`spark_config.py`**
+
+- **Input**:
+    - Application name, master URL
+    - Additional Spark configurations
+- **Output**:
+    - Configured SparkSession with optimized settings
+    - Schema definitions for structured streaming
+- **Purpose**: Spark environment setup
+
+---
+
+**`data_cleaner.py`**
+
+- **Input**:
+    - Raw Spark DataFrames from Kafka streams
+    - Data validation rules
+- **Output**:
+    - Cleaned and enriched DataFrames with:
+        - Standardized formats
+        - Data quality flags
+        - Derived columns (popularity_tier, rating_tier, etc.)
+        - Validation results
+- **Purpose**: Data cleansing and enrichment
+
+---
+
+**`sentiment_analyzer.py`**
+
+- **Input**:
+    - Review DataFrames with text content
+    - Spark ML pipeline configurations
+- **Output**:
+    - DataFrames with sentiment analysis results:
+        - Sentiment scores (-1 to 1)
+        - Sentiment labels (positive/negative/neutral)
+        - Confidence scores
+        - Aggregated movie sentiment metrics
+- **Purpose**: Text sentiment analysis using Spark ML/NLP
+
+---
+
+**`main.py (Streaming)`**
+
+- **Input**:
+    - Kafka streams (movies, people, credits, reviews topics)
+    - Checkpoint locations
+    - Processing configurations
+- **Output**:
+    - Processed data written to Bronze/Silver/Gold layers in MinIO
+    - Real-time aggregations sent to MongoDB
+    - Streaming query status and metrics
+- **Purpose**: Main Spark Structured Streaming orchestrator
+
+---
+
+### **4. Storage Layer (storage)**
+
+**`storage_manager.py`**
+
+- **Input**:
+    - Spark DataFrames
+    - Layer specifications (Bronze/Silver/Gold)
+    - Partition strategies
+    - MinIO/S3 configurations
+- **Output**:
+    - Parquet files stored in MinIO buckets
+    - Storage statistics and health metrics
+    - Optimized data layouts
+- **Purpose**: Data lake management across Bronze/Silver/Gold layers
+
+---
+
+**`partitioning.py`**
+
+- **Input**:
+    - DataFrames with timestamp and categorical columns
+    - Data type specifications (movies/reviews/credits/people)
+    - Layer requirements (Bronze/Silver/Gold)
+- **Output**:
+    - DataFrames with partition columns added
+    - Partitioning strategies for optimal query performance
+    - Data quality validation results
+- **Purpose**: Optimized data partitioning and quality validation
+
+---
+
+### **5. Serving Layer (serving)**
+
+**`mongodb_service.py`**
+
+- **Input**:
+    - Processed data from streaming pipeline
+    - MongoDB connection configurations
+    - Query parameters and filters
+- **Output**:
+    - Data stored in MongoDB collections with indexes
+    - Query results for API endpoints
+    - Database performance metrics
+- **Purpose**: Fast NoSQL serving layer for real-time queries
+
+---
+
+**`api_server.py`**
+
+- **Input**:
+    - HTTP requests with query parameters
+    - MongoDB query results
+    - API endpoint specifications
+- **Output**:
+    - JSON API responses with:
+        - Movie data and analytics
+        - People information and relationships
+        - Sentiment analysis results
+        - Trending and popularity metrics
+        - Health and performance status
+- **Purpose**: RESTful API for external consumption
+
+---
+
+### **6. Infrastructure & Orchestration**
+
+**`docker-compose.yml`**
+
+- **Input**:
+    - Docker service configurations
+    - Environment variables
+    - Volume mount specifications
+- **Output**:
+    - Running infrastructure stack:
+        - Kafka + Zookeeper
+        - MongoDB
+        - MinIO (S3-compatible storage)
+        - Spark cluster
+        - Grafana, Superset
+- **Purpose**: Local development environment
+
+---
+
+**`kubernetes manifests`**
+
+- **Input**:
+    - Kubernetes deployment specifications
+    - ConfigMaps and Secrets
+    - Service definitions
+- **Output**:
+    - Production-ready Kubernetes deployments
+    - Scalable and resilient infrastructure
+- **Purpose**: Production orchestration
+
+---
+
+### **📈 Data Flow Summary**
+
+```
+TMDB API → Data Extractor → Kafka Topics
+    ↓
+Kafka → Spark Streaming → Data Cleaner → Sentiment Analyzer
+    ↓
+Bronze Layer (Raw) → Silver Layer (Cleaned) → Gold Layer (Aggregated)
+    ↓
+MongoDB (Serving) → REST API → Client Applications
+
+```
+
+### **🔄 Key Data Transformations**
+
+1. **Raw to Bronze**: Minimal cleaning, add timestamps, basic validation
+2. **Bronze to Silver**: Data cleansing, enrichment, standardization, sentiment analysis
+3. **Silver to Gold**: Aggregations, business metrics, trending calculations
+4. **Gold to Serving**: Pre-computed results stored in MongoDB for fast API responses
+
+Each component is designed for **scalability**, **real-time processing**, and **data quality**, with comprehensive monitoring and error handling throughout the pipeline.
+# Adding Tools
+
+## Current Architecture Analysis
+
+**What you have:**
+
+- **Messaging**: Kafka + Zookeeper
+- **Stream Processing**: Apache Spark (Structured Streaming)
+- **Container Orchestration**: Kubernetes
+- **Storage**: MinIO (S3-compatible) + MongoDB (serving layer)
+- **Visualization**: Apache Superset + Grafana
+
+## Recommended Tool Integrations
+
+### 1. **Keep Kafka** (vs RedPanda)
+
+**Recommendation**: Stick with Kafka
+
+- Your system is already well-integrated with Kafka
+- You have proper schema registry setup
+- Kafka is more mature for enterprise use
+- *Consider RedPanda only if you need better performance with fewer operational overhead*
+
+### 2. **Keep Spark** (vs Flink)
+
+**Recommendation**: Stick with Apache Spark
+
+- Your streaming jobs are already built on Spark
+- Better integration with your existing MinIO/S3 storage
+- Stronger batch + streaming unified processing
+- *Consider Flink only if you need ultra-low latency (<10ms)*
+
+### 3. **Add Airbyte** for ETL
+
+**Recommendation**: **INTEGRATE** - High Priority
+
+- Perfect for extracting data from TMDB API more reliably
+- Better error handling and retry mechanisms
+- Built-in connectors for various data sources
+- Can replace your custom data_extractor.py with more robust solution
+
+### 4. **Add Airflow** for Orchestration
+
+**Recommendation**: **INTEGRATE** - High Priority
+
+- Schedule your data extraction jobs
+- Better dependency management between pipeline stages
+- Monitor and retry failed jobs
+- Replace your current manual scheduling in continuous extraction
+
+### 5. **Add Apache Iceberg** Table Format
+
+**Recommendation**: **INTEGRATE** - Medium Priority
+
+- Enhanced MinIO storage with ACID transactions
+- Better schema evolution for your Bronze/Silver/Gold layers
+- Time travel capabilities for data versioning
+- Improved performance for analytical queries
+
+### 6. **Add DataHub** for Data Governance
+
+**Recommendation**: **INTEGRATE** - Medium Priority
+
+- Document your data lineage from TMDB → Kafka → Spark → MinIO
+- Data discovery and cataloging
+- Schema registry integration
+- Better than OpenMetadata for Kafka/Spark ecosystems
+
+### 7. **Consider ClickHouse** for OLAP
+
+**Recommendation**: **EVALUATE** - Low Priority
+
+- Could complement MongoDB for analytical workloads
+- Better for time-series analysis of movie trends
+- Consider only if MongoDB performance becomes insufficient
+
+### 8. **Keep Superset** for Visualization
+
+**Recommendation**: Keep current setup
+
+- Already integrated and working
+- Good for your use case
+
+## Implementation Priority
+
+### Phase 1 (High Priority - Next 1-2 months)
+
+1. **Airflow**: Replace manual scheduling with proper workflow orchestration
+2. **Airbyte**: Replace custom data extraction with robust ETL
+
+### Phase 2 (Medium Priority - 3-6 months)
+
+1. **Apache Iceberg**: Enhance your lakehouse architecture
+2. **DataHub**: Add data governance and cataloging
+
+### Phase 3 (Evaluation - 6+ months)
+
+1. **ClickHouse**: Only if analytical query performance becomes a bottleneck
+
+## Architecture Diagram Enhancement
+
+```
+TMDB API → Airbyte → Kafka → Spark → MinIO (Iceberg) → MongoDB → Superset
+    ↑                 ↑        ↑         ↑            ↑         ↑
+  Airflow          Schema    Airflow   DataHub    DataHub   Grafana
+(Schedule)       Registry   (Monitor) (Catalog)  (Lineage) (Monitor)
+
+```
+
+Would you like me to help you create implementation plans for any of these tools, starting with Airflow and Airbyte integration?

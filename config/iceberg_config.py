@@ -13,7 +13,7 @@ class IcebergConfig:
     
     def __init__(self):
         # Iceberg Catalog Configuration
-        self.catalog_type = os.getenv('ICEBERG_CATALOG_TYPE', 'hive')  # Options: hive, hadoop, rest, glue
+        self.catalog_type = os.getenv('ICEBERG_CATALOG_TYPE', 'hadoop')  # Options: hive, hadoop, rest, glue
         self.catalog_name = os.getenv('ICEBERG_CATALOG_NAME', 'movie_catalog')
         
         # Warehouse location (MinIO/S3)

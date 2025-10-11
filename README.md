@@ -57,6 +57,7 @@ This project implements a real-time movie data analytics pipeline with advanced 
 - **Stream Processing**: Apache Spark Structured Streaming
 - **Storage**: MinIO (S3-compatible) with Bronze/Silver/Gold layers using **Apache Iceberg** table format
 - **Table Format**: Apache Iceberg for ACID transactions, schema evolution, and time travel
+- **Data Governance**: **DataHub** for metadata management, lineage tracking, and data discovery
 - **Serving**: MongoDB for fast queries
 - **Visualization**: Apache Superset and Grafana
 - **Deployment**: Docker Compose for local development, Kubernetes for production
@@ -69,7 +70,8 @@ movie-data-analysis-pipeline/
 │   ├── ingestion/          # Data ingestion (Airbyte integration + legacy)
 │   ├── streaming/          # Spark streaming jobs
 │   ├── storage/           # Storage layer management
-│   └── serving/           # NoSQL serving layer
+│   ├── serving/           # NoSQL serving layer
+│   └── governance/        # DataHub lineage tracking and metadata
 ├── dags/                  # Airflow DAG definitions
 ├── plugins/               # Airflow custom operators and hooks
 ├── logs/                  # Airflow execution logs
@@ -98,6 +100,8 @@ movie-data-analysis-pipeline/
 | **Hive Metastore** | 9083 | Iceberg catalog service |
 | **Spark Master** | 8080, 7077 | Spark cluster management |
 | **Apache Superset** | 8088 | Data visualization |
+| **DataHub GMS** | 8080 | Metadata graph service |
+| **DataHub Frontend** | 9002 | Data governance UI |
 | **Grafana** | 3000 | Monitoring dashboards |
 | **Movie API** | 8000 | REST API for movie data |
 

@@ -64,6 +64,12 @@ class Config:
         # Superset Configuration
         self.superset_url = os.getenv('SUPERSET_URL', 'http://localhost:8088')
         
+        # DataHub Configuration
+        self.datahub_gms_url = os.getenv('DATAHUB_GMS_URL', 'http://localhost:8080')
+        self.datahub_frontend_url = os.getenv('DATAHUB_FRONTEND_URL', 'http://localhost:9002')
+        self.datahub_token = os.getenv('DATAHUB_TOKEN')
+        self.enable_datahub_lineage = os.getenv('ENABLE_DATAHUB_LINEAGE', 'true').lower() == 'true'
+        
         # Logging Configuration
         self.log_level = os.getenv('LOG_LEVEL', 'INFO')
         self.log_format = os.getenv(
@@ -102,6 +108,9 @@ class Config:
             'spark_app_name': self.spark_app_name,
             'grafana_url': self.grafana_url,
             'superset_url': self.superset_url,
+            'datahub_gms_url': self.datahub_gms_url,
+            'datahub_frontend_url': self.datahub_frontend_url,
+            'enable_datahub_lineage': self.enable_datahub_lineage,
             'log_level': self.log_level
         }
 

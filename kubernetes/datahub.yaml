@@ -1,0 +1,403 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: datahub
+  labels:
+    name: datahub
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: datahub-config
+  namespace: datahub
+data:
+  DATAHUB_GMS_HOST: "0.0.0.0"
+  DATAHUB_GMS_PORT: "8080"
+  KAFKA_BOOTSTRAP_SERVER: "kafka.movie-pipeline:9092"
+  KAFKA_SCHEMAREGISTRY_URL: "http://schema-registry.movie-pipeline:8081"
+  ELASTICSEARCH_HOST: "datahub-elasticsearch"
+  ELASTICSEARCH_PORT: "9200"
+  GRAPH_SERVICE_IMPL: "elasticsearch"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: datahub-secrets
+  namespace: datahub
+type: Opaque
+stringData:
+  EBEAN_DATASOURCE_USERNAME: "datahub"
+  EBEAN_DATASOURCE_PASSWORD: "datahub"
+  MYSQL_ROOT_PASSWORD: "datahub"
+  DATAHUB_SECRET: "YouMustChangeThisSecretValue"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: datahub-elasticsearch-pvc
+  namespace: datahub
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: datahub-mysql-pvc
+  namespace: datahub
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datahub-elasticsearch
+  namespace: datahub
+  labels:
+    app: datahub-elasticsearch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datahub-elasticsearch
+  template:
+    metadata:
+      labels:
+        app: datahub-elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: elasticsearch:7.9.3
+        ports:
+        - containerPort: 9200
+        env:
+        - name: discovery.type
+          value: "single-node"
+        - name: xpack.security.enabled
+          value: "false"
+        - name: ES_JAVA_OPTS
+          value: "-Xms512m -Xmx512m"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
+      volumes:
+      - name: elasticsearch-data
+        persistentVolumeClaim:
+          claimName: datahub-elasticsearch-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datahub-elasticsearch
+  namespace: datahub
+spec:
+  selector:
+    app: datahub-elasticsearch
+  ports:
+  - port: 9200
+    targetPort: 9200
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datahub-mysql
+  namespace: datahub
+  labels:
+    app: datahub-mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datahub-mysql
+  template:
+    metadata:
+      labels:
+        app: datahub-mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_DATABASE
+          value: "datahub"
+        - name: MYSQL_USER
+          value: "datahub"
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: datahub-secrets
+              key: EBEAN_DATASOURCE_PASSWORD
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: datahub-secrets
+              key: MYSQL_ROOT_PASSWORD
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-data
+        persistentVolumeClaim:
+          claimName: datahub-mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datahub-mysql
+  namespace: datahub
+spec:
+  selector:
+    app: datahub-mysql
+  ports:
+  - port: 3306
+    targetPort: 3306
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datahub-gms
+  namespace: datahub
+  labels:
+    app: datahub-gms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datahub-gms
+  template:
+    metadata:
+      labels:
+        app: datahub-gms
+    spec:
+      containers:
+      - name: datahub-gms
+        image: linkedin/datahub-gms:v0.12.1
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATAHUB_GMS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: DATAHUB_GMS_HOST
+        - name: DATAHUB_GMS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: DATAHUB_GMS_PORT
+        - name: EBEAN_DATASOURCE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: datahub-secrets
+              key: EBEAN_DATASOURCE_USERNAME
+        - name: EBEAN_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: datahub-secrets
+              key: EBEAN_DATASOURCE_PASSWORD
+        - name: EBEAN_DATASOURCE_URL
+          value: "jdbc:mysql://datahub-mysql:3306/datahub?verifyServerCertificate=false&useSSL=true&useUnicode=yes&characterEncoding=UTF-8&enabledTLSProtocols=TLSv1.2"
+        - name: EBEAN_DATASOURCE_DRIVER
+          value: "com.mysql.cj.jdbc.Driver"
+        - name: KAFKA_BOOTSTRAP_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: KAFKA_BOOTSTRAP_SERVER
+        - name: KAFKA_SCHEMAREGISTRY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: KAFKA_SCHEMAREGISTRY_URL
+        - name: ELASTICSEARCH_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: ELASTICSEARCH_HOST
+        - name: ELASTICSEARCH_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: ELASTICSEARCH_PORT
+        - name: GRAPH_SERVICE_IMPL
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: GRAPH_SERVICE_IMPL
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datahub-gms
+  namespace: datahub
+spec:
+  selector:
+    app: datahub-gms
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datahub-frontend
+  namespace: datahub
+  labels:
+    app: datahub-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datahub-frontend
+  template:
+    metadata:
+      labels:
+        app: datahub-frontend
+    spec:
+      containers:
+      - name: datahub-frontend
+        image: linkedin/datahub-frontend-react:v0.12.1
+        ports:
+        - containerPort: 9002
+        env:
+        - name: DATAHUB_GMS_HOST
+          value: "datahub-gms"
+        - name: DATAHUB_GMS_PORT
+          value: "8080"
+        - name: DATAHUB_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: datahub-secrets
+              key: DATAHUB_SECRET
+        - name: DATAHUB_APP_VERSION
+          value: "1.0"
+        - name: DATAHUB_PLAY_MEM_BUFFER_SIZE
+          value: "10MB"
+        - name: JAVA_OPTS
+          value: "-Xms512m -Xmx512m -Dhttp.port=9002 -Dconfig.file=datahub-frontend/conf/application.conf -Djava.security.auth.login.config=datahub-frontend/conf/jaas.conf -Dlogback.configurationFile=datahub-frontend/conf/logback.xml -Dlogback.debug=false -Dpidfile.path=/dev/null"
+        - name: KAFKA_BOOTSTRAP_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: KAFKA_BOOTSTRAP_SERVER
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9002
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datahub-frontend
+  namespace: datahub
+spec:
+  selector:
+    app: datahub-frontend
+  ports:
+  - port: 9002
+    targetPort: 9002
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datahub-actions
+  namespace: datahub
+  labels:
+    app: datahub-actions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datahub-actions
+  template:
+    metadata:
+      labels:
+        app: datahub-actions
+    spec:
+      containers:
+      - name: datahub-actions
+        image: linkedin/datahub-actions:v0.0.11
+        env:
+        - name: GMS_HOST
+          value: "datahub-gms"
+        - name: GMS_PORT
+          value: "8080"
+        - name: KAFKA_BOOTSTRAP_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config
+              key: KAFKA_BOOTSTRAP_SERVER
+        - name: SCHEMA_REGISTRY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: datahub-config  
+              key: KAFKA_SCHEMAREGISTRY_URL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"

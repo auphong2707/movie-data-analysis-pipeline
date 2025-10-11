@@ -24,6 +24,17 @@ class MongoDBManager:
         self.collections = {}
         self._connect()
         self._initialize_collections()
+        
+        # DataHub lineage tracking
+        self.lineage_tracker = None
+        if config.enable_datahub_lineage:
+            try:
+                from src.governance.datahub_lineage import get_lineage_tracker
+                self.lineage_tracker = get_lineage_tracker()
+                self._track_mongodb_collections()
+                logger.info("DataHub lineage tracking enabled for MongoDB")
+            except ImportError as e:
+                logger.warning(f"DataHub lineage tracking disabled: {e}")
     
     def _connect(self):
         """Establish connection to MongoDB."""
@@ -545,3 +556,29 @@ class AnalyticsQueryService:
                 metrics[collection_name] = {'error': str(e)}
         
         return metrics
+    
+    def _track_mongodb_collections(self):
+        """Track MongoDB collections in DataHub for lineage."""
+        if not self.lineage_tracker:
+            return
+        
+        collections_lineage = {
+            'movies': ['gold-data/movies', 'silver-data/movies'],
+            'people': ['gold-data/people', 'silver-data/people'], 
+            'analytics': ['gold-data/aggregations'],
+            'trends': ['gold-data/trends']
+        }
+        
+        for collection, source_layers in collections_lineage.items():
+            try:
+                self.lineage_tracker.track_mongodb_serving(
+                    collection=collection,
+                    source_layers=source_layers,
+                    properties={
+                        'database': config.mongodb_database,
+                        'connection_string': config.mongodb_connection_string.split('@')[1],  # Hide credentials
+                        'collection_description': f'MongoDB collection for {collection} serving layer'
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to track lineage for collection {collection}: {e}")

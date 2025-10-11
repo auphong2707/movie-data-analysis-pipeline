@@ -25,6 +25,16 @@ class MovieStreamingProcessor:
         self.sentiment_analyzer = None
         self.running_queries = []
         
+        # DataHub lineage tracking
+        self.lineage_tracker = None
+        if config.enable_datahub_lineage:
+            try:
+                from src.governance.datahub_lineage import get_lineage_tracker
+                self.lineage_tracker = get_lineage_tracker()
+                logger.info("DataHub lineage tracking enabled for Spark processing")
+            except ImportError as e:
+                logger.warning(f"DataHub lineage tracking disabled: {e}")
+        
     def initialize(self):
         """Initialize Spark session and components."""
         logger.info("Initializing Movie Streaming Processor...")
@@ -98,6 +108,13 @@ class MovieStreamingProcessor:
             .start()
         
         self.running_queries.append(silver_query)
+        
+        # Track lineage in DataHub
+        self._track_spark_lineage(
+            job_name="movie_stream_processing",
+            input_topics=["movies"],
+            output_layers=["bronze-data/movies", "silver-data/movies"]
+        )
         
         return cleaned_movies
     
@@ -351,6 +368,26 @@ class MovieStreamingProcessor:
             status["query_details"].append(query_info)
         
         return status
+    
+    def _track_spark_lineage(self, job_name: str, input_topics: list, output_layers: list):
+        """Track Spark job lineage in DataHub."""
+        if not self.lineage_tracker:
+            return
+        
+        try:
+            self.lineage_tracker.track_spark_processing(
+                job_name=job_name,
+                input_topics=input_topics,
+                output_layers=output_layers,
+                properties={
+                    'spark_master': config.spark_master_url,
+                    'checkpoint_location': self.checkpoint_location,
+                    'processing_type': 'structured_streaming'
+                }
+            )
+            logger.info(f"Tracked lineage for Spark job: {job_name}")
+        except Exception as e:
+            logger.warning(f"Failed to track lineage for Spark job {job_name}: {e}")
 
 def main():
     """Main entry point."""

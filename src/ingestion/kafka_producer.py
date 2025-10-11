@@ -10,6 +10,7 @@ from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 import threading
 import time
+from config.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,19 @@ class MovieDataProducer:
         # Delivery tracking
         self.delivery_reports = []
         self.lock = threading.Lock()
+        
+        # DataHub lineage tracking
+        self.lineage_tracker = None
+        if config.enable_datahub_lineage:
+            try:
+                from src.governance.datahub_lineage import get_lineage_tracker
+                self.lineage_tracker = get_lineage_tracker()
+                logger.info("DataHub lineage tracking enabled")
+            except ImportError as e:
+                logger.warning(f"DataHub lineage tracking disabled: {e}")
+        
+        # Track Kafka topics creation in DataHub
+        self._track_kafka_topics()
     
     def _error_callback(self, error: KafkaError):
         """Callback for producer errors."""
@@ -155,6 +169,26 @@ class MovieDataProducer:
         """Close the producer."""
         self.flush()
         self.producer = None
+    
+    def _track_kafka_topics(self):
+        """Track Kafka topics in DataHub for lineage."""
+        if not self.lineage_tracker:
+            return
+        
+        topics = ['movies', 'people', 'credits', 'reviews', 'ratings']
+        for topic in topics:
+            try:
+                self.lineage_tracker.track_kafka_ingestion(
+                    topic=topic,
+                    source_system='tmdb',
+                    properties={
+                        'bootstrap_servers': self.bootstrap_servers,
+                        'schema_registry_url': self.schema_registry_url,
+                        'topic_description': f'Kafka topic for {topic} data from TMDB API'
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to track lineage for topic {topic}: {e}")
     
     def get_delivery_reports(self) -> list:
         """Get delivery reports."""

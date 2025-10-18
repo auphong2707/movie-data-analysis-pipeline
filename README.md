@@ -357,7 +357,7 @@ movie-data-analysis-pipeline/
     └── (test files)
 ```
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Dummy, didn't work yet)
 
 ### Prerequisites
 
@@ -495,7 +495,7 @@ Access API documentation at http://localhost:8000/docs
 - **API Documentation**: Interactive docs at `/docs` endpoint when API is running
 - **Architecture Diagrams**: See `docs/Movie Data Analysis Pipeline.drawio`
 
-## 🚢 Deployment
+## 🚢 Deployment (Dummy, didn't work yet)
 
 ### Docker Compose (Development)
 
@@ -515,7 +515,7 @@ docker-compose down
 docker-compose down -v
 ```
 
-### Kubernetes (Production)
+### Kubernetes (Production) (Dummy, didn't work yet)
 
 Production-ready deployment with high availability:
 
@@ -580,7 +580,7 @@ See [kubernetes/README.md](kubernetes/README.md) for detailed deployment instruc
   - Cache hit rate <50%
   - Speed layer lag >10 minutes
 
-### Log Aggregation
+### Log Aggregation (Dummy, didn't work yet)
 
 All logs are centralized and searchable:
 
@@ -595,7 +595,7 @@ kubectl logs -n movie-analytics -l app=[app_name] -f
 kubectl logs -n movie-analytics deployment/movie-api --tail=100
 ```
 
-## 🧪 Testing
+## 🧪 Testing (Dummy, didn't work yet)
 
 ### Run Tests
 
@@ -621,69 +621,3 @@ pytest -m integration
 - **Integration Tests**: End-to-end pipeline flows
 - **Performance Tests**: Latency and throughput benchmarks
 - **Data Quality Tests**: Schema validation and completeness
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/your-feature`
-3. **Make your changes**: Follow coding standards
-4. **Write tests**: Ensure >80% code coverage
-5. **Update documentation**: Keep docs in sync with code
-6. **Submit a pull request**: With detailed description
-
-### Development Standards
-
-- **Python**: Follow PEP 8 style guide
-- **Type Hints**: Use type annotations
-- **Docstrings**: Google-style docstrings
-- **Testing**: pytest with fixtures
-- **Git Commits**: Conventional commits format
-
-## 🎯 Current Status
-
-**Phase 1: Setup & Planning** ✅ COMPLETED
-- Lambda Architecture design finalized
-- Complete directory structure established
-- Comprehensive documentation (12+ markdown files)
-- Template code for all three layers
-
-**Phase 2: Batch Layer** 🚧 IN PROGRESS
-- Ready to implement HDFS cluster setup
-- Airflow DAG templates prepared
-- Spark job skeletons ready
-
-**Next Steps**: Deploy HDFS cluster and implement TMDB → HDFS ingestion pipeline
-
-## 📊 Project Metrics
-
-- **Total Lines of Documentation**: 2,500+
-- **Architecture Diagrams**: 5
-- **Technology Components**: 15+
-- **API Endpoints Planned**: 20+
-- **Data Layers**: 3 (Bronze, Silver, Gold)
-- **Development Timeline**: 14 weeks (phased approach)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Issues**: [GitHub Issues](https://github.com/auphong2707/movie-data-analysis-pipeline/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/auphong2707/movie-data-analysis-pipeline/discussions)
-- **Documentation**: See `README.md` files in each layer directory
-
-## 🙏 Acknowledgments
-
-- **TMDB**: For providing comprehensive movie data API
-- **Apache Software Foundation**: For Spark, Kafka, Airflow, and Cassandra
-- **Nathan Marz**: For Lambda Architecture pattern
-- **Open Source Community**: For all the amazing tools and libraries
-
----
-
-**Built with ❤️ by [auphong2707](https://github.com/auphong2707)**
-
-**⭐ Star this repository if you find it useful!**

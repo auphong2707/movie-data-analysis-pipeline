@@ -1,0 +1,82 @@
+# Spark Configuration for Batch Layer Processing
+# Environment variables can override these settings using SPARK_* prefix
+
+spark:
+  app_name: "batch_layer_processing"
+  master: "${SPARK_MASTER:-spark://spark-master:7077}"
+  
+  # Executor configuration
+  executor:
+    memory: "${SPARK_EXECUTOR_MEMORY:-4g}"
+    cores: "${SPARK_EXECUTOR_CORES:-2}"
+    instances: "${SPARK_EXECUTOR_INSTANCES:-10}"
+    memoryFraction: "${SPARK_EXECUTOR_MEMORY_FRACTION:-0.8}"
+  
+  # Driver configuration
+  driver:
+    memory: "${SPARK_DRIVER_MEMORY:-2g}"
+    cores: "${SPARK_DRIVER_CORES:-1}"
+    maxResultSize: "${SPARK_DRIVER_MAX_RESULT_SIZE:-1g}"
+  
+  # SQL configuration
+  sql:
+    adaptive_enabled: "${SPARK_ADAPTIVE_QUERY_ENABLED:-true}"
+    coalesce_partitions_enabled: "${SPARK_COALESCE_PARTITIONS_ENABLED:-true}"
+    broadcast_timeout: "${SPARK_BROADCAST_TIMEOUT:-300}"
+    adaptive_coalesce_partitions_initial_partition_num: 200
+    adaptive_coalesce_partitions_min_partition_num: 1
+    adaptive_skew_join_enabled: true
+  
+  # Serialization
+  serializer: "org.apache.spark.serializer.KryoSerializer"
+  kryo_registrator: "org.apache.spark.serializer.KryoRegistrator"
+  
+  # Performance tuning
+  default_parallelism: "${SPARK_DEFAULT_PARALLELISM:-200}"
+  sql_shuffle_partitions: "${SPARK_SQL_SHUFFLE_PARTITIONS:-200}"
+  
+  # Dynamic allocation
+  dynamic_allocation:
+    enabled: "${SPARK_DYNAMIC_ALLOCATION_ENABLED:-true}"
+    min_executors: "${SPARK_DYNAMIC_MIN_EXECUTORS:-1}"
+    max_executors: "${SPARK_DYNAMIC_MAX_EXECUTORS:-20}"
+    initial_executors: "${SPARK_DYNAMIC_INITIAL_EXECUTORS:-5}"
+  
+  # Checkpointing
+  checkpoint_dir: "${SPARK_CHECKPOINT_DIR:-hdfs://namenode:9000/checkpoints/batch_layer}"
+  
+  # Event log
+  event_log:
+    enabled: "${SPARK_EVENT_LOG_ENABLED:-true}"
+    dir: "${SPARK_EVENT_LOG_DIR:-hdfs://namenode:9000/spark-events}"
+  
+  # Network timeout
+  network_timeout: "${SPARK_NETWORK_TIMEOUT:-300s}"
+  
+  # Delta/Iceberg specific (optional)
+  delta:
+    enabled: "${DELTA_ENABLED:-false}"
+  iceberg:
+    enabled: "${ICEBERG_ENABLED:-false}"
+
+# Job-specific configurations
+jobs:
+  bronze_to_silver:
+    checkpoint_interval: 10
+    cache_level: "MEMORY_AND_DISK_SER"
+    broadcast_threshold: "10MB"
+  
+  silver_to_gold:
+    window_partitions: 50
+    aggregation_push_down: true
+    cache_intermediate: true
+  
+  sentiment_batch:
+    batch_size: 1000
+    model_broadcast: true
+    partition_by_length: true
+  
+  actor_networks:
+    graph_checkpoint_interval: 20
+    max_iterations: 10
+    tolerance: 1e-6

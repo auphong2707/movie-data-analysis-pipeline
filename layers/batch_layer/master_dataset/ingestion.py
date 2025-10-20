@@ -1,13 +1,274 @@
 """
-Batch Layer - Master Dataset Ingestion
+TMDB Data Ingestion Module for Batch Layer Processing.
 
-This module handles extraction of data from TMDB API and storage in HDFS Bronze layer.
-Runs every 4 hours as part of the batch layer processing.
+This module handles the extraction of movie data from The Movie Database (TMDB) API
+and stores it in the Bronze layer on HDFS with proper partitioning and error handling.
 """
 
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
+import os
+import json
 import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+import time
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+import yaml
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class TMDBAPIClient:
+    """Client for interacting with The Movie Database API."""
+    
+    def __init__(self, api_key: str, base_url: str = "https://api.themoviedb.org/3"):
+        """
+        Initialize TMDB API client.
+        
+        Args:
+            api_key: TMDB API key
+            base_url: Base URL for TMDB API
+        """
+        self.api_key = api_key
+        self.base_url = base_url
+        self.session = self._create_session()
+        self.rate_limiter = RateLimiter(calls_per_second=40)  # TMDB limit
+        
+    def _create_session(self) -> requests.Session:
+        """Create HTTP session with retry strategy."""
+        session = requests.Session()
+        
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        return session
+    
+    def get_movie_details(self, movie_id: int) -> Tuple[Dict, str]:
+        """
+        Get detailed information for a specific movie.
+        
+        Args:
+            movie_id: TMDB movie ID
+            
+        Returns:
+            Tuple[Dict, str]: Movie data and API endpoint used
+        """
+        self.rate_limiter.wait_if_needed()
+        
+        endpoint = f"/movie/{movie_id}"
+        url = f"{self.base_url}{endpoint}"
+        
+        params = {
+            "api_key": self.api_key,
+            "append_to_response": "credits,keywords,reviews,videos"
+        }
+        
+        try:
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            data["_tmdb_api_call_timestamp"] = datetime.utcnow().isoformat()
+            
+            return data, endpoint
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching movie {movie_id}: {e}")
+            raise
+    
+    def get_popular_movies(self, page: int = 1, region: str = None) -> Tuple[Dict, str]:
+        """
+        Get popular movies from TMDB.
+        
+        Args:
+            page: Page number (1-based)
+            region: ISO 3166-1 country code (optional)
+            
+        Returns:
+            Tuple[Dict, str]: Movies data and API endpoint used
+        """
+        self.rate_limiter.wait_if_needed()
+        
+        endpoint = "/movie/popular"
+        url = f"{self.base_url}{endpoint}"
+        
+        params = {
+            "api_key": self.api_key,
+            "page": page
+        }
+        
+        if region:
+            params["region"] = region
+        
+        try:
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            data["_tmdb_api_call_timestamp"] = datetime.utcnow().isoformat()
+            
+            return data, endpoint
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching popular movies page {page}: {e}")
+            raise
+    
+    def get_now_playing(self, page: int = 1, region: str = None) -> Tuple[Dict, str]:
+        """
+        Get movies currently playing in theaters.
+        
+        Args:
+            page: Page number (1-based) 
+            region: ISO 3166-1 country code (optional)
+            
+        Returns:
+            Tuple[Dict, str]: Movies data and API endpoint used
+        """
+        self.rate_limiter.wait_if_needed()
+        
+        endpoint = "/movie/now_playing"
+        url = f"{self.base_url}{endpoint}"
+        
+        params = {
+            "api_key": self.api_key,
+            "page": page
+        }
+        
+        if region:
+            params["region"] = region
+        
+        try:
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            data["_tmdb_api_call_timestamp"] = datetime.utcnow().isoformat()
+            
+            return data, endpoint
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching now playing movies page {page}: {e}")
+            raise
+    
+    def discover_movies(self, **kwargs) -> Tuple[Dict, str]:
+        """
+        Discover movies with various filters.
+        
+        Args:
+            **kwargs: Discovery parameters (genre, year, etc.)
+            
+        Returns:
+            Tuple[Dict, str]: Movies data and API endpoint used
+        """
+        self.rate_limiter.wait_if_needed()
+        
+        endpoint = "/discover/movie"
+        url = f"{self.base_url}{endpoint}"
+        
+        params = {"api_key": self.api_key}
+        params.update(kwargs)
+        
+        try:
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            data["_tmdb_api_call_timestamp"] = datetime.utcnow().isoformat()
+            
+            return data, endpoint
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error discovering movies: {e}")
+            raise
+    
+    def health_check(self) -> bool:
+        """
+        Check if TMDB API is healthy and accessible.
+        
+        Returns:
+            bool: True if API is healthy
+        """
+        try:
+            endpoint = "/configuration"
+            url = f"{self.base_url}{endpoint}"
+            
+            response = self.session.get(
+                url, 
+                params={"api_key": self.api_key}, 
+                timeout=10
+            )
+            
+            return response.status_code == 200
+            
+        except Exception as e:
+            logger.error(f"TMDB API health check failed: {e}")
+            return False
+
+
+class RateLimiter:
+    """Rate limiter to respect TMDB API limits."""
+    
+    def __init__(self, calls_per_second: int = 40):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            calls_per_second: Maximum calls per second allowed
+        """
+        self.calls_per_second = calls_per_second
+        self.min_interval = 1.0 / calls_per_second
+        self.last_call = 0
+    
+    def wait_if_needed(self):
+        """Wait if necessary to respect rate limit."""
+        current_time = time.time()
+        elapsed = current_time - self.last_call
+        
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+        
+        self.last_call = time.time()
+
+
+class BronzeLayerIngestion:
+    """Handles ingestion of raw TMDB data into Bronze layer on HDFS."""
+    
+    def __init__(self, spark_session, hdfs_config: Dict, tmdb_config: Dict):
+        """
+        Initialize Bronze layer ingestion.
+        
+        Args:
+            spark_session: Active Spark session
+            hdfs_config: HDFS configuration
+            tmdb_config: TMDB API configuration
+        """
+        self.spark = spark_session
+        self.hdfs_config = hdfs_config
+        self.tmdb_config = tmdb_config
+        
+        # Initialize TMDB client
+        api_key = os.environ.get("TMDB_API_KEY")
+        if not api_key:
+            raise ValueError("TMDB_API_KEY environment variable not set")
+        
+        self.tmdb_client = TMDBAPIClient(
+            api_key=api_key,
+            base_url=tmdb_config.get("base_url", "https://api.themoviedb.org/3")
+        )
+        
+        # Setup paths
+        self.bronze_path = hdfs_config["paths"]["bronze"]
+        self.errors_path = hdfs_config["paths"]["errors"]
 import requests
 import time
 import pyarrow as pa

@@ -1,39 +1,230 @@
-# Batch Layer - Historical Data Processing
+# TMDB Movie Data Analysis Pipeline - Batch Layer
 
 ## Overview
 
-The **Batch Layer** is responsible for processing the complete historical dataset to generate accurate, comprehensive views. It runs periodically (every 4 hours) and prioritizes accuracy over latency.
+The Batch Layer is the cornerstone of our Lambda Architecture implementation for TMDB (The Movie Database) historical data processing. This production-ready system processes massive volumes of movie data through a robust Bronze → Silver → Gold pipeline, delivering comprehensive analytics and insights for movie trends, sentiment analysis, and industry intelligence.
 
+## Architecture
+
+### Data Flow Architecture
 ```
-TMDB API (scheduled extraction)
-    ↓ (Airflow DAG - every 4 hours)
-┌───────────────────────────────────────┐
-│         BRONZE LAYER (HDFS)           │
-│  • Raw JSON → Parquet                 │
-│  • Partition: /year/month/day/hour    │
-│  • No transformations, immutable      │
-└────────────────┬──────────────────────┘
-                 ↓ (Spark Batch Job)
-┌───────────────────────────────────────┐
-│         SILVER LAYER (HDFS)           │
-│  • Deduplication (movie_id)           │
-│  • Schema validation & enrichment     │
+TMDB API → Bronze Layer → Silver Layer → Gold Layer → MongoDB Views
+    ↓           ↓             ↓            ↓
+Raw Data → Cleaned Data → Enriched Data → Analytics → Serving Layer
+```
 │  • Genre/cast joins                   │
 │  • Historical sentiment analysis      │
 │  • Partition: /year/month/genre       │
 └────────────────┬──────────────────────┘
                  ↓ (Spark Aggregations)
-┌───────────────────────────────────────┐
-│          GOLD LAYER (HDFS)            │
-│  • Aggregations by genre/year/tier    │
-│  • Trend scores (7d, 30d, 90d)        │
-│  • Popularity metrics                 │
-│  • Partition: /metric_type/year/month │
-└────────────────┬──────────────────────┘
-                 ↓ (Export to Serving)
-┌───────────────────────────────────────┐
-│      MONGODB (Batch Views)            │
-│  • Collection: batch_views            │
+### Layer Responsibilities
+
+#### Bronze Layer (Raw Data Lake)
+- **Purpose**: Immutable storage of raw TMDB data
+- **Format**: JSON documents stored as Parquet files in HDFS
+- **Partitioning**: By ingestion date (`/year=2023/month=06/day=15/`)
+- **Retention**: 2 years of historical data
+- **Compression**: Snappy compression for optimal I/O performance
+
+#### Silver Layer (Cleaned & Validated)
+- **Purpose**: Cleaned, validated, and structured movie data
+- **Schema**: Enforced schema with data quality validation
+- **Enrichments**: Genre normalization, date parsing, sentiment analysis
+- **Deduplication**: Movie-level deduplication based on TMDB ID
+- **Quality Gates**: 95% completeness, 98% consistency thresholds
+
+#### Gold Layer (Analytics-Ready)
+- **Purpose**: Pre-aggregated analytics and business metrics
+- **Views**: Genre trends, temporal analysis, trending scores, actor networks
+- **Refresh**: Every 4 hours with incremental processing
+- **Export**: MongoDB batch views for serving layer consumption
+
+## Quick Start
+
+### Prerequisites
+```bash
+# Required versions
+- Apache Spark 3.4.x
+- Apache Airflow 2.6.x
+- Python 3.9+
+- MongoDB 6.0+
+- HDFS 3.3.x
+```
+
+### Installation
+```bash
+# Clone repository
+git clone <repository-url>
+cd movie-data-analysis-pipeline
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Set up configuration
+cp config/batch_layer.yaml.template config/batch_layer.yaml
+# Edit configuration with your environment details
+
+# Initialize HDFS directories
+hdfs dfs -mkdir -p /tmdb/bronze /tmdb/silver /tmdb/gold
+
+# Set up MongoDB collections and indexes
+python scripts/setup_mongodb.py
+```
+
+### Configuration
+
+#### Batch Layer Configuration (`config/batch_layer.yaml`)
+```yaml
+spark:
+  app_name: "TMDB-Batch-Processing"
+  driver_memory: "4g"
+  executor_memory: "8g"
+  executor_cores: 4
+  max_executors: 20
+  
+storage:
+  hdfs_base_path: "hdfs://namenode:9000/tmdb"
+  checkpoint_location: "hdfs://namenode:9000/tmdb/checkpoints"
+  compression: "snappy"
+  
+quality:
+  min_completeness: 0.95
+  min_consistency: 0.98
+  max_processing_delay: "2h"
+  
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "tmdb_analytics"
+  batch_size: 1000
+```
+
+### Running the Pipeline
+
+#### Manual Execution
+```bash
+# Run complete pipeline
+python -m layers.batch_layer.spark_jobs.bronze_to_silver_job \
+  --input-path hdfs://namenode:9000/tmdb/bronze/2023/06/15 \
+  --output-path hdfs://namenode:9000/tmdb/silver/2023/06/15 \
+  --config-file config/batch_layer.yaml
+
+# Run specific transformation
+spark-submit \
+  --class layers.batch_layer.spark_jobs.silver_to_gold_job \
+  --master yarn \
+  --deploy-mode cluster \
+  --executor-memory 8g \
+  --num-executors 10 \
+  layers/batch_layer/spark_jobs/silver_to_gold_job.py
+```
+
+#### Airflow Orchestration
+```bash
+# Start Airflow
+airflow webserver --port 8080
+airflow scheduler
+
+# Trigger batch processing DAG
+airflow dags trigger tmdb_batch_transform_dag
+
+# Monitor pipeline
+airflow dags list
+airflow tasks list tmdb_batch_transform_dag
+```
+
+## Data Schemas
+
+### Bronze Layer Schema
+```json
+{
+  "movie_id": "string",
+  "title": "string",
+  "overview": "string",
+  "release_date": "string",
+  "genres": "array<string>",
+  "vote_average": "double",
+  "vote_count": "integer",
+  "popularity": "double",
+  "revenue": "long",
+  "budget": "long",
+  "runtime": "integer",
+  "production_companies": "array<struct>",
+  "production_countries": "array<struct>",
+  "spoken_languages": "array<struct>",
+  "cast": "array<struct>",
+  "crew": "array<struct>",
+  "keywords": "array<string>",
+  "ingestion_timestamp": "timestamp"
+}
+```
+
+### Silver Layer Schema
+```json
+{
+  "movie_id": "string",
+  "title": "string",
+  "clean_title": "string",
+  "overview": "string",
+  "release_date": "date",
+  "release_year": "integer",
+  "release_month": "integer",
+  "genres": "array<string>",
+  "primary_genre": "string",
+  "rating": "double",
+  "vote_count": "integer",
+  "popularity_score": "double",
+  "revenue": "long",
+  "budget": "long",
+  "profit": "long",
+  "roi": "double",
+  "runtime": "integer",
+  "runtime_category": "string",
+  "sentiment_score": "double",
+  "sentiment_category": "string",
+  "production_companies": "array<string>",
+  "production_countries": "array<string>",
+  "spoken_languages": "array<string>",
+  "director": "string",
+  "top_cast": "array<string>",
+  "keywords": "array<string>",
+  "is_recent": "boolean",
+  "decade": "string",
+  "processing_timestamp": "timestamp"
+}
+```
+
+### Gold Layer Schemas
+
+#### Genre Analytics
+```json
+{
+  "genre": "string",
+  "year": "integer",
+  "month": "integer",
+  "total_movies": "long",
+  "avg_rating": "double",
+  "total_revenue": "long",
+  "avg_budget": "long",
+  "avg_sentiment": "double",
+  "top_movies": "array<struct>",
+  "top_directors": "array<struct>",
+  "computed_date": "timestamp"
+}
+```
+
+#### Trending Scores
+```json
+{
+  "movie_id": "string",
+  "window": "string",
+  "trend_score": "double",
+  "velocity": "double",
+  "popularity_change": "double",
+  "rating_momentum": "double",
+  "social_buzz": "double",
+  "computed_date": "timestamp"
+}
+```
 │  • Updated every 4 hours              │
 │  • Indexed for fast queries           │
 └───────────────────────────────────────┘

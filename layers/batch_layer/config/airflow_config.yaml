@@ -1,0 +1,145 @@
+# Airflow Configuration for Batch Layer DAGs
+# Environment variables can override these settings using AIRFLOW_* prefix
+
+# DAG scheduling
+scheduling:
+  # Bronze layer - every 4 hours
+  schedule_cron_bronze: "${BRONZE_SCHEDULE_CRON:-0 */4 * * *}"
+  
+  # Transform layer - 30 minutes after bronze
+  offset_transform_minutes: "${TRANSFORM_OFFSET_MINUTES:-30}"
+  
+  # Aggregate layer - 60 minutes after bronze 
+  offset_aggregate_minutes: "${AGGREGATE_OFFSET_MINUTES:-60}"
+  
+  # Timezone
+  timezone: "${AIRFLOW_TIMEZONE:-UTC}"
+  
+  # Catchup settings
+  catchup: "${AIRFLOW_CATCHUP:-false}"
+  max_active_runs: "${AIRFLOW_MAX_ACTIVE_RUNS:-1}"
+
+# Default DAG arguments
+default_args:
+  owner: "${DAG_OWNER:-data_engineering_team}"
+  depends_on_past: false
+  start_date: "${DAG_START_DATE:-2024-01-01}"
+  email_on_failure: "${EMAIL_ON_FAILURE:-true}"
+  email_on_retry: "${EMAIL_ON_RETRY:-false}"
+  retries: "${DEFAULT_RETRIES:-3}"
+  retry_delay_minutes: "${DEFAULT_RETRY_DELAY:-5}"
+  
+# Task-specific configurations
+tasks:
+  # API extraction tasks
+  api_extraction:
+    timeout_minutes: "${API_TIMEOUT_MINUTES:-30}"
+    pool: "${API_POOL:-tmdb_api_pool}"
+    priority_weight: 10
+    
+  # Spark job tasks
+  spark_jobs:
+    timeout_minutes: "${SPARK_TIMEOUT_MINUTES:-120}"
+    pool: "${SPARK_POOL:-spark_cluster_pool}"
+    priority_weight: 5
+    queue: "${SPARK_QUEUE:-spark_jobs}"
+    
+  # MongoDB export tasks
+  mongo_export:
+    timeout_minutes: "${MONGO_TIMEOUT_MINUTES:-20}"
+    pool: "${MONGO_POOL:-mongodb_pool}"
+    priority_weight: 3
+
+# SLA configurations
+sla:
+  bronze_ingestion_hours: "${BRONZE_SLA_HOURS:-2}"
+  silver_transform_hours: "${SILVER_SLA_HOURS:-1}"
+  gold_aggregate_hours: "${GOLD_SLA_HOURS:-1}"
+  mongo_export_minutes: "${MONGO_SLA_MINUTES:-30}"
+
+# Alerting and notifications
+alerts:
+  # Slack integration
+  slack_webhook_secret: "${SLACK_WEBHOOK_SECRET:-airflow/slack_webhook}"
+  slack_channel: "${SLACK_CHANNEL:-#data-pipeline-alerts}"
+  slack_username: "${SLACK_USERNAME:-Airflow Bot}"
+  
+  # Email settings
+  email_recipients: "${ALERT_EMAIL_RECIPIENTS:-data-team@company.com}"
+  
+  # PagerDuty (optional)
+  pagerduty_token_secret: "${PAGERDUTY_TOKEN_SECRET:-airflow/pagerduty_token}"
+  
+  # Alert conditions
+  alert_on_sla_miss: "${ALERT_ON_SLA_MISS:-true}"
+  alert_on_task_failure: "${ALERT_ON_TASK_FAILURE:-true}"
+  alert_on_dag_failure: "${ALERT_ON_DAG_FAILURE:-true}"
+
+# Data quality thresholds
+data_quality:
+  min_records_bronze: "${MIN_RECORDS_BRONZE:-1000}"
+  min_records_silver: "${MIN_RECORDS_SILVER:-900}"
+  min_records_gold: "${MIN_RECORDS_GOLD:-100}"
+  
+  max_error_rate: "${MAX_ERROR_RATE:-0.05}"  # 5%
+  max_null_rate: "${MAX_NULL_RATE:-0.10}"    # 10%
+  
+  # Schema validation
+  enforce_schema_validation: "${ENFORCE_SCHEMA_VALIDATION:-true}"
+  quarantine_bad_records: "${QUARANTINE_BAD_RECORDS:-true}"
+
+# External system connections
+connections:
+  # TMDB API
+  tmdb_api_key_secret: "${TMDB_API_KEY_SECRET:-airflow/tmdb_api_key}"
+  tmdb_base_url: "${TMDB_BASE_URL:-https://api.themoviedb.org/3}"
+  tmdb_rate_limit_per_second: "${TMDB_RATE_LIMIT:-40}"
+  
+  # Spark cluster
+  spark_master: "${SPARK_MASTER:-spark://spark-master:7077}"
+  spark_submit_args: "${SPARK_SUBMIT_ARGS:---conf spark.sql.adaptive.enabled=true}"
+  
+  # HDFS
+  hdfs_namenode: "${HDFS_NAMENODE:-hdfs://namenode:9000}"
+  
+  # MongoDB
+  mongodb_uri_secret: "${MONGODB_URI_SECRET:-airflow/mongodb_uri}"
+  mongodb_database: "${MONGODB_DATABASE:-tmdb_analytics}"
+
+# Monitoring and logging
+monitoring:
+  # Metrics collection
+  collect_task_metrics: "${COLLECT_TASK_METRICS:-true}"
+  collect_dag_metrics: "${COLLECT_DAG_METRICS:-true}"
+  
+  # Log levels
+  log_level: "${AIRFLOW_LOG_LEVEL:-INFO}"
+  
+  # Custom metrics
+  emit_data_metrics: "${EMIT_DATA_METRICS:-true}"
+  metrics_namespace: "${METRICS_NAMESPACE:-batch_layer}"
+
+# Performance tuning
+performance:
+  # Parallelism
+  dag_concurrency: "${DAG_CONCURRENCY:-16}"
+  task_concurrency: "${TASK_CONCURRENCY:-8}"
+  
+  # Resource pools
+  pools:
+    tmdb_api_pool: "${TMDB_API_POOL_SIZE:-5}"
+    spark_cluster_pool: "${SPARK_CLUSTER_POOL_SIZE:-10}"
+    mongodb_pool: "${MONGODB_POOL_SIZE:-3}"
+  
+  # Executor configuration
+  executor_parallelism: "${EXECUTOR_PARALLELISM:-32}"
+
+# Development and testing
+development:
+  # Test mode settings
+  test_mode: "${TEST_MODE:-false}"
+  test_data_size: "${TEST_DATA_SIZE:-1000}"
+  
+  # Local development
+  local_spark_mode: "${LOCAL_SPARK_MODE:-false}"
+  local_hdfs_path: "${LOCAL_HDFS_PATH:-/tmp/batch_layer_test}"

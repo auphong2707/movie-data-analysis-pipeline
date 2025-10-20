@@ -1,0 +1,100 @@
+# HDFS Configuration for Batch Layer
+# Environment variables can override these settings using HDFS_* prefix
+
+hdfs:
+  # Namenode configuration
+  namenode: "${HDFS_NAMENODE:-hdfs://namenode:9000}"
+  
+  # Default filesystem settings
+  replication_factor: "${HDFS_REPLICATION_FACTOR:-3}"
+  block_size: "${HDFS_BLOCK_SIZE:-128m}"
+  
+  # Data paths - organized by layer
+  paths:
+    bronze: "${HDFS_BRONZE_PATH:-/data/bronze}"
+    silver: "${HDFS_SILVER_PATH:-/data/silver}"
+    gold: "${HDFS_GOLD_PATH:-/data/gold}"
+    
+    # Error/quarantine paths
+    errors: "${HDFS_ERRORS_PATH:-/data/errors}"
+    quarantine: "${HDFS_QUARANTINE_PATH:-/data/quarantine}"
+    
+    # Metadata and audit paths
+    metadata: "${HDFS_METADATA_PATH:-/data/metadata}"
+    audit: "${HDFS_AUDIT_PATH:-/data/audit}"
+    
+    # Checkpoint and temp paths
+    checkpoints: "${HDFS_CHECKPOINTS_PATH:-/checkpoints/batch_layer}"
+    temp: "${HDFS_TEMP_PATH:-/tmp/batch_layer}"
+  
+  # Retention policies (in days)
+  retention:
+    bronze_days: "${BRONZE_RETENTION_DAYS:-90}"
+    silver_days: "${SILVER_RETENTION_DAYS:-730}"
+    gold_days: "${GOLD_RETENTION_DAYS:-1825}"
+    errors_days: "${ERRORS_RETENTION_DAYS:-30}"
+    audit_days: "${AUDIT_RETENTION_DAYS:-365}"
+  
+  # Compression settings
+  compression:
+    codec: "${HDFS_COMPRESSION_CODEC:-snappy}"
+    parquet_compression: "${PARQUET_COMPRESSION:-snappy}"
+    
+  # Performance settings
+  performance:
+    io_buffer_size: "${HDFS_IO_BUFFER_SIZE:-65536}"
+    client_write_packet_size: "${HDFS_CLIENT_WRITE_PACKET_SIZE:-65536}"
+    
+  # Directory permissions
+  permissions:
+    default_mode: "${HDFS_DEFAULT_MODE:-755}"
+    data_mode: "${HDFS_DATA_MODE:-755}"
+
+# Partition strategies
+partitioning:
+  bronze:
+    strategy: "time_based"
+    columns: ["partition_year", "partition_month", "partition_day", "partition_hour"]
+    format: "year={}/month={}/day={}/hour={}"
+    
+  silver:
+    strategy: "hybrid"
+    columns: ["partition_year", "partition_month", "partition_genre"]
+    format: "year={}/month={}/genre={}"
+    
+  gold:
+    strategy: "metric_based"
+    columns: ["metric_type", "partition_year", "partition_month"]
+    format: "metric_type={}/year={}/month={}"
+
+# File format specifications
+formats:
+  bronze:
+    format: "parquet"
+    mode: "append"
+    partition_overwrite_mode: "dynamic"
+    
+  silver:
+    format: "parquet"
+    mode: "overwrite"
+    partition_overwrite_mode: "dynamic"
+    enable_dictionary: true
+    
+  gold:
+    format: "parquet" 
+    mode: "overwrite"
+    partition_overwrite_mode: "dynamic"
+    enable_dictionary: true
+    row_group_size: 134217728  # 128MB
+
+# Data quality settings
+quality:
+  enable_schema_validation: "${ENABLE_SCHEMA_VALIDATION:-true}"
+  quarantine_invalid_records: "${QUARANTINE_INVALID_RECORDS:-true}"
+  quality_threshold: "${DATA_QUALITY_THRESHOLD:-0.95}"
+  
+# Cleanup settings
+cleanup:
+  enable_auto_cleanup: "${ENABLE_AUTO_CLEANUP:-true}"
+  cleanup_hour: "${CLEANUP_HOUR:-2}"  # 2 AM UTC
+  dry_run_mode: "${CLEANUP_DRY_RUN:-false}"

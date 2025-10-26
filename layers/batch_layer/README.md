@@ -11,7 +11,7 @@ The Batch Layer is the cornerstone of our Lambda Architecture implementation for
 TMDB API → Bronze Layer → Silver Layer → Gold Layer → MongoDB Views
     ↓           ↓             ↓            ↓
 Raw Data → Cleaned Data → Enriched Data → Analytics → Serving Layer
-```
+```                                                       
 │  • Genre/cast joins                   │
 │  • Historical sentiment analysis      │
 │  • Partition: /year/month/genre       │

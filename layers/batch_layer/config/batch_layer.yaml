@@ -1,0 +1,127 @@
+# Batch Layer Main Configuration
+# Combines Spark, HDFS, and general batch processing settings
+
+# Application metadata
+app:
+  name: "TMDB Batch Layer Pipeline"
+  version: "1.0.0"
+  environment: "${BATCH_ENV:-production}"
+
+# Spark configuration
+spark:
+  app_name: "tmdb_batch_processing"
+  master: "${SPARK_MASTER:-spark://spark-master:7077}"
+  
+  # Executor configuration
+  executor:
+    memory: "${SPARK_EXECUTOR_MEMORY:-4g}"
+    cores: "${SPARK_EXECUTOR_CORES:-2}"
+    instances: "${SPARK_EXECUTOR_INSTANCES:-10}"
+    memory_fraction: "${SPARK_EXECUTOR_MEMORY_FRACTION:-0.8}"
+  
+  # Driver configuration
+  driver:
+    memory: "${SPARK_DRIVER_MEMORY:-2g}"
+    cores: "${SPARK_DRIVER_CORES:-1}"
+    max_result_size: "${SPARK_DRIVER_MAX_RESULT_SIZE:-1g}"
+  
+  # SQL configuration
+  sql:
+    adaptive_enabled: "${SPARK_ADAPTIVE_QUERY_ENABLED:-true}"
+    shuffle_partitions: "${SPARK_SQL_SHUFFLE_PARTITIONS:-200}"
+    broadcast_timeout: "${SPARK_BROADCAST_TIMEOUT:-300}"
+  
+  # Serialization
+  serializer: "org.apache.spark.serializer.KryoSerializer"
+  
+  # Checkpointing
+  checkpoint_dir: "${SPARK_CHECKPOINT_DIR:-hdfs://namenode:9000/checkpoints/batch_layer}"
+
+# HDFS configuration
+hdfs:
+  namenode: "${HDFS_NAMENODE:-hdfs://namenode:9000}"
+  replication_factor: "${HDFS_REPLICATION_FACTOR:-3}"
+  block_size: "${HDFS_BLOCK_SIZE:-128m}"
+  
+  # Data paths
+  paths:
+    bronze: "${HDFS_BRONZE_PATH:-/data/bronze/tmdb}"
+    silver: "${HDFS_SILVER_PATH:-/data/silver/tmdb}"
+    gold: "${HDFS_GOLD_PATH:-/data/gold/tmdb}"
+    errors: "${HDFS_ERRORS_PATH:-/data/errors/tmdb}"
+    quarantine: "${HDFS_QUARANTINE_PATH:-/data/quarantine/tmdb}"
+    metadata: "${HDFS_METADATA_PATH:-/data/metadata/tmdb}"
+    audit: "${HDFS_AUDIT_PATH:-/data/audit/tmdb}"
+  
+  # Retention policies (in days)
+  retention:
+    bronze_days: "${BRONZE_RETENTION_DAYS:-90}"
+    silver_days: "${SILVER_RETENTION_DAYS:-730}"
+    gold_days: "${GOLD_RETENTION_DAYS:-1825}"
+  
+  # Compression
+  compression:
+    codec: "${HDFS_COMPRESSION_CODEC:-snappy}"
+
+# Partitioning strategies
+partitioning:
+  bronze:
+    strategy: "time_based"
+    columns: ["partition_year", "partition_month", "partition_day", "partition_hour"]
+  
+  silver:
+    strategy: "hybrid"
+    columns: ["partition_year", "partition_month", "partition_genre"]
+  
+  gold:
+    strategy: "metric_based"
+    columns: ["metric_type", "partition_year", "partition_month"]
+
+# Job-specific configurations
+jobs:
+  bronze_to_silver:
+    checkpoint_interval: 10
+    cache_level: "MEMORY_AND_DISK_SER"
+    broadcast_threshold: "10MB"
+  
+  silver_to_gold:
+    window_partitions: 50
+    aggregation_push_down: true
+    cache_intermediate: true
+  
+  sentiment_batch:
+    batch_size: 1000
+    model_broadcast: true
+  
+  actor_networks:
+    max_iterations: 10
+    tolerance: 1e-6
+
+# MongoDB configuration for batch views
+mongodb:
+  uri: "${MONGODB_URI:-mongodb://localhost:27017}"
+  database: "${MONGODB_DATABASE:-tmdb_analytics}"
+  batch_size: "${MONGODB_BATCH_SIZE:-1000}"
+  write_concern: "${MONGODB_WRITE_CONCERN:-majority}"
+
+# TMDB API configuration
+tmdb:
+  api_key: "${TMDB_API_KEY:-}"
+  base_url: "https://api.themoviedb.org/3"
+  rate_limit:
+    requests_per_second: 4
+    retry_attempts: 3
+    retry_delay: 5
+
+# Data quality thresholds (references data_quality.yaml)
+quality:
+  min_completeness: 0.95
+  max_error_rate: 0.05
+  max_null_rate: 0.10
+  quarantine_bad_records: true
+
+# Logging configuration
+logging:
+  level: "${LOG_LEVEL:-INFO}"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_path: "${LOG_FILE_PATH:-/var/log/batch_layer/pipeline.log}"

@@ -1,0 +1,248 @@
+# Data Quality Configuration for Batch Layer
+# Defines quality rules, thresholds, and validation criteria
+
+# Global quality thresholds
+thresholds:
+  completeness:
+    min_required: "${MIN_COMPLETENESS:-0.95}"  # 95% minimum completeness
+    critical_fields: 0.99  # 99% for critical fields
+  
+  consistency:
+    min_required: "${MIN_CONSISTENCY:-0.98}"  # 98% minimum consistency
+    
+  accuracy:
+    min_required: "${MIN_ACCURACY:-0.95}"  # 95% minimum accuracy
+    
+  timeliness:
+    max_delay_hours: "${MAX_DELAY_HOURS:-4}"  # Maximum 4 hour delay
+    
+  uniqueness:
+    max_duplicate_rate: "${MAX_DUPLICATE_RATE:-0.01}"  # Max 1% duplicates
+
+# Layer-specific quality rules
+layers:
+  bronze:
+    required_record_count: "${BRONZE_MIN_RECORDS:-1000}"
+    max_error_rate: 0.10  # 10% error tolerance in raw data
+    schema_validation: false  # Bronze accepts any schema
+    quarantine_enabled: true
+    
+  silver:
+    required_record_count: "${SILVER_MIN_RECORDS:-900}"
+    max_error_rate: 0.05  # 5% error tolerance
+    schema_validation: true
+    mandatory_fields:
+      - movie_id
+      - title
+      - release_date
+      - genres
+    quarantine_enabled: true
+    
+  gold:
+    required_record_count: "${GOLD_MIN_RECORDS:-100}"
+    max_error_rate: 0.01  # 1% error tolerance
+    schema_validation: true
+    mandatory_aggregations:
+      - genre_trends
+      - temporal_analysis
+      - movie_analytics
+
+# Field-level validation rules
+field_validations:
+  movie_id:
+    type: "integer"
+    nullable: false
+    unique: true
+    range: [1, 999999999]
+    
+  title:
+    type: "string"
+    nullable: false
+    min_length: 1
+    max_length: 500
+    pattern: "^[\\w\\s\\-:',!?&.()]+$"
+    
+  release_date:
+    type: "date"
+    nullable: true
+    format: "yyyy-MM-dd"
+    min_date: "1800-01-01"
+    max_date: "2030-12-31"
+    
+  vote_average:
+    type: "float"
+    nullable: true
+    range: [0.0, 10.0]
+    
+  vote_count:
+    type: "integer"
+    nullable: true
+    range: [0, 10000000]
+    
+  popularity:
+    type: "float"
+    nullable: true
+    range: [0.0, 10000.0]
+    
+  runtime:
+    type: "integer"
+    nullable: true
+    range: [1, 600]  # 1 minute to 10 hours
+    
+  budget:
+    type: "long"
+    nullable: true
+    range: [0, 1000000000000]
+    
+  revenue:
+    type: "long"
+    nullable: true
+    range: [0, 10000000000000]
+    
+  genres:
+    type: "array"
+    nullable: false
+    min_items: 0
+    max_items: 10
+    
+  original_language:
+    type: "string"
+    nullable: false
+    pattern: "^[a-z]{2}$"
+
+# Business rule validations
+business_rules:
+  revenue_budget_consistency:
+    enabled: true
+    rule: "revenue >= 0 AND budget >= 0"
+    severity: "warning"
+    
+  release_date_consistency:
+    enabled: true
+    rule: "release_date <= current_date"
+    severity: "error"
+    
+  vote_consistency:
+    enabled: true
+    rule: "vote_count > 0 IMPLIES vote_average BETWEEN 0 AND 10"
+    severity: "error"
+    
+  runtime_reasonability:
+    enabled: true
+    rule: "runtime IS NULL OR (runtime >= 1 AND runtime <= 600)"
+    severity: "warning"
+
+# Data profiling settings
+profiling:
+  enabled: "${PROFILING_ENABLED:-true}"
+  sample_size: "${PROFILE_SAMPLE_SIZE:-10000}"
+  
+  metrics:
+    - record_count
+    - null_count
+    - distinct_count
+    - min_value
+    - max_value
+    - mean_value
+    - stddev_value
+    
+  outputs:
+    - type: "json"
+      path: "${PROFILE_OUTPUT_PATH:-/data/metadata/tmdb/profiles}"
+    - type: "html"
+      path: "${PROFILE_HTML_PATH:-/data/metadata/tmdb/reports}"
+
+# Anomaly detection
+anomaly_detection:
+  enabled: "${ANOMALY_DETECTION_ENABLED:-true}"
+  
+  rules:
+    record_count_drop:
+      enabled: true
+      threshold: 0.30  # 30% drop in records
+      severity: "critical"
+      
+    null_rate_increase:
+      enabled: true
+      threshold: 0.20  # 20% increase in null rate
+      severity: "warning"
+      
+    duplicate_rate_increase:
+      enabled: true
+      threshold: 0.10  # 10% increase in duplicates
+      severity: "warning"
+      
+    schema_drift:
+      enabled: true
+      severity: "error"
+
+# Quality monitoring and alerts
+monitoring:
+  enabled: "${QUALITY_MONITORING_ENABLED:-true}"
+  
+  metrics:
+    - completeness_score
+    - consistency_score
+    - accuracy_score
+    - timeliness_score
+    - overall_quality_score
+    
+  alert_channels:
+    slack:
+      enabled: "${SLACK_ALERTS_ENABLED:-true}"
+      webhook_url: "${SLACK_WEBHOOK_URL:-}"
+      channel: "${SLACK_CHANNEL:-#data-quality-alerts}"
+      
+    email:
+      enabled: "${EMAIL_ALERTS_ENABLED:-true}"
+      recipients: "${ALERT_EMAIL_RECIPIENTS:-data-team@company.com}"
+      
+    pagerduty:
+      enabled: "${PAGERDUTY_ENABLED:-false}"
+      integration_key: "${PAGERDUTY_KEY:-}"
+  
+  alert_rules:
+    critical_failure:
+      condition: "overall_quality_score < 0.80"
+      channels: ["slack", "email", "pagerduty"]
+      
+    warning_threshold:
+      condition: "overall_quality_score < 0.90"
+      channels: ["slack", "email"]
+      
+    info_notification:
+      condition: "overall_quality_score < 0.95"
+      channels: ["slack"]
+
+# Quarantine management
+quarantine:
+  enabled: "${QUARANTINE_ENABLED:-true}"
+  path: "${QUARANTINE_PATH:-/data/quarantine/tmdb}"
+  
+  retention_days: "${QUARANTINE_RETENTION_DAYS:-30}"
+  
+  review_process:
+    enabled: true
+    review_interval_days: 7
+    auto_reprocess: false
+    
+  categories:
+    - schema_violation
+    - business_rule_failure
+    - duplicate_record
+    - invalid_value
+    - missing_required_field
+
+# Testing and validation
+testing:
+  enabled: "${TESTING_ENABLED:-true}"
+  
+  unit_tests:
+    sample_size: 1000
+    
+  integration_tests:
+    full_pipeline: true
+    
+  data_quality_tests:
+    run_on_each_batch: true
+    fail_on_quality_breach: "${FAIL_ON_QUALITY_BREACH:-true}"

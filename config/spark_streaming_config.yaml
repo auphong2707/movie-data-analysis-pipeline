@@ -2,12 +2,12 @@
 # Configuration for real-time streaming jobs processing TMDB data
 
 kafka:
-  bootstrap_servers: "localhost:9092"
+  bootstrap_servers: "${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}"
   security_protocol: "PLAINTEXT"
   batch_size: 1000
   linger_ms: 100
   buffer_memory: 33554432
-  schema_registry_url: "http://localhost:8081"
+  schema_registry_url: "${SCHEMA_REGISTRY_URL:http://localhost:8081}"
   
 spark:
   app_name: "speed-layer-streaming"
@@ -18,13 +18,13 @@ spark:
   streaming:
     batch_duration: "5 minutes"
     watermark_duration: "10 minutes"
-    checkpoint_location: "/tmp/spark-streaming-checkpoints"
+    checkpoint_location: "/app/checkpoints"
     max_offsets_per_trigger: 1000
     
   # Cassandra connector configuration
   cassandra:
     connection:
-      host: "localhost"
+      host: "${CASSANDRA_HOSTS:localhost}"
       port: 9042
       local_dc: "datacenter1"
     
@@ -43,7 +43,7 @@ spark:
     spark.sql.adaptive.enabled: "true"
     spark.sql.adaptive.coalescePartitions.enabled: "true"
     spark.sql.streaming.forceDeleteTempCheckpointLocation: "true"
-    spark.cassandra.connection.host: "localhost"
+    spark.cassandra.connection.host: "${CASSANDRA_HOSTS:localhost}"
     spark.cassandra.connection.port: "9042"
     spark.cassandra.auth.username: ""
     spark.cassandra.auth.password: ""

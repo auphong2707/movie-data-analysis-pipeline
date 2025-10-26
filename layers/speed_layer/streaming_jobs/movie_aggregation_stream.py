@@ -4,6 +4,8 @@ Real-time aggregation of movie metrics including ratings, popularity, and veloci
 """
 
 import logging
+import os
+import sys
 from typing import Dict, Any
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
@@ -16,7 +18,10 @@ from pyspark.sql.types import (
     LongType, TimestampType, ArrayType, BooleanType
 )
 from pyspark.sql.window import Window
-import yaml
+
+# Add config to path
+sys.path.insert(0, '/app/config')
+from config_loader import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +29,11 @@ logger = logging.getLogger(__name__)
 class MovieAggregationStreamProcessor:
     """Process movie data for real-time aggregations and metrics."""
     
-    def __init__(self, config_path: str = "config/spark_streaming_config.yaml"):
+    def __init__(self, config_path: str = "/app/config/spark_streaming_config.yaml"):
         """Initialize the movie aggregation stream processor."""
         
-        # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        # Load configuration with env var substitution
+        self.config = load_config(config_path)
         
         # Initialize Spark session
         self.spark = self._create_spark_session()

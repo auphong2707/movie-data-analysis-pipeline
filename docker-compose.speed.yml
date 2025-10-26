@@ -1,0 +1,285 @@
+# Docker Compose for Speed Layer Infrastructure
+# Minimal set of services required for Speed Layer development and deployment
+
+networks:
+  movie-pipeline:
+    driver: bridge
+
+services:
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka - Message Streaming
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_MESSAGE_MAX_BYTES: 1000000
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Schema Registry - Avro Schema Management
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.4.0
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Apache Cassandra - Speed Layer Storage (48h TTL)
+  cassandra:
+    image: cassandra:4.1
+    hostname: cassandra
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: movie-pipeline
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra
+      CASSANDRA_START_TIMEOUT: 300
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 100M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./layers/speed_layer/cassandra_views/schema.cql:/docker-entrypoint-initdb.d/schema.cql
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # MongoDB - Batch Layer Storage & Speed Layer Sync Target
+  mongodb:
+    image: mongo:6.0
+    hostname: mongodb
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: moviedb
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============ SPEED LAYER APPLICATIONS ============
+  
+  # TMDB Stream Producer - Polls TMDB API and streams to Kafka
+  tmdb-producer:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: tmdb-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      TMDB_API_KEY: ${TMDB_API_KEY:?TMDB_API_KEY must be set in .env file}
+      PYTHONUNBUFFERED: 1
+    command: python kafka_producers/tmdb_stream_producer.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Event Producer - Generates synthetic user events
+  event-producer:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: event-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      PYTHONUNBUFFERED: 1
+    command: python kafka_producers/event_producer.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Review Sentiment Stream - Analyzes sentiment in real-time
+  sentiment-stream:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: sentiment-stream
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      PYTHONUNBUFFERED: 1
+    command: >
+      spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+      --conf spark.cassandra.connection.host=cassandra
+      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/sentiment
+      streaming_jobs/review_sentiment_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Movie Aggregation Stream - Aggregates movie metrics
+  aggregation-stream:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: aggregation-stream
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      PYTHONUNBUFFERED: 1
+    command: >
+      spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+      --conf spark.cassandra.connection.host=cassandra
+      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/aggregation
+      streaming_jobs/movie_aggregation_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Trending Detection Stream - Detects trending movies
+  trending-stream:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: trending-stream
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      PYTHONUNBUFFERED: 1
+    command: >
+      spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
+      --conf spark.cassandra.connection.host=cassandra
+      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/trending
+      streaming_jobs/trending_detection_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  cassandra-data:
+  mongodb-data:
+  speed-layer-logs:
+  spark-checkpoints:

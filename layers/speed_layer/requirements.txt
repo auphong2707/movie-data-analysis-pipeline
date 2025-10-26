@@ -1,0 +1,28 @@
+# Speed Layer Python Dependencies
+
+# Kafka & Streaming
+confluent-kafka[avro,schema-registry]>=2.3.0
+kafka-python>=2.0.2
+avro>=1.11.0
+
+# PySpark & Streaming
+pyspark>=3.4.0
+
+# Cassandra
+cassandra-driver>=3.28.0
+
+# Sentiment Analysis
+vaderSentiment>=3.3.2
+
+# HTTP & API
+requests>=2.31.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Configuration
+PyYAML>=6.0
+
+# Logging
+python-json-logger>=2.0.7

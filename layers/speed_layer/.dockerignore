@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Checkpoints
+checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+docs/
+
+# Git
+.git/
+.gitignore
+
+# Environment files (will be passed via docker-compose)
+.env
+.env.example
+
+# Scripts not needed in container
+*.sh

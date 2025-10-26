@@ -13,7 +13,7 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
-    LongType, TimestampType, ArrayType
+    LongType, TimestampType, ArrayType, BooleanType
 )
 from pyspark.sql.window import Window
 import yaml

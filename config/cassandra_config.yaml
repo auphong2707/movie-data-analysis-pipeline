@@ -1,0 +1,113 @@
+# Cassandra Configuration for Speed Layer
+# Configuration for Cassandra connections and TTL management
+
+connection:
+  hosts:
+    - "localhost"
+  port: 9042
+  
+  # Authentication (if required)
+  auth:
+    username: ""
+    password: ""
+    
+  # Connection pooling
+  protocol_version: 4
+  local_dc: "datacenter1"
+  
+  # Connection policies
+  load_balancing: "DCAwareRoundRobinPolicy"
+  token_aware: true
+  
+  # Connection pool settings
+  pool_settings:
+    core_connections_per_host_local: 2
+    max_connections_per_host_local: 8
+    core_connections_per_host_remote: 1
+    max_connections_per_host_remote: 2
+    
+  # Timeouts
+  connect_timeout: 10
+  request_timeout: 10
+  
+# Keyspace Configuration
+keyspace:
+  name: "speed_layer"
+  replication:
+    class: "SimpleStrategy"
+    replication_factor: 1
+    
+# TTL Configuration
+ttl:
+  # Default TTL for speed layer tables (48 hours in seconds)
+  default_ttl: 172800
+  
+  # Table-specific TTL settings
+  tables:
+    movie_sentiments: 172800      # 48 hours
+    movie_aggregations: 172800    # 48 hours
+    trending_movies: 172800       # 48 hours
+    user_activity: 172800         # 48 hours
+    real_time_metrics: 172800     # 48 hours
+    popularity_tracking: 172800   # 48 hours
+    
+  # TTL validation settings
+  validation:
+    check_interval: 3600          # Check every hour
+    warning_threshold: 86400      # Warn if data is older than 24 hours
+    cleanup_threshold: 259200     # Clean up data older than 72 hours
+    
+# Batch Operations
+batch:
+  max_batch_size: 100
+  timeout: 30
+  
+# Performance Settings
+performance:
+  prepared_statements: true
+  connection_pooling: true
+  
+  # Consistency levels
+  read_consistency: "LOCAL_ONE"
+  write_consistency: "LOCAL_QUORUM"
+  
+  # Retry policy
+  retry_policy:
+    max_retries: 3
+    base_delay: 1
+    max_delay: 60
+    
+# Table Schemas
+tables:
+  movie_sentiments:
+    partition_key: ["movie_id"]
+    clustering_key: ["window_start", "window_end"]
+    compaction_strategy: "TimeWindowCompactionStrategy"
+    compaction_window_size: 6
+    compaction_window_unit: "HOURS"
+    
+  movie_aggregations:
+    partition_key: ["movie_id"]
+    clustering_key: ["window_start"]
+    compaction_strategy: "TimeWindowCompactionStrategy"
+    compaction_window_size: 6
+    compaction_window_unit: "HOURS"
+    
+  trending_movies:
+    partition_key: ["trend_type"]
+    clustering_key: ["ranking", "movie_id"]
+    compaction_strategy: "TimeWindowCompactionStrategy"
+    compaction_window_size: 6
+    compaction_window_unit: "HOURS"
+    
+# Monitoring
+monitoring:
+  health_check_interval: 300     # 5 minutes
+  metrics_collection: true
+  slow_query_threshold: 1000     # 1 second
+  
+# Logging
+logging:
+  level: "INFO"
+  log_queries: false
+  log_slow_queries: true

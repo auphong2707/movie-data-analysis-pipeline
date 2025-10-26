@@ -1,0 +1,72 @@
+# Spark Streaming Configuration for Speed Layer
+# Configuration for real-time streaming jobs processing TMDB data
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  security_protocol: "PLAINTEXT"
+  batch_size: 1000
+  linger_ms: 100
+  buffer_memory: 33554432
+  schema_registry_url: "http://localhost:8081"
+  
+spark:
+  app_name: "speed-layer-streaming"
+  master: "local[*]"
+  log_level: "WARN"
+  
+  # Streaming configuration
+  streaming:
+    batch_duration: "5 minutes"
+    watermark_duration: "10 minutes"
+    checkpoint_location: "/tmp/spark-streaming-checkpoints"
+    max_offsets_per_trigger: 1000
+    
+  # Cassandra connector configuration
+  cassandra:
+    connection:
+      host: "localhost"
+      port: 9042
+      local_dc: "datacenter1"
+    
+  # Memory and execution settings
+  executor:
+    memory: "2g"
+    cores: 2
+    instances: 2
+    
+  driver:
+    memory: "1g"
+    cores: 1
+    
+  # Additional Spark configurations
+  config:
+    spark.sql.adaptive.enabled: "true"
+    spark.sql.adaptive.coalescePartitions.enabled: "true"
+    spark.sql.streaming.forceDeleteTempCheckpointLocation: "true"
+    spark.cassandra.connection.host: "localhost"
+    spark.cassandra.connection.port: "9042"
+    spark.cassandra.auth.username: ""
+    spark.cassandra.auth.password: ""
+    
+# Sentiment Analysis Configuration
+sentiment:
+  model: "vader"
+  batch_size: 100
+  confidence_threshold: 0.1
+  
+# Windowing Configuration
+windowing:
+  tumbling_window: "5 minutes"
+  sliding_window: "1 minute"
+  watermark: "10 minutes"
+  
+# Output Configuration
+output:
+  mode: "append"
+  trigger: "processingTime='5 minutes'"
+  
+# Monitoring Configuration
+monitoring:
+  metrics_enabled: true
+  log_level: "INFO"
+  checkpoint_interval: "5 minutes"

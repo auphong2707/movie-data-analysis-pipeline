@@ -177,6 +177,14 @@ CREATE INDEX IF NOT EXISTS window_start_idx_trending ON trending_movies (window_
 
 -- Materialized views for common query patterns
 
+-- ============================================================
+-- MATERIALIZED VIEWS (Currently Disabled - Experimental Feature)
+-- These provide optimized query paths but require enabling in cassandra.yaml
+-- To enable: set materialized_views_enabled=true in cassandra.yaml
+-- ============================================================
+
+-- COMMENTED OUT - Uncomment when materialized views are enabled
+/*
 -- View 1: Latest movie statistics (most recent window)
 CREATE MATERIALIZED VIEW IF NOT EXISTS latest_movie_stats AS
     SELECT window_start, window_end, movie_id, title, avg_popularity, 
@@ -216,9 +224,15 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS recent_sentiments AS
     PRIMARY KEY (created_at, window_start, window_end, movie_id)
     WITH CLUSTERING ORDER BY (created_at DESC)
     AND default_time_to_live = 21600;  -- 6 hours
+*/
 
--- Create user-defined functions for common calculations
+-- ============================================================
+-- USER-DEFINED FUNCTIONS (Currently Disabled - Experimental Feature)
+-- To enable: set user_defined_functions_enabled=true in cassandra.yaml
+-- ============================================================
 
+-- COMMENTED OUT - Uncomment when UDFs are enabled
+/*
 -- Function to calculate trend score
 CREATE OR REPLACE FUNCTION trend_score_calc(
     velocity double,
@@ -240,6 +254,11 @@ CREATE OR REPLACE FUNCTION sentiment_category(
     else if (compound <= -0.05) return "negative";
     else return "neutral";
   ';
+*/
+
+-- ============================================================
+-- ROLLUP TABLES - These ARE enabled and ready to use
+-- ============================================================
 
 -- Create aggregation tables for rollup data (hourly summaries)
 

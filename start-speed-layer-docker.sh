@@ -116,6 +116,11 @@ start_services() {
     echo "⏳ Waiting for infrastructure to be ready (30s)..."
     sleep 30
     
+    # Initialize Cassandra schema
+    echo ""
+    echo "🗄️  Initializing Cassandra schema..."
+    docker-compose -f $COMPOSE_FILE up cassandra-init
+    
     # Start speed layer applications
     echo ""
     echo "🚀 Starting Speed Layer applications..."

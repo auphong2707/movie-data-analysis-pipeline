@@ -16,16 +16,18 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "srvr,mntr,ruok,stat"
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-logs:/var/lib/zookeeper/log
     networks:
       - movie-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   # Kafka - Message Streaming
   kafka:
@@ -99,9 +101,10 @@ services:
       CASSANDRA_START_TIMEOUT: 300
       MAX_HEAP_SIZE: 512M
       HEAP_NEWSIZE: 100M
+      JVM_EXTRA_OPTS: "-Dcassandra.materialized_views_enabled=true -Dcassandra.user_defined_functions_enabled=true -Dcassandra.enable_user_defined_functions=true -Dcassandra.enable_scripted_user_defined_functions=true"
     volumes:
       - cassandra-data:/var/lib/cassandra
-      - ./layers/speed_layer/cassandra_views/schema.cql:/docker-entrypoint-initdb.d/schema.cql
+      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
     networks:
       - movie-pipeline
     healthcheck:
@@ -109,6 +112,27 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+  # Cassandra Schema Initializer - One-time schema setup
+  cassandra-init:
+    image: cassandra:4.1
+    container_name: cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
+    networks:
+      - movie-pipeline
+    command: >
+      bash -c "
+        echo 'Waiting for Cassandra to be fully ready...' &&
+        sleep 10 &&
+        echo 'Initializing Cassandra schema...' &&
+        cqlsh cassandra -f /schema.cql &&
+        echo 'Schema initialized successfully!'
+      "
+    restart: "no"
 
   # MongoDB - Batch Layer Storage & Speed Layer Sync Target
   mongodb:
@@ -193,6 +217,8 @@ services:
         condition: service_healthy
       cassandra:
         condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra
@@ -224,6 +250,8 @@ services:
         condition: service_healthy
       cassandra:
         condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra
@@ -255,6 +283,8 @@ services:
         condition: service_healthy
       cassandra:
         condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra

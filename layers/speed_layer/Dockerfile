@@ -3,16 +3,16 @@
 
 FROM python:3.10-slim
 
-# Install Java for PySpark
+# Install Java for PySpark (using OpenJDK 21 for newer Debian)
 RUN apt-get update && apt-get install -y \
-    openjdk-17-jre-headless \
+    openjdk-21-jre-headless \
     wget \
     curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Java environment variables
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH=$PATH:$JAVA_HOME/bin
 
 # Create app directory

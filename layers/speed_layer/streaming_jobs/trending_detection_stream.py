@@ -65,12 +65,22 @@ class TrendingDetectionStreamProcessor:
         for key, value in spark_config.get('config', {}).items():
             builder = builder.config(key, value)
         
-        # Add packages
+        # Add packages (compatible versions for Spark 3.4+)
         packages = [
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0",
-            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1"
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1",
+            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
+            "org.apache.kafka:kafka-clients:3.4.0"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
+        
+        # Cassandra connection
+        builder = builder.config("spark.cassandra.connection.host", 
+                                os.getenv("CASSANDRA_HOSTS", "cassandra"))
+        builder = builder.config("spark.cassandra.connection.port", "9042")
+        
+        # Checkpoint location
+        builder = builder.config("spark.sql.streaming.checkpointLocation", 
+                                "/app/checkpoints/trending")
         
         return builder.getOrCreate()
     

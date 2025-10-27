@@ -351,3 +351,73 @@ class ReliableEventProducer(EventProducer):
                     return False
         
         return False
+
+
+def main():
+    """Main entry point for the event producer"""
+    import os
+    import random
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Get configuration from environment
+    kafka_bootstrap = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    
+    # Create producer configuration
+    config = {
+        'bootstrap_servers': kafka_bootstrap.split(','),
+        'client_id': 'synthetic-event-producer',
+        'acks': 1,
+        'compression_type': 'gzip'
+    }
+    
+    # Create producer
+    producer = EventProducer(config)
+    
+    # Generate synthetic events
+    logger.info("Starting synthetic event producer...")
+    
+    movie_ids = list(range(1, 1001))  # Generate events for movies 1-1000
+    
+    try:
+        while True:
+            # Generate a random movie event
+            movie_id = random.choice(movie_ids)
+            event_type = random.choice(['view', 'rating', 'review'])
+            
+            event = {
+                'movie_id': movie_id,
+                'event_type': event_type,
+                'timestamp': int(time.time() * 1000),
+                'user_id': f'user_{random.randint(1, 10000)}'
+            }
+            
+            if event_type == 'rating':
+                event['rating'] = round(random.uniform(1.0, 10.0), 1)
+            
+            # Send to appropriate topic
+            topic = f'movie.{event_type}s'
+            success = producer.produce_event(
+                topic=topic,
+                key=str(movie_id),
+                value=event
+            )
+            
+            if success:
+                logger.debug(f"Sent {event_type} event for movie {movie_id}")
+            
+            # Sleep to control rate (1 event per second)
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        logger.info("Stopping event producer...")
+    finally:
+        producer.close()
+
+
+if __name__ == '__main__':
+    main()

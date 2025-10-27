@@ -293,6 +293,50 @@ class TMDBStreamProducer:
             self.producer.flush()
 
 
+def main():
+    """Main entry point for the TMDB stream producer"""
+    import os
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Get configuration from environment
+    kafka_bootstrap = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    schema_registry_url = os.getenv('SCHEMA_REGISTRY_URL', 'http://localhost:8081')
+    tmdb_api_key = os.getenv('TMDB_API_KEY')
+    
+    if not tmdb_api_key:
+        logger.error("TMDB_API_KEY environment variable not set")
+        return
+    
+    # Create Kafka config dict
+    kafka_config = {
+        'bootstrap.servers': kafka_bootstrap,
+        'client.id': 'tmdb-stream-producer'
+    }
+    
+    # Create producer
+    producer = TMDBStreamProducer(
+        api_key=tmdb_api_key,
+        kafka_config=kafka_config,
+        schema_registry_url=schema_registry_url
+    )
+    
+    # Run streaming
+    logger.info("Starting TMDB stream producer...")
+    producer.run_streaming(
+        trending_interval_seconds=300,  # 5 minutes
+        reviews_interval_seconds=300    # 5 minutes
+    )
+
+
+if __name__ == '__main__':
+    main()
+
+
 # TODO: Implement in next phase
 # - Add metadata topic for movie updates
 # - Implement error handling and retry logic

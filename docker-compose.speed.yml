@@ -224,12 +224,8 @@ services:
       CASSANDRA_HOSTS: cassandra
       CASSANDRA_KEYSPACE: speed_layer
       PYTHONUNBUFFERED: 1
-    command: >
-      spark-submit
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
-      --conf spark.cassandra.connection.host=cassandra
-      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/sentiment
-      streaming_jobs/review_sentiment_stream.py
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED"
+    command: python streaming_jobs/review_sentiment_stream.py
     volumes:
       - ./layers/speed_layer:/app
       - ./config:/app/config
@@ -257,12 +253,8 @@ services:
       CASSANDRA_HOSTS: cassandra
       CASSANDRA_KEYSPACE: speed_layer
       PYTHONUNBUFFERED: 1
-    command: >
-      spark-submit
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
-      --conf spark.cassandra.connection.host=cassandra
-      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/aggregation
-      streaming_jobs/movie_aggregation_stream.py
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED"
+    command: python streaming_jobs/movie_aggregation_stream.py
     volumes:
       - ./layers/speed_layer:/app
       - ./config:/app/config
@@ -290,12 +282,8 @@ services:
       CASSANDRA_HOSTS: cassandra
       CASSANDRA_KEYSPACE: speed_layer
       PYTHONUNBUFFERED: 1
-    command: >
-      spark-submit
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0,com.datastax.spark:spark-cassandra-connector_2.12:3.4.0
-      --conf spark.cassandra.connection.host=cassandra
-      --conf spark.sql.streaming.checkpointLocation=/app/checkpoints/trending
-      streaming_jobs/trending_detection_stream.py
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED"
+    command: python streaming_jobs/trending_detection_stream.py
     volumes:
       - ./layers/speed_layer:/app
       - ./config:/app/config

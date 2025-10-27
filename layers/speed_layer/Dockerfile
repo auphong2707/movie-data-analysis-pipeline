@@ -1,18 +1,19 @@
 # Speed Layer Dockerfile
 # Multi-stage build for Python + PySpark applications
 
-FROM python:3.10-slim
+# Use Python 3.10 based on Debian Bullseye (which has Java 11)
+FROM python:3.10.13-slim-bullseye
 
-# Install Java for PySpark (using OpenJDK 21 for newer Debian)
+# Install Java 11 for PySpark (PySpark 3.4.x requires Java 11 or 17)
 RUN apt-get update && apt-get install -y \
-    openjdk-21-jre-headless \
+    openjdk-11-jre-headless \
     wget \
     curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Java environment variables
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$PATH:$JAVA_HOME/bin
 
 # Create app directory

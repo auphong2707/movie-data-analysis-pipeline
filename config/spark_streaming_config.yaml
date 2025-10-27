@@ -9,6 +9,13 @@ kafka:
   buffer_memory: 33554432
   schema_registry_url: "${SCHEMA_REGISTRY_URL:http://localhost:8081}"
   
+  # Kafka topic names
+  topics:
+    reviews: "movie.reviews"
+    ratings: "movie.ratings"
+    metadata: "movie.metadata"
+    trending: "movie.trending"
+  
 spark:
   app_name: "speed-layer-streaming"
   master: "local[*]"

@@ -9,9 +9,13 @@
 # Kafka & Streaming
 # ---------------------------------------------------------------------
 # kafka-python: Native Python client cho Kafka
+# confluent-kafka: Kafka producers với Avro serialization (for tmdb producer)
 # avro: Schema serialization/deserialization
+# fastavro: Required by confluent-kafka for Avro serialization
 kafka-python==2.0.2
+confluent-kafka==2.3.0
 avro==1.11.3
+fastavro==1.9.4
 
 # ---------------------------------------------------------------------
 # PySpark & Streaming (EXACT VERSION - Must match Dockerfile!)

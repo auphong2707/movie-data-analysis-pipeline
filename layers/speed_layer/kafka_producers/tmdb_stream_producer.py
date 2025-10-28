@@ -10,6 +10,7 @@ from typing import Dict, Any
 import logging
 import time
 import json
+import os
 from confluent_kafka import Producer
 from confluent_kafka.serialization import StringSerializer, SerializationContext, MessageField
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -306,7 +307,7 @@ def main():
     # Get configuration from environment
     kafka_bootstrap = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
     schema_registry_url = os.getenv('SCHEMA_REGISTRY_URL', 'http://localhost:8081')
-    tmdb_api_key = os.getenv('TMDB_API_KEY')
+    tmdb_api_key = os.getenv('TMDB_API_KEY', '').strip()
     
     if not tmdb_api_key:
         logger.error("TMDB_API_KEY environment variable not set")

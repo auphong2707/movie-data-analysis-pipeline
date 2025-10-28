@@ -65,10 +65,10 @@ class TrendingDetectionStreamProcessor:
         for key, value in spark_config.get('config', {}).items():
             builder = builder.config(key, value)
         
-        # Add packages (compatible versions for Spark 3.4+)
+        # Add packages (compatible versions for Spark 3.5.3)
         packages = [
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1",
-            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
+            "com.datastax.spark:spark-cassandra-connector_2.12:3.5.1",
             "org.apache.kafka:kafka-clients:3.4.0"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))

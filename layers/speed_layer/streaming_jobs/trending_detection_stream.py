@@ -69,7 +69,7 @@ class TrendingDetectionStreamProcessor:
         # Versions aligned with PySpark 3.4.4 (installed in Dockerfile)
         # spark-sql-kafka: 3.4.4 matches PySpark version
         # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
-        # kafka-clients: 3.4.0 compatible với Kafka 7.4.x (Confluent)
+        # kafka-clients: 3.4.0 compatible with Kafka 7.4.x (Confluent)
         packages = [
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
             "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",

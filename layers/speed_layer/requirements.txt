@@ -8,8 +8,8 @@
 # ---------------------------------------------------------------------
 # Kafka & Streaming
 # ---------------------------------------------------------------------
-# kafka-python: Native Python client cho Kafka
-# confluent-kafka: Kafka producers với Avro serialization (for tmdb producer)
+# kafka-python: Native Python client for Kafka
+# confluent-kafka: Kafka producers with Avro serialization (for tmdb producer)
 # avro: Schema serialization/deserialization
 # fastavro: Required by confluent-kafka for Avro serialization
 kafka-python==2.0.2
@@ -20,36 +20,36 @@ fastavro==1.9.4
 # ---------------------------------------------------------------------
 # PySpark & Streaming (EXACT VERSION - Must match Dockerfile!)
 # ---------------------------------------------------------------------
-# PySpark 3.4.4: Compatible với Java 11, Spark packages 3.4.x
+# PySpark 3.4.4: Compatible with Java 11, Spark packages 3.4.x
 pyspark==3.4.4
 
 # ---------------------------------------------------------------------
 # Cassandra Database Driver
 # ---------------------------------------------------------------------
-# cassandra-driver 3.29.1: Compatible với Cassandra 4.x
+# cassandra-driver 3.29.1: Compatible with Cassandra 4.x
 cassandra-driver==3.29.1
 
 # ---------------------------------------------------------------------
 # Sentiment Analysis
 # ---------------------------------------------------------------------
-# vaderSentiment: Real-time sentiment analysis cho reviews
+# vaderSentiment: Real-time sentiment analysis for reviews
 vaderSentiment==3.3.2
 
 # ---------------------------------------------------------------------
 # HTTP & API
 # ---------------------------------------------------------------------
-# requests: HTTP client cho TMDB API
+# requests: HTTP client for TMDB API
 requests==2.31.0
 
 # ---------------------------------------------------------------------
 # Configuration & Environment
 # ---------------------------------------------------------------------
 # PyYAML: YAML config parser
-# python-dotenv: Load environment variables từ .env
+# python-dotenv: Load environment variables from .env
 pyyaml==6.0.1
 python-dotenv==1.0.0
 
 # =====================================================================
-# Note: Dependencies như pandas, numpy KHÔNG được cài trong Dockerfile
-# để giữ image size nhỏ. Chỉ thêm nếu thực sự cần thiết.
+# Note: Dependencies like pandas, numpy are NOT installed in Dockerfile
+# to keep image size small. Only add if truly necessary.
 # =====================================================================

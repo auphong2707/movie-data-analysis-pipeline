@@ -1,22 +1,22 @@
 # =====================================================================
 # Speed Layer Dockerfile - Spark Structured Streaming Pipeline
 # =====================================================================
-# Mô tả: Container cho Speed Layer xử lý streaming data từ Kafka
+# Description: Container for Speed Layer processing streaming data from Kafka
 # Stack: Python 3.10 + Java 11 + PySpark 3.4.4 + Kafka + Cassandra 4.x
 # =====================================================================
 
 # ---------------------------------------------------------------------
-# BƯỚC 1: Base Image - Python 3.10 trên Debian Bullseye
+# STEP 1: Base Image - Python 3.10 on Debian Bullseye
 # ---------------------------------------------------------------------
-# Lý do chọn bullseye: Hỗ trợ OpenJDK 11 ổn định từ repository chính thức
+# Reason for choosing bullseye: Stable support for OpenJDK 11 from official repository
 FROM python:3.10-slim-bullseye
 
 # ---------------------------------------------------------------------
-# BƯỚC 2: Cài đặt OpenJDK 11 và các công cụ cần thiết
+# STEP 2: Install OpenJDK 11 and necessary tools
 # ---------------------------------------------------------------------
-# Java 11: Phiên bản ổn định nhất cho Spark 3.4.x (tránh lỗi class version)
-# procps: Cung cấp ps, top để monitoring containers
-# curl: Download dependencies hoặc health checks
+# Java 11: Most stable version for Spark 3.4.x (avoids class version errors)
+# procps: Provides ps, top for container monitoring
+# curl: Download dependencies or health checks
 RUN apt-get update && apt-get install -y \
     openjdk-11-jdk \
     procps \
@@ -24,37 +24,37 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------
-# BƯỚC 3: Thiết lập biến môi trường Java
+# STEP 3: Set up Java environment variables
 # ---------------------------------------------------------------------
-# JAVA_HOME: Đảm bảo Spark tìm đúng Java runtime
-# PATH: Cho phép gọi java, javac từ command line
+# JAVA_HOME: Ensure Spark finds the correct Java runtime
+# PATH: Allow calling java, javac from command line
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$PATH:$JAVA_HOME/bin
 
 # ---------------------------------------------------------------------
-# BƯỚC 4: Tạo thư mục làm việc
+# STEP 4: Create working directory
 # ---------------------------------------------------------------------
 WORKDIR /app
 
 # ---------------------------------------------------------------------
-# BƯỚC 5: Copy requirements.txt và cài đặt Python dependencies
+# STEP 5: Copy requirements.txt and install Python dependencies
 # ---------------------------------------------------------------------
-# Copy requirements.txt trước để tận dụng Docker layer caching
-# (chỉ rebuild layer này khi requirements.txt thay đổi)
+# Copy requirements.txt first to leverage Docker layer caching
+# (only rebuild this layer when requirements.txt changes)
 COPY requirements.txt /app/
 
-# Cài đặt tất cả dependencies từ requirements.txt
-# --no-cache-dir: Giảm image size
-# --prefer-binary: Ưu tiên wheel packages, build nhanh hơn
+# Install all dependencies from requirements.txt
+# --no-cache-dir: Reduce image size
+# --prefer-binary: Prefer wheel packages, faster builds
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # ---------------------------------------------------------------------
-# BƯỚC 6: Copy source code vào container
+# STEP 6: Copy source code into container
 # ---------------------------------------------------------------------
-# Copy thư mục streaming_jobs (chứa logic xử lý streaming)
+# Copy streaming_jobs directory (contains streaming processing logic)
 COPY streaming_jobs/ /app/streaming_jobs/
 
-# Copy các modules hỗ trợ
+# Copy supporting modules
 COPY kafka_producers/ /app/kafka_producers/
 COPY cassandra_views/ /app/cassandra_views/
 
@@ -62,40 +62,40 @@ COPY cassandra_views/ /app/cassandra_views/
 # so we don't copy it here to avoid conflicts
 
 # ---------------------------------------------------------------------
-# BƯỚC 7: Tạo thư mục logs và checkpoints
+# STEP 7: Create logs and checkpoints directories
 # ---------------------------------------------------------------------
-# logs/: Lưu application logs
+# logs/: Store application logs
 # checkpoints/: Spark Structured Streaming checkpoints (fault-tolerance)
 RUN mkdir -p /app/logs /app/checkpoints
 
 # ---------------------------------------------------------------------
-# BƯỚC 8: Thiết lập PYTHONPATH
+# STEP 8: Set up PYTHONPATH
 # ---------------------------------------------------------------------
-# Đảm bảo Python tìm thấy modules từ /app và /app/config
+# Ensure Python finds modules from /app and /app/config
 ENV PYTHONPATH=/app:/app/config
 
 # ---------------------------------------------------------------------
-# BƯỚC 9: Expose port Spark UI
+# STEP 9: Expose Spark UI port
 # ---------------------------------------------------------------------
-# Port 4040: Spark Web UI để monitoring streaming jobs
+# Port 4040: Spark Web UI for monitoring streaming jobs
 EXPOSE 4040
 
 # ---------------------------------------------------------------------
-# BƯỚC 10: Health Check
+# STEP 10: Health Check
 # ---------------------------------------------------------------------
-# Kiểm tra container còn sống không (mỗi 30s)
+# Check if container is alive (every 30s)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import sys; sys.exit(0)" || exit 1
 
 # ---------------------------------------------------------------------
-# BƯỚC 11: Default Command
+# STEP 11: Default Command
 # ---------------------------------------------------------------------
 # Default: show help/version (docker-compose will override with specific job)
 # Docker Compose services override this with specific streaming job
 CMD ["python3", "--version"]
 
 # =====================================================================
-# 🚀 Hướng dẫn sử dụng:
+# 🚀 Usage Guide:
 # =====================================================================
 # Build image:
 #   docker build -t speed-layer:latest .
@@ -103,11 +103,11 @@ CMD ["python3", "--version"]
 # Run standalone:
 #   docker run -it --network=host speed-layer:latest
 #
-# Dùng với Docker Compose:
-#   Trong docker-compose.yml, override CMD nếu cần:
+# Use with Docker Compose:
+#   In docker-compose.yml, override CMD if needed:
 #   command: ["python3", "streaming_jobs/movie_aggregation_stream.py"]
 #
-# Dùng spark-submit với Cassandra connector:
+# Use spark-submit with Cassandra connector:
 #   docker run -it speed-layer:latest spark-submit \
 #     --packages com.datastax.spark:spark-cassandra-connector_2.12:3.4.1 \
 #     --conf spark.cassandra.connection.host=cassandra \

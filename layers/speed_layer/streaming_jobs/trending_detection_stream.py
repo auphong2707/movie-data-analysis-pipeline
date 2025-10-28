@@ -65,10 +65,14 @@ class TrendingDetectionStreamProcessor:
         for key, value in spark_config.get('config', {}).items():
             builder = builder.config(key, value)
         
-        # Add packages (compatible versions for Spark 3.5.3)
+        # Add Kafka and Cassandra packages
+        # Versions aligned with PySpark 3.4.4 (installed in Dockerfile)
+        # spark-sql-kafka: 3.4.4 matches PySpark version
+        # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
+        # kafka-clients: 3.4.0 compatible với Kafka 7.4.x (Confluent)
         packages = [
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
-            "com.datastax.spark:spark-cassandra-connector_2.12:3.5.1",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
+            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
             "org.apache.kafka:kafka-clients:3.4.0"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
@@ -124,7 +128,7 @@ class TrendingDetectionStreamProcessor:
     
     def read_movie_stats_stream(self) -> DataFrame:
         """Read movie statistics from Cassandra for trending analysis."""
-        cassandra_config = self.config['cassandra']
+        cassandra_config = self.config['spark']['cassandra']
         
         # This would typically read from Cassandra table
         # For now, we'll simulate reading from a Kafka topic
@@ -155,9 +159,9 @@ class TrendingDetectionStreamProcessor:
                 avg("trend_score").alias("avg_trend_score"),
                 avg("popularity_delta").alias("avg_popularity_delta"),
                 avg("rating_velocity").alias("avg_rating_velocity"),
-                sum("review_volume").alias("total_review_volume"),
+                spark_sum("review_volume").alias("total_review_volume"),
                 count("movie_id").alias("event_count"),
-                max("trend_score").alias("max_trend_score")
+                spark_max("trend_score").alias("max_trend_score")
             )
         
         # Calculate velocity using window functions
@@ -316,7 +320,7 @@ class TrendingDetectionStreamProcessor:
     
     def write_to_cassandra(self, df: DataFrame, table_name: str, checkpoint_location: str):
         """Write trending data to Cassandra."""
-        cassandra_config = self.config['cassandra']
+        cassandra_config = self.config['spark']['cassandra']
         
         query = df.writeStream \
             .format("org.apache.spark.sql.cassandra") \
@@ -408,8 +412,8 @@ def main():
         # Create and start processor
         processor = TrendingDetectionStreamProcessor()
         
-        # Run streaming pipeline
-        queries = processor.run_streaming_pipeline(output_mode="console")
+        # Run streaming pipeline with Cassandra output
+        queries = processor.run_streaming_pipeline(output_mode="cassandra")
         
         # Wait for termination
         for query in queries:

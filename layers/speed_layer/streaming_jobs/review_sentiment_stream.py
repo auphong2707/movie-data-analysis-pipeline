@@ -57,10 +57,14 @@ class ReviewSentimentStreamProcessor:
         for key, value in spark_config.get('config', {}).items():
             builder = builder.config(key, value)
         
-        # Add Kafka and Cassandra packages (compatible versions for Spark 3.5.3)
+        # Add Kafka and Cassandra packages
+        # Versions aligned with PySpark 3.4.4 (installed in Dockerfile)
+        # spark-sql-kafka: 3.4.4 matches PySpark version
+        # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
+        # kafka-clients: 3.4.0 compatible với Kafka 7.4.x (Confluent)
         packages = [
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
-            "com.datastax.spark:spark-cassandra-connector_2.12:3.5.1",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
+            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
             "org.apache.kafka:kafka-clients:3.4.0"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
@@ -95,6 +99,10 @@ class ReviewSentimentStreamProcessor:
         
         def analyze_sentiment(text: str) -> Dict[str, float]:
             """Analyze sentiment using VADER."""
+            # Import and initialize analyzer inside UDF to avoid serialization issues
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            analyzer = SentimentIntensityAnalyzer()
+            
             if not text or not isinstance(text, str):
                 return {
                     'compound': 0.0,
@@ -104,7 +112,7 @@ class ReviewSentimentStreamProcessor:
                 }
             
             try:
-                scores = self.analyzer.polarity_scores(text)
+                scores = analyzer.polarity_scores(text)
                 return {
                     'compound': float(scores['compound']),
                     'positive': float(scores['pos']),
@@ -112,7 +120,7 @@ class ReviewSentimentStreamProcessor:
                     'neutral': float(scores['neu'])
                 }
             except Exception as e:
-                logger.error(f"Sentiment analysis failed: {e}")
+                # Can't use logger in UDF, just return default
                 return {
                     'compound': 0.0,
                     'positive': 0.0,
@@ -238,7 +246,7 @@ class ReviewSentimentStreamProcessor:
     def write_to_cassandra(self, df: DataFrame, checkpoint_location: str):
         """Write aggregated sentiment data to Cassandra."""
         
-        cassandra_config = self.config['cassandra']
+        cassandra_config = self.config['spark']['cassandra']
         
         query = df.writeStream \
             .format("org.apache.spark.sql.cassandra") \
@@ -320,8 +328,8 @@ def main():
         # Create and start processor
         processor = ReviewSentimentStreamProcessor()
         
-        # Run streaming pipeline (console output for testing)
-        query = processor.run_streaming_pipeline(output_mode="console")
+        # Run streaming pipeline with Cassandra output
+        query = processor.run_streaming_pipeline(output_mode="cassandra")
         
         # Wait for termination
         query.awaitTermination()

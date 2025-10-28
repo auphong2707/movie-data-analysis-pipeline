@@ -56,10 +56,14 @@ class MovieAggregationStreamProcessor:
         for key, value in spark_config.get('config', {}).items():
             builder = builder.config(key, value)
         
-        # Add packages (compatible versions for Spark 3.5.3)
+        # Add Kafka and Cassandra packages
+        # Versions aligned with PySpark 3.4.4 (installed in Dockerfile)
+        # spark-sql-kafka: 3.4.4 matches PySpark version
+        # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
+        # kafka-clients: 3.4.0 compatible với Kafka 7.4.x (Confluent)
         packages = [
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
-            "com.datastax.spark:spark-cassandra-connector_2.12:3.5.1",
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
+            "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
             "org.apache.kafka:kafka-clients:3.4.0"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
@@ -283,19 +287,28 @@ class MovieAggregationStreamProcessor:
                   "full_outer")
         
         # Calculate composite trend score
+        # Use select to avoid ambiguous column references
         trend_df = joined_df \
-            .withColumn("movie_id", coalesce(col("m.movie_id"), col("r.movie_id"))) \
-            .withColumn("window_start", coalesce(col("m.window_start"), col("r.window_start"))) \
-            .withColumn("window_end", coalesce(col("m.window_end"), col("r.window_end"))) \
-            .withColumn("title", coalesce(col("m.title"), lit("Unknown"))) \
+            .select(
+                coalesce(col("m.movie_id"), col("r.movie_id")).alias("movie_id"),
+                coalesce(col("m.window_start"), col("r.window_start")).alias("window_start"),
+                coalesce(col("m.window_end"), col("r.window_end")).alias("window_end"),
+                coalesce(col("m.title"), lit("Unknown")).alias("title"),
+                col("m.popularity_velocity"),
+                col("m.avg_popularity"),
+                col("m.update_count"),
+                col("r.rating_velocity"),
+                col("r.avg_rating"),
+                col("r.rating_count")
+            ) \
             .withColumn("popularity_score",
-                       coalesce(col("m.popularity_velocity"), lit(0.0)) * 0.4 +
-                       coalesce(col("m.avg_popularity"), lit(0.0)) * 0.3 +
-                       coalesce(col("m.update_count"), lit(0.0)) * 0.3) \
+                       coalesce(col("popularity_velocity"), lit(0.0)) * 0.4 +
+                       coalesce(col("avg_popularity"), lit(0.0)) * 0.3 +
+                       coalesce(col("update_count"), lit(0.0)) * 0.3) \
             .withColumn("rating_score",
-                       coalesce(col("r.rating_velocity"), lit(0.0)) * 0.5 +
-                       coalesce(col("r.avg_rating"), lit(0.0)) * 0.3 +
-                       coalesce(col("r.rating_count"), lit(0.0)) * 0.2) \
+                       coalesce(col("rating_velocity"), lit(0.0)) * 0.5 +
+                       coalesce(col("avg_rating"), lit(0.0)) * 0.3 +
+                       coalesce(col("rating_count"), lit(0.0)) * 0.2) \
             .withColumn("trend_score",
                        col("popularity_score") * 0.6 + col("rating_score") * 0.4)
         
@@ -319,7 +332,7 @@ class MovieAggregationStreamProcessor:
     
     def write_to_cassandra(self, df: DataFrame, table_name: str, checkpoint_location: str):
         """Write data to Cassandra."""
-        cassandra_config = self.config['cassandra']
+        cassandra_config = self.config['spark']['cassandra']
         
         query = df.writeStream \
             .format("org.apache.spark.sql.cassandra") \
@@ -409,8 +422,8 @@ def main():
         # Create and start processor
         processor = MovieAggregationStreamProcessor()
         
-        # Run streaming pipeline
-        queries = processor.run_streaming_pipeline(output_mode="console")
+        # Run streaming pipeline with Cassandra output
+        queries = processor.run_streaming_pipeline(output_mode="cassandra")
         
         # Wait for termination
         for query in queries:

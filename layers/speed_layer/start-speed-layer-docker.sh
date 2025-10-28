@@ -18,7 +18,8 @@ show_usage() {
     echo "Usage: $0 [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  start     - Start all Speed Layer services (default)"
+    echo "  start     - Start all Speed Layer services (default, smart start)"
+    echo "  rebuild   - Force rebuild of all images and start services"
     echo "  stop      - Stop all services without removing containers"
     echo "  restart   - Restart all services"
     echo "  status    - Show status of all services"
@@ -27,7 +28,9 @@ show_usage() {
     echo "  purge     - Complete cleanup including volumes (deletes all data!)"
     echo ""
     echo "Examples:"
-    echo "  $0 start"
+    echo "  $0           # Smart start (detects if already running)"
+    echo "  $0 start     # Same as above"
+    echo "  $0 rebuild   # Force rebuild after code changes"
     echo "  $0 status"
     echo "  $0 logs"
     echo ""
@@ -50,28 +53,34 @@ check_docker() {
 
 # Function to validate environment
 validate_environment() {
-    if [ ! -f "layers/speed_layer/.env" ]; then
+    if [ ! -f ".env" ]; then
         echo "⚠️  No .env file found. Creating from .env.example..."
-        if [ -f "layers/speed_layer/.env.example" ]; then
-            cp layers/speed_layer/.env.example layers/speed_layer/.env
-            echo "📝 Please edit layers/speed_layer/.env and add your TMDB_API_KEY"
+        if [ -f ".env.example" ]; then
+            cp .env.example .env
+            echo "📝 Please edit .env and add your TMDB_API_KEY"
             echo ""
         fi
     fi
 
     # Load environment variables
-    if [ -f "layers/speed_layer/.env" ]; then
-        export $(grep -v '^#' layers/speed_layer/.env | xargs)
+    if [ -f ".env" ]; then
+        export $(grep -v '^#' .env | xargs)
     fi
 
     # Validate TMDB_API_KEY
     if [ -z "$TMDB_API_KEY" ] || [ "$TMDB_API_KEY" == "your_tmdb_api_key_here" ]; then
         echo "❌ TMDB_API_KEY is not set or is still the default value"
-        echo "📝 Please edit layers/speed_layer/.env and add your TMDB_API_KEY"
+        echo "📝 Please edit .env and add your TMDB_API_KEY"
         echo ""
         echo "You can get an API key from: https://www.themoviedb.org/settings/api"
         exit 1
     fi
+}
+
+# Function to check if services are running
+check_services_running() {
+    local running_count=$(docker-compose -f $COMPOSE_FILE ps -q 2>/dev/null | wc -l)
+    echo $running_count
 }
 
 # Function to start services
@@ -85,9 +94,42 @@ start_services() {
     echo "✅ Environment validated"
     echo ""
     
-    # Pull images
-    echo "📥 Pulling Docker images (this may take a few minutes on first run)..."
-    docker-compose -f $COMPOSE_FILE pull
+    # Check if services are already running
+    local running=$(check_services_running)
+    
+    if [ "$running" -gt 0 ]; then
+        echo "ℹ️  Detected $running running containers"
+        echo ""
+        docker-compose -f $COMPOSE_FILE ps
+        echo ""
+        read -p "Services are already running. Restart them? (yes/no): " -r
+        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+            echo "✅ Using existing containers"
+            show_useful_commands
+            return
+        fi
+        echo "🔄 Restarting services..."
+        docker-compose -f $COMPOSE_FILE restart
+        echo "✅ Services restarted!"
+        show_useful_commands
+        return
+    fi
+    
+    # Check if images exist (to decide if we need to build)
+    local need_build=false
+    if ! docker images | grep -q "speed_layer.*tmdb-producer"; then
+        need_build=true
+        echo "📦 No existing images found - will build from scratch"
+    else
+        echo "✅ Found existing images - will use them"
+    fi
+    
+    # Pull base images only if needed
+    if [ "$need_build" = true ]; then
+        echo ""
+        echo "📥 Pulling base Docker images (this may take a few minutes on first run)..."
+        docker-compose -f $COMPOSE_FILE pull
+    fi
     
     echo ""
     echo "🚀 Starting all Speed Layer services..."
@@ -121,10 +163,15 @@ start_services() {
     echo "🗄️  Initializing Cassandra schema..."
     docker-compose -f $COMPOSE_FILE up cassandra-init
     
-    # Start speed layer applications
+    # Start speed layer applications (only build if needed)
     echo ""
-    echo "🚀 Starting Speed Layer applications..."
-    docker-compose -f $COMPOSE_FILE up -d --build tmdb-producer event-producer sentiment-stream aggregation-stream trending-stream
+    if [ "$need_build" = true ]; then
+        echo "� Building and starting Speed Layer applications..."
+        docker-compose -f $COMPOSE_FILE up -d --build tmdb-producer event-producer sentiment-stream aggregation-stream trending-stream
+    else
+        echo "🚀 Starting Speed Layer applications (using existing images)..."
+        docker-compose -f $COMPOSE_FILE up -d tmdb-producer event-producer sentiment-stream aggregation-stream trending-stream
+    fi
     
     echo ""
     echo "⏳ Waiting for services to start..."
@@ -134,6 +181,62 @@ start_services() {
     
     echo ""
     echo "✅ Speed Layer started successfully!"
+    echo ""
+    show_useful_commands
+}
+
+# Function to rebuild services
+rebuild_services() {
+    echo "🔨 Rebuilding Speed Layer (force rebuild all images)..."
+    echo ""
+    
+    check_docker
+    validate_environment
+    
+    echo "✅ Environment validated"
+    echo ""
+    
+    # Stop existing services
+    echo "🛑 Stopping existing services..."
+    docker-compose -f $COMPOSE_FILE stop
+    
+    echo ""
+    echo "📥 Pulling latest base images..."
+    docker-compose -f $COMPOSE_FILE pull
+    
+    echo ""
+    echo "🔨 Rebuilding all Speed Layer images..."
+    docker-compose -f $COMPOSE_FILE build --no-cache
+    
+    echo ""
+    echo "🚀 Starting all services with new images..."
+    
+    # Start infrastructure services first
+    echo "📦 Starting infrastructure services..."
+    docker-compose -f $COMPOSE_FILE up -d zookeeper kafka schema-registry cassandra mongodb
+    
+    echo ""
+    echo "⏳ Waiting for infrastructure to be ready (30s)..."
+    sleep 30
+    
+    # Initialize Cassandra schema
+    echo ""
+    echo "🗄️  Initializing Cassandra schema..."
+    docker-compose -f $COMPOSE_FILE up cassandra-init
+    
+    # Start speed layer applications
+    echo ""
+    echo "🚀 Starting Speed Layer applications..."
+    docker-compose -f $COMPOSE_FILE up -d tmdb-producer event-producer sentiment-stream aggregation-stream trending-stream
+    
+    echo ""
+    echo "⏳ Waiting for services to start..."
+    sleep 10
+    
+    show_status
+    
+    echo ""
+    echo "✅ Speed Layer rebuilt and started successfully!"
     echo ""
     show_useful_commands
 }
@@ -220,6 +323,9 @@ COMMAND=${1:-start}
 case "$COMMAND" in
     start)
         start_services
+        ;;
+    rebuild)
+        rebuild_services
         ;;
     stop)
         stop_services

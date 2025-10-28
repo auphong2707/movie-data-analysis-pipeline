@@ -33,12 +33,15 @@ The Speed Layer runs completely in Docker containers using `docker-compose.speed
 
 ### Step 1: Configure Environment
 ```bash
+# Navigate to speed layer directory
+cd layers/speed_layer
+
 # Copy example environment file
-cp layers/speed_layer/.env.example layers/speed_layer/.env
+cp .env.example .env
 
 # Edit and add your TMDB API key
-notepad layers/speed_layer/.env  # Windows
-nano layers/speed_layer/.env     # Linux/Mac
+notepad .env  # Windows
+nano .env     # Linux/Mac
 ```
 
 ### Step 2: Validate Setup (Optional)
@@ -48,7 +51,7 @@ bash validate-speed-layer.sh
 
 ### Step 3: Start Speed Layer
 ```bash
-# Start all services (default command)
+# From the speed_layer directory
 bash start-speed-layer-docker.sh start
 
 # Or simply
@@ -87,15 +90,15 @@ bash start-speed-layer-docker.sh purge
 ### View Logs
 ```bash
 # All services
-docker-compose -f docker-compose.speed.yml logs -f
+docker-compose logs -f
 
 # Specific service
-docker-compose -f docker-compose.speed.yml logs -f tmdb-producer
-docker-compose -f docker-compose.speed.yml logs -f sentiment-stream
-docker-compose -f docker-compose.speed.yml logs -f kafka
+docker-compose logs -f tmdb-producer
+docker-compose logs -f sentiment-stream
+docker-compose logs -f kafka
 
 # Last 100 lines
-docker-compose -f docker-compose.speed.yml logs --tail=100
+docker-compose logs --tail=100
 ```
 
 ### Check Kafka Topics
@@ -164,7 +167,7 @@ User Events → Event Producer → Kafka Topics → Streaming Jobs → Cassandra
 ## 🔧 Configuration
 
 ### Environment Variables
-Edit `layers/speed_layer/.env`:
+Edit `.env` in the speed_layer directory:
 
 ```bash
 # Required
@@ -210,10 +213,10 @@ docker system prune -a
 ### TMDB Producer Failing
 ```bash
 # Check API key is set
-docker-compose -f docker-compose.speed.yml logs tmdb-producer
+docker-compose logs tmdb-producer
 
 # Verify .env file
-cat layers/speed_layer/.env | grep TMDB_API_KEY
+cat .env | grep TMDB_API_KEY
 ```
 
 ### Kafka Connection Issues
@@ -247,18 +250,18 @@ docker inspect <container-name> --format='{{.State.ExitCode}}'
 
 ### Making Code Changes
 ```bash
-# 1. Edit code in layers/speed_layer/
+# 1. Edit code in the speed_layer directory
 # 2. Rebuild affected containers
 bash start-speed-layer-docker.sh restart
 
 # Or rebuild specific service
-docker-compose -f docker-compose.speed.yml up -d --build tmdb-producer
+docker-compose up -d --build tmdb-producer
 ```
 
 ### Testing Changes
 ```bash
 # Run tests (if available)
-docker-compose -f docker-compose.speed.yml exec tmdb-producer python -m pytest
+docker-compose exec tmdb-producer python -m pytest
 
 # Check data flow
 docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.review_sentiments;"
@@ -278,6 +281,7 @@ kubectl apply -f spark.yaml
 
 ### Docker Swarm
 ```bash
+cd layers/speed_layer
 docker stack deploy -c docker-compose.speed.yml speed-layer
 ```
 
@@ -322,6 +326,6 @@ command: >
 If you encounter issues:
 1. Check logs: `bash start-speed-layer-docker.sh logs`
 2. Verify status: `bash start-speed-layer-docker.sh status`
-3. Review configuration in `layers/speed_layer/.env`
+3. Review configuration in `.env`
 4. Check Docker resources (RAM, disk space)
 5. Consult troubleshooting section above

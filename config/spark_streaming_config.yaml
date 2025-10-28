@@ -34,6 +34,7 @@ spark:
       host: "${CASSANDRA_HOSTS:localhost}"
       port: 9042
       local_dc: "datacenter1"
+    keyspace: "speed_layer"
     
   # Memory and execution settings
   executor:
@@ -52,8 +53,7 @@ spark:
     spark.sql.streaming.forceDeleteTempCheckpointLocation: "true"
     spark.cassandra.connection.host: "${CASSANDRA_HOSTS:localhost}"
     spark.cassandra.connection.port: "9042"
-    spark.cassandra.auth.username: ""
-    spark.cassandra.auth.password: ""
+    spark.cassandra.output.consistency.level: "ONE"
     
 # Sentiment Analysis Configuration
 sentiment:
@@ -66,6 +66,13 @@ windowing:
   tumbling_window: "5 minutes"
   sliding_window: "1 minute"
   watermark: "10 minutes"
+
+# Processing Configuration
+processing:
+  window_duration: "5 minutes"
+  slide_duration: "1 minute"
+  watermark_delay: "10 minutes"
+  trigger_interval: "30 seconds"
   
 # Output Configuration
 output:

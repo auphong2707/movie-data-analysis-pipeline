@@ -1,28 +1,51 @@
+# =====================================================================
 # Speed Layer Python Dependencies
+# =====================================================================
+# IMPORTANT: Versions must match Dockerfile installations
+# Base: Python 3.10 + Java 11 + Spark 3.4.4
+# =====================================================================
 
+# ---------------------------------------------------------------------
 # Kafka & Streaming
-confluent-kafka[avro,schema-registry]>=2.3.0
-kafka-python>=2.0.2
-avro>=1.11.0
+# ---------------------------------------------------------------------
+# kafka-python: Native Python client cho Kafka
+# avro: Schema serialization/deserialization
+kafka-python==2.0.2
+avro==1.11.3
 
-# PySpark & Streaming
-pyspark>=3.4.0
+# ---------------------------------------------------------------------
+# PySpark & Streaming (EXACT VERSION - Must match Dockerfile!)
+# ---------------------------------------------------------------------
+# PySpark 3.4.4: Compatible với Java 11, Spark packages 3.4.x
+pyspark==3.4.4
 
-# Cassandra
-cassandra-driver>=3.28.0
+# ---------------------------------------------------------------------
+# Cassandra Database Driver
+# ---------------------------------------------------------------------
+# cassandra-driver 3.29.1: Compatible với Cassandra 4.x
+cassandra-driver==3.29.1
 
+# ---------------------------------------------------------------------
 # Sentiment Analysis
-vaderSentiment>=3.3.2
+# ---------------------------------------------------------------------
+# vaderSentiment: Real-time sentiment analysis cho reviews
+vaderSentiment==3.3.2
 
+# ---------------------------------------------------------------------
 # HTTP & API
-requests>=2.31.0
+# ---------------------------------------------------------------------
+# requests: HTTP client cho TMDB API
+requests==2.31.0
 
-# Data Processing
-pandas>=2.0.0
-numpy>=1.24.0
+# ---------------------------------------------------------------------
+# Configuration & Environment
+# ---------------------------------------------------------------------
+# PyYAML: YAML config parser
+# python-dotenv: Load environment variables từ .env
+pyyaml==6.0.1
+python-dotenv==1.0.0
 
-# Configuration
-PyYAML>=6.0
-
-# Logging
-python-json-logger>=2.0.7
+# =====================================================================
+# Note: Dependencies như pandas, numpy KHÔNG được cài trong Dockerfile
+# để giữ image size nhỏ. Chỉ thêm nếu thực sự cần thiết.
+# =====================================================================

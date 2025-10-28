@@ -37,26 +37,16 @@ ENV PATH=$PATH:$JAVA_HOME/bin
 WORKDIR /app
 
 # ---------------------------------------------------------------------
-# BƯỚC 5: Cài đặt Python dependencies
+# BƯỚC 5: Copy requirements.txt và cài đặt Python dependencies
 # ---------------------------------------------------------------------
-# PySpark 3.4.4: Phiên bản stable, tương thích Java 11 và Cassandra 4.x
-# kafka-python: Consumer/Producer Kafka messages  
-# confluent-kafka: Kafka producers với Avro serialization (for tmdb producer)
-# fastavro: Required by confluent-kafka for Avro serialization
-# cassandra-driver: Connector cho Apache Cassandra
+# Copy requirements.txt trước để tận dụng Docker layer caching
+# (chỉ rebuild layer này khi requirements.txt thay đổi)
+COPY requirements.txt /app/
+
+# Cài đặt tất cả dependencies từ requirements.txt
 # --no-cache-dir: Giảm image size
 # --prefer-binary: Ưu tiên wheel packages, build nhanh hơn
-RUN pip install --no-cache-dir --prefer-binary \
-    pyspark==3.4.4 \
-    kafka-python==2.0.2 \
-    confluent-kafka==2.3.0 \
-    fastavro==1.9.4 \
-    cassandra-driver==3.29.1 \
-    vaderSentiment==3.3.2 \
-    pyyaml==6.0.1 \
-    requests==2.31.0 \
-    avro==1.11.3 \
-    python-dotenv==1.0.0
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # ---------------------------------------------------------------------
 # BƯỚC 6: Copy source code vào container
@@ -67,9 +57,6 @@ COPY streaming_jobs/ /app/streaming_jobs/
 # Copy các modules hỗ trợ
 COPY kafka_producers/ /app/kafka_producers/
 COPY cassandra_views/ /app/cassandra_views/
-
-# Copy requirements.txt để reference (optional)
-COPY requirements.txt /app/
 
 # Note: config/ folder will be mounted as volume in docker-compose.yml
 # so we don't copy it here to avoid conflicts

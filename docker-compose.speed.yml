@@ -1,5 +1,6 @@
 # Docker Compose for Speed Layer Infrastructure
 # Minimal set of services required for Speed Layer development and deployment
+# Environment variables are loaded from layers/speed_layer/.env
 
 networks:
   movie-pipeline:
@@ -168,6 +169,8 @@ services:
         condition: service_healthy
       schema-registry:
         condition: service_healthy
+    env_file:
+      - ./layers/speed_layer/.env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
@@ -193,6 +196,8 @@ services:
         condition: service_healthy
       schema-registry:
         condition: service_healthy
+    env_file:
+      - ./layers/speed_layer/.env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
@@ -219,6 +224,8 @@ services:
         condition: service_healthy
       cassandra-init:
         condition: service_completed_successfully
+    env_file:
+      - ./layers/speed_layer/.env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra
@@ -248,6 +255,8 @@ services:
         condition: service_healthy
       cassandra-init:
         condition: service_completed_successfully
+    env_file:
+      - ./layers/speed_layer/.env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra
@@ -277,6 +286,8 @@ services:
         condition: service_healthy
       cassandra-init:
         condition: service_completed_successfully
+    env_file:
+      - ./layers/speed_layer/.env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOSTS: cassandra

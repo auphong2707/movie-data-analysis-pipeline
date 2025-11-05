@@ -1,5 +1,10 @@
--- Speed Layer Cassandra Schema
+-- ============================================================
+-- SPEED LAYER CASSANDRA SCHEMA (TMDB Data Only)
+-- ============================================================
+-- This schema stores real-time analytics from TMDB API streams
+-- All data originates from TMDB - NO synthetic or user-generated data
 -- TTL = 48 hours (172800 seconds) for all speed layer tables
+-- ============================================================
 
 -- Create keyspace for speed layer
 CREATE KEYSPACE IF NOT EXISTS speed_layer
@@ -11,7 +16,8 @@ WITH REPLICATION = {
 USE speed_layer;
 
 -- Table 1: Review Sentiments by Window
--- Stores aggregated sentiment analysis results for movie reviews
+-- Stores aggregated sentiment analysis results for TMDB movie reviews
+-- Source: movie.reviews Kafka topic (TMDB API /movie/{id}/reviews endpoint)
 CREATE TABLE IF NOT EXISTS review_sentiments (
     window_start timestamp,
     window_end timestamp,
@@ -36,7 +42,8 @@ CREATE TABLE IF NOT EXISTS review_sentiments (
   };
 
 -- Table 2: Movie Statistics by Window  
--- Stores aggregated movie metrics including popularity and ratings
+-- Stores aggregated TMDB movie metrics including popularity and vote_average
+-- Source: movie.metadata Kafka topic (TMDB API /movie/{id} endpoint)
 CREATE TABLE IF NOT EXISTS movie_stats (
     window_start timestamp,
     window_end timestamp,
@@ -62,7 +69,8 @@ CREATE TABLE IF NOT EXISTS movie_stats (
   };
 
 -- Table 3: Movie Ratings by Window
--- Stores aggregated rating statistics and distributions
+-- Stores aggregated TMDB rating statistics (vote_average) and distributions
+-- Source: movie.ratings Kafka topic (TMDB aggregated ratings, NOT individual user ratings)
 CREATE TABLE IF NOT EXISTS movie_ratings_by_window (
     window_start timestamp,
     window_end timestamp,
@@ -87,7 +95,8 @@ CREATE TABLE IF NOT EXISTS movie_ratings_by_window (
   };
 
 -- Table 4: Trending Movies
--- Stores trending movie detection results
+-- Stores trending movie detection results based on TMDB popularity velocity
+-- Source: movie.ratings Kafka topic (calculated from popularity changes)
 CREATE TABLE IF NOT EXISTS trending_movies (
     window_start timestamp,
     window_end timestamp,

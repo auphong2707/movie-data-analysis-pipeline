@@ -11,7 +11,7 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, avg, count, sum as spark_sum,
     min as spark_min, max as spark_max, stddev, first, last, 
-    lag, lead, coalesce, lit, expr, when
+    lag, lead, coalesce, lit, expr, when, least, log10
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
@@ -100,13 +100,13 @@ class MovieAggregationStreamProcessor:
         ])
     
     def _get_rating_schema(self) -> StructType:
-        """Define schema for movie rating messages."""
+        """Define schema for movie rating messages (movie-level aggregates)."""
         return StructType([
             StructField("movie_id", LongType(), False),
-            StructField("user_id", StringType(), False),
-            StructField("rating", DoubleType(), False),
-            StructField("timestamp", LongType(), False),
-            StructField("source", StringType(), True)
+            StructField("vote_average", DoubleType(), False),
+            StructField("vote_count", LongType(), False),
+            StructField("popularity", DoubleType(), False),
+            StructField("timestamp", LongType(), False)
         ])
     
     def read_metadata_stream(self) -> DataFrame:
@@ -152,7 +152,8 @@ class MovieAggregationStreamProcessor:
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         
-        # Convert timestamp
+        # Convert timestamp - use TMDB vote_average directly as the rating
+        # No synthetic calculation needed, TMDB provides authoritative ratings
         timestamped_df = parsed_df \
             .withColumn("event_time", 
                        to_timestamp((col("timestamp") / 1000).cast("long")))
@@ -186,21 +187,9 @@ class MovieAggregationStreamProcessor:
                 stddev("popularity").alias("popularity_stddev")
             )
         
-        # Calculate velocity using window functions
-        movie_window = Window.partitionBy("movie_id").orderBy("window")
-        
-        velocity_df = current_window \
-            .withColumn("prev_popularity", 
-                       lag("avg_popularity", 1).over(movie_window)) \
-            .withColumn("popularity_velocity",
-                       when(col("prev_popularity").isNotNull(),
-                            (col("avg_popularity") - col("prev_popularity")) / col("avg_popularity"))
-                       .otherwise(lit(0.0))) \
-            .withColumn("popularity_acceleration",
-                       lag("popularity_velocity", 1).over(movie_window) - col("popularity_velocity"))
-        
-        # Select final columns
-        result_df = velocity_df.select(
+        # For streaming, calculate simple velocity within the window
+        # Velocity = (max - min) / avg gives a relative change measure
+        result_df = current_window.select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
             col("movie_id"),
@@ -212,8 +201,14 @@ class MovieAggregationStreamProcessor:
             col("min_popularity"),
             col("max_popularity"),
             coalesce(col("popularity_stddev"), lit(0.0)).alias("popularity_stddev"),
-            coalesce(col("popularity_velocity"), lit(0.0)).alias("popularity_velocity"),
-            coalesce(col("popularity_acceleration"), lit(0.0)).alias("popularity_acceleration")
+            # Simple velocity approximation: range / average
+            when(col("avg_popularity") > 0,
+                 (col("max_popularity") - col("min_popularity")) / col("avg_popularity"))
+            .otherwise(lit(0.0)).alias("popularity_velocity"),
+            # Acceleration approximated by stddev/avg (volatility measure)
+            when(col("avg_popularity") > 0,
+                 coalesce(col("popularity_stddev"), lit(0.0)) / col("avg_popularity"))
+            .otherwise(lit(0.0)).alias("popularity_acceleration")
         )
         
         return result_df
@@ -228,33 +223,31 @@ class MovieAggregationStreamProcessor:
         watermarked_df = ratings_df \
             .withWatermark("event_time", watermark_delay)
         
-        # Window aggregation
+        # Window aggregation - use TMDB vote_average field directly
         windowed_df = watermarked_df \
             .groupBy(
                 window(col("event_time"), window_duration),
                 col("movie_id")
             ) \
             .agg(
-                count("rating").alias("rating_count"),
-                avg("rating").alias("avg_rating"),
-                spark_min("rating").alias("min_rating"),
-                spark_max("rating").alias("max_rating"),
-                stddev("rating").alias("rating_stddev"),
-                # Calculate rating distribution
-                count(when(col("rating") >= 8.0, 1)).alias("high_ratings_count"),
-                count(when((col("rating") >= 6.0) & (col("rating") < 8.0), 1)).alias("medium_ratings_count"),
-                count(when(col("rating") < 6.0, 1)).alias("low_ratings_count")
+                count("vote_average").alias("rating_count"),
+                avg("vote_average").alias("avg_rating"),
+                spark_min("vote_average").alias("min_rating"),
+                spark_max("vote_average").alias("max_rating"),
+                stddev("vote_average").alias("rating_stddev"),
+                # Calculate rating distribution based on TMDB scale (0-10)
+                count(when(col("vote_average") >= 8.0, 1)).alias("high_ratings_count"),
+                count(when((col("vote_average") >= 6.0) & (col("vote_average") < 8.0), 1)).alias("medium_ratings_count"),
+                count(when(col("vote_average") < 6.0, 1)).alias("low_ratings_count")
             )
         
-        # Calculate rating velocity
-        movie_window = Window.partitionBy("movie_id").orderBy("window")
-        
+        # Calculate rating velocity within the window (range-based approximation)
+        # Use rating range and stddev as proxy for volatility/velocity
         velocity_df = windowed_df \
-            .withColumn("prev_avg_rating",
-                       lag("avg_rating", 1).over(movie_window)) \
+            .withColumn("rating_range", col("max_rating") - col("min_rating")) \
             .withColumn("rating_velocity",
-                       when(col("prev_avg_rating").isNotNull(),
-                            col("avg_rating") - col("prev_avg_rating"))
+                       when(col("rating_count") > 1,
+                            col("rating_range") / col("rating_count"))
                        .otherwise(lit(0.0)))
         
         # Format output
@@ -279,12 +272,13 @@ class MovieAggregationStreamProcessor:
                              rating_metrics_df: DataFrame) -> DataFrame:
         """Detect trending movies by combining popularity and rating metrics."""
         
-        # Join movie and rating metrics
+        # Use inner join - only detect trending for movies with both metrics
+        # This is more reliable for streaming than full outer join
         joined_df = movie_metrics_df.alias("m") \
             .join(rating_metrics_df.alias("r"),
                   (col("m.movie_id") == col("r.movie_id")) &
                   (col("m.window_start") == col("r.window_start")),
-                  "full_outer")
+                  "inner")
         
         # Calculate composite trend score
         # Use select to avoid ambiguous column references
@@ -294,21 +288,21 @@ class MovieAggregationStreamProcessor:
                 coalesce(col("m.window_start"), col("r.window_start")).alias("window_start"),
                 coalesce(col("m.window_end"), col("r.window_end")).alias("window_end"),
                 coalesce(col("m.title"), lit("Unknown")).alias("title"),
-                col("m.popularity_velocity"),
-                col("m.avg_popularity"),
-                col("m.update_count"),
-                col("r.rating_velocity"),
-                col("r.avg_rating"),
-                col("r.rating_count")
+                coalesce(col("m.popularity_velocity"), lit(0.0)).alias("popularity_velocity"),
+                coalesce(col("m.avg_popularity"), lit(0.0)).alias("avg_popularity"),
+                coalesce(col("m.update_count"), lit(0.0)).alias("update_count"),
+                coalesce(col("r.rating_velocity"), lit(0.0)).alias("rating_velocity"),
+                coalesce(col("r.avg_rating"), lit(0.0)).alias("avg_rating"),
+                coalesce(col("r.rating_count"), lit(0.0)).alias("rating_count")
             ) \
             .withColumn("popularity_score",
-                       coalesce(col("popularity_velocity"), lit(0.0)) * 0.4 +
-                       coalesce(col("avg_popularity"), lit(0.0)) * 0.3 +
-                       coalesce(col("update_count"), lit(0.0)) * 0.3) \
+                       col("popularity_velocity") * 0.4 +
+                       col("avg_popularity") * 0.3 +
+                       col("update_count") * 0.3) \
             .withColumn("rating_score",
-                       coalesce(col("rating_velocity"), lit(0.0)) * 0.5 +
-                       coalesce(col("avg_rating"), lit(0.0)) * 0.3 +
-                       coalesce(col("rating_count"), lit(0.0)) * 0.2) \
+                       col("rating_velocity") * 0.5 +
+                       col("avg_rating") * 0.3 +
+                       col("rating_count") * 0.2) \
             .withColumn("trend_score",
                        col("popularity_score") * 0.6 + col("rating_score") * 0.4)
         
@@ -321,11 +315,11 @@ class MovieAggregationStreamProcessor:
                 col("movie_id"),
                 col("title"),
                 col("trend_score"),
-                coalesce(col("m.avg_popularity"), lit(0.0)).alias("popularity"),
-                coalesce(col("r.avg_rating"), lit(0.0)).alias("avg_rating"),
-                coalesce(col("r.rating_count"), lit(0.0)).alias("rating_count"),
-                coalesce(col("m.popularity_velocity"), lit(0.0)).alias("popularity_velocity"),
-                coalesce(col("r.rating_velocity"), lit(0.0)).alias("rating_velocity")
+                col("avg_popularity").alias("popularity"),
+                col("avg_rating"),
+                col("rating_count"),
+                col("popularity_velocity"),
+                col("rating_velocity")
             )
         
         return trending_df
@@ -351,6 +345,23 @@ class MovieAggregationStreamProcessor:
             .format("console") \
             .option("truncate", False) \
             .queryName(query_name) \
+            .trigger(processingTime=self.config['processing']['trigger_interval'])
+        
+        return query.start()
+    
+    def write_to_kafka(self, df: DataFrame, topic: str, checkpoint_location: str):
+        """Write streaming results to Kafka topic."""
+        kafka_config = self.config['kafka']
+        
+        # Convert DataFrame to JSON string for Kafka value
+        kafka_df = df.selectExpr("CAST(movie_id AS STRING) as key", "to_json(struct(*)) AS value")
+        
+        query = kafka_df.writeStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", kafka_config['bootstrap_servers']) \
+            .option("topic", topic) \
+            .option("checkpointLocation", checkpoint_location) \
+            .outputMode("append") \
             .trigger(processingTime=self.config['processing']['trigger_interval'])
         
         return query.start()
@@ -381,6 +392,10 @@ class MovieAggregationStreamProcessor:
                     rating_metrics, "movie_ratings_by_window", f"{checkpoint_base}/ratings"))
                 queries.append(self.write_to_cassandra(
                     trending_movies, "trending_movies", f"{checkpoint_base}/trending"))
+                
+                # Also write trending movies to Kafka for downstream processing
+                queries.append(self.write_to_kafka(
+                    trending_movies, "movie.trending", f"{checkpoint_base}/kafka_trending"))
             elif output_mode == "console":
                 queries.append(self.write_to_console(movie_metrics, "movie_metrics"))
                 queries.append(self.write_to_console(rating_metrics, "rating_metrics"))

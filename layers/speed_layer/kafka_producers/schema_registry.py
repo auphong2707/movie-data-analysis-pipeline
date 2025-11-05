@@ -45,17 +45,18 @@ class TMDBSchemaRegistry:
             ]
         }
         
-        # Movie Ratings Schema
+        # Movie Ratings Schema (TMDB aggregated ratings only)
+        # This represents movie-level rating statistics, not individual user ratings
         rating_schema = {
             "type": "record", 
             "name": "MovieRating",
             "namespace": "com.movieanalytics.tmdb",
             "fields": [
                 {"name": "movie_id", "type": "long"},
-                {"name": "user_id", "type": "string"},
-                {"name": "rating", "type": "double"},
-                {"name": "timestamp", "type": "long"},
-                {"name": "source", "type": "string", "default": "tmdb"}
+                {"name": "vote_average", "type": "double"},
+                {"name": "vote_count", "type": "long"},
+                {"name": "popularity", "type": "double"},
+                {"name": "timestamp", "type": "long"}
             ]
         }
         
@@ -230,8 +231,8 @@ def validate_review_message(message: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def validate_rating_message(message: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate and normalize rating message."""
-    required_fields = ['movie_id', 'user_id', 'rating', 'timestamp']
+    """Validate and normalize rating message (TMDB aggregated ratings only)."""
+    required_fields = ['movie_id', 'vote_average', 'vote_count', 'popularity', 'timestamp']
     
     for field in required_fields:
         if field not in message:
@@ -239,11 +240,10 @@ def validate_rating_message(message: Dict[str, Any]) -> Dict[str, Any]:
     
     # Normalize types
     message['movie_id'] = int(message['movie_id'])
-    message['rating'] = float(message['rating'])
+    message['vote_average'] = float(message['vote_average'])
+    message['vote_count'] = int(message['vote_count'])
+    message['popularity'] = float(message['popularity'])
     message['timestamp'] = int(message['timestamp'])
-    
-    if 'source' not in message:
-        message['source'] = 'tmdb'
     
     return message
 

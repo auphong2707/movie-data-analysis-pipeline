@@ -30,6 +30,12 @@ pyspark==3.4.4
 cassandra-driver==3.29.1
 
 # ---------------------------------------------------------------------
+# MongoDB Driver
+# ---------------------------------------------------------------------
+# pymongo: MongoDB driver for Python (for Cassandra-MongoDB sync)
+pymongo==4.6.1
+
+# ---------------------------------------------------------------------
 # Sentiment Analysis
 # ---------------------------------------------------------------------
 # vaderSentiment: Real-time sentiment analysis for reviews

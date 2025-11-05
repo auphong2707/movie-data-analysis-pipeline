@@ -185,32 +185,6 @@ services:
       - movie-pipeline
     restart: unless-stopped
 
-  # Event Producer - Generates synthetic user events
-  event-producer:
-    build:
-      context: ./layers/speed_layer
-      dockerfile: Dockerfile
-    container_name: event-producer
-    depends_on:
-      kafka:
-        condition: service_healthy
-      schema-registry:
-        condition: service_healthy
-    env_file:
-      - ./layers/speed_layer/.env
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      PYTHONUNBUFFERED: 1
-    command: python kafka_producers/event_producer.py
-    volumes:
-      - ./layers/speed_layer:/app
-      - ./config:/app/config
-      - speed-layer-logs:/app/logs
-    networks:
-      - movie-pipeline
-    restart: unless-stopped
-
   # Review Sentiment Stream - Analyzes sentiment in real-time
   sentiment-stream:
     build:
@@ -300,6 +274,36 @@ services:
       - ./config:/app/config
       - speed-layer-logs:/app/logs
       - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Cassandra to MongoDB Sync - Syncs speed views to serving layer
+  cassandra-mongo-sync:
+    build:
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
+    container_name: cassandra-mongo-sync
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - ./layers/speed_layer/.env
+    environment:
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      MONGO_URI: mongodb://admin:password@mongodb:27017
+      MONGO_DATABASE: moviedb
+      SYNC_INTERVAL: 300
+      CLEANUP_INTERVAL: 3600
+      PYTHONUNBUFFERED: 1
+    command: python connectors/cassandra_to_mongo.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - ./config:/app/config
+      - speed-layer-logs:/app/logs
     networks:
       - movie-pipeline
     restart: unless-stopped

@@ -144,46 +144,33 @@ class TrendingDetectionStreamProcessor:
                 last("vote_average").alias("vote_average"),
                 last("vote_count").alias("vote_count"),
                 last("popularity").alias("popularity"),
-                max("event_time").alias("last_updated")
+                spark_max(col("event_time")).alias("last_updated")
             )
         
-        # Calculate velocity and acceleration using window functions
-        window_spec = Window.partitionBy("movie_id").orderBy("hour")
+        # Note: Velocity and acceleration calculations using lag() are not supported in Spark Structured Streaming
+        # Window functions over non-time columns are not allowed
+        # Using simplified trending score based on popularity and vote_count only
         
-        velocity_df = hourly_df \
-            .withColumn("prev_popularity", lag("popularity", 1).over(window_spec)) \
-            .withColumn("velocity",
-                       when(col("prev_popularity").isNotNull(),
-                            col("popularity") - col("prev_popularity"))
-                       .otherwise(lit(0.0))) \
-            .withColumn("prev_velocity", lag("velocity", 1).over(window_spec)) \
-            .withColumn("acceleration",
-                       when(col("prev_velocity").isNotNull(),
-                            col("velocity") - col("prev_velocity"))
-                       .otherwise(lit(0.0)))
-        
-        # Calculate trending score
-        trending_df = velocity_df \
+        # Calculate trending score (simplified without velocity/acceleration)
+        trending_df = hourly_df \
+            .withColumn("velocity", lit(0.0)) \
+            .withColumn("acceleration", lit(0.0)) \
             .withColumn("trending_score",
-                       (spark_abs(col("velocity")) * params['velocity_weight']) +
-                       (spark_abs(col("acceleration")) * params['acceleration_weight'])) \
+                       col("popularity") * params['velocity_weight'] +
+                       col("vote_count") * params['acceleration_weight']) \
             .filter(col("popularity") >= params['min_popularity_threshold']) \
             .filter(col("vote_count") >= params['min_vote_count'])
         
-        # Rank top 100 movies per hour
-        rank_window = Window.partitionBy("hour").orderBy(desc("trending_score"))
-        
+        # Use foreachBatch approach: wrap the ranking logic in a UDF that will be applied per microbatch
+        # This allows us to use row_number() within each batch DataFrame
         result_df = trending_df \
-            .withColumn("rank", row_number().over(rank_window)) \
-            .filter(col("rank") <= params['top_n_trending']) \
             .select(
                 col("hour"),
-                col("rank"),
                 col("movie_id"),
                 lit("Unknown").alias("title"),  # Title will be enriched from metadata
                 col("trending_score"),
-                col("velocity"),
-                col("acceleration")
+                col("velocity"),  # Will be 0.0
+                col("acceleration")  # Will be 0.0
             )
         
         return result_df
@@ -373,16 +360,80 @@ class TrendingDetectionStreamProcessor:
         
         return result_df
     
-    def write_to_cassandra(self, df: DataFrame, table_name: str, checkpoint_location: str):
-        """Write trending data to Cassandra."""
-        cassandra_config = self.config['spark']['cassandra']
+    def process_and_write_trending_batch(self, batch_df: DataFrame, batch_id: int):
+        """Process ratings batch for trending detection and write to Cassandra.
         
+        Performs aggregations and ranking INSIDE foreachBatch where they're treated
+        as normal batch DataFrames, avoiding streaming aggregation restrictions.
+        """
+        if batch_df.count() == 0:
+            logger.info(f"Batch {batch_id}: Empty batch, skipping")
+            return
+            
+        cassandra_config = self.config['spark']['cassandra']
+        params = self.trending_params
+        
+        try:
+            # Filter out null movie_ids and aggregate by hour within this microbatch
+            hourly_df = batch_df \
+                .filter(col("movie_id").isNotNull()) \
+                .withColumn("hour", expr("date_trunc('hour', event_time)")) \
+                .groupBy("movie_id", "hour") \
+                .agg(
+                    last("vote_average").alias("vote_average"),
+                    last("vote_count").alias("vote_count"),
+                    last("popularity").alias("popularity"),
+                    spark_max(col("event_time")).alias("last_updated")
+                )
+            
+            # Calculate trending score
+            trending_df = hourly_df \
+                .withColumn("velocity", lit(0.0)) \
+                .withColumn("acceleration", lit(0.0)) \
+                .withColumn("trending_score",
+                           col("popularity") * params['velocity_weight'] +
+                           col("vote_count") * params['acceleration_weight']) \
+                .filter(col("popularity") >= params['min_popularity_threshold']) \
+                .filter(col("vote_count") >= params['min_vote_count'])
+            
+            # Apply ranking within this microbatch (allowed in batch mode!)
+            rank_window = Window.partitionBy("hour").orderBy(desc("trending_score"))
+            
+            ranked_df = trending_df \
+                .withColumn("rank", row_number().over(rank_window)) \
+                .filter(col("rank") <= params['top_n_trending']) \
+                .select(
+                    "hour", 
+                    "rank", 
+                    "movie_id", 
+                    lit("Unknown").alias("title"), 
+                    "trending_score", 
+                    "velocity", 
+                    "acceleration"
+                )
+            
+            logger.info(f"Batch {batch_id}: Writing {ranked_df.count()} trending movies to Cassandra")
+            
+            ranked_df.write \
+                .format("org.apache.spark.sql.cassandra") \
+                .mode("append") \
+                .option("keyspace", cassandra_config['keyspace']) \
+                .option("table", "trending_movies") \
+                .save()
+                
+        except Exception as e:
+            logger.error(f"Batch {batch_id}: Error processing trending movies - {str(e)}")
+            raise
+    
+    def write_to_cassandra(self, df: DataFrame, table_name: str, checkpoint_location: str):
+        """Write raw streaming data to Cassandra using foreachBatch.
+        
+        Aggregations and ranking happen inside foreachBatch to avoid streaming restrictions.
+        """
+        # Use foreachBatch to process each microbatch as a regular DataFrame
         query = df.writeStream \
-            .format("org.apache.spark.sql.cassandra") \
-            .option("keyspace", cassandra_config['keyspace']) \
-            .option("table", table_name) \
+            .foreachBatch(lambda batch_df, batch_id: self.process_and_write_trending_batch(batch_df, batch_id)) \
             .option("checkpointLocation", checkpoint_location) \
-            .outputMode("append") \
             .trigger(processingTime=self.config['processing']['trigger_interval'])
         
         return query.start()
@@ -390,7 +441,7 @@ class TrendingDetectionStreamProcessor:
     def write_to_console(self, df: DataFrame, query_name: str):
         """Write results to console for debugging."""
         query = df.writeStream \
-            .outputMode("append") \
+            .outputMode("update") \
             .format("console") \
             .option("truncate", False) \
             .queryName(query_name) \
@@ -400,23 +451,27 @@ class TrendingDetectionStreamProcessor:
     
     def run_streaming_pipeline(self, output_mode: str = "cassandra",
                              checkpoint_base: str = "/app/checkpoints/trending_detection"):
-        """Run the trending detection streaming pipeline with new schema."""
+        """Run the trending detection streaming pipeline with new schema.
+        
+        Passes RAW streaming data to foreachBatch for aggregation and ranking.
+        """
         
         logger.info("Starting trending detection streaming pipeline...")
         
         try:
-            # Read ratings stream
+            # Read RAW ratings stream (no aggregations yet)
             ratings_df = self.read_ratings_stream()
             
-            # Calculate trending scores
-            trending_df = self.calculate_trending_scores(ratings_df)
+            # Add watermark to enable time-based operations
+            watermark_delay = self.config['processing']['watermark_delay']
+            ratings_watermarked = ratings_df.withWatermark("event_time", watermark_delay)
             
             queries = []
             
-            # Write to Cassandra or console
+            # Write to Cassandra using foreachBatch (aggregations happen inside)
             if output_mode == "cassandra":
                 query = self.write_to_cassandra(
-                    trending_df,
+                    ratings_watermarked,
                     "trending_movies",
                     f"{checkpoint_base}/trending"
                 )
@@ -424,7 +479,17 @@ class TrendingDetectionStreamProcessor:
                 logger.info("Started writing to Cassandra table: trending_movies")
                 
             elif output_mode == "console":
-                query = self.write_to_console(trending_df, "trending_movies")
+                # For console mode, use foreachBatch too
+                def console_batch(batch_df, batch_id):
+                    if batch_df.count() > 0:
+                        logger.info(f"Batch {batch_id}:")
+                        batch_df.show(20, truncate=False)
+                
+                query = ratings_watermarked.writeStream \
+                    .foreachBatch(console_batch) \
+                    .option("checkpointLocation", f"{checkpoint_base}/console") \
+                    .trigger(processingTime=self.config['processing']['trigger_interval']) \
+                    .start()
                 queries.append(query)
                 logger.info("Started writing to console")
             else:

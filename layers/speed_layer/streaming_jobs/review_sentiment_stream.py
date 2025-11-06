@@ -222,16 +222,11 @@ class ReviewSentimentStreamProcessor:
                 spark_sum(when(col("sentiment_category") == "neutral", 1).otherwise(0)).alias("neutral_count")
             )
         
-        # Calculate sentiment velocity using window functions
-        from pyspark.sql.window import Window
-        window_spec = Window.partitionBy("movie_id").orderBy("window")
+        # Note: sentiment_velocity calculation using lag() is not supported in Spark Structured Streaming
+        # Window functions over non-time columns are not allowed
+        # Setting sentiment_velocity to 0.0 for now
         
         result_df = aggregated_df \
-            .withColumn("prev_avg_sentiment", lag("avg_sentiment", 1).over(window_spec)) \
-            .withColumn("sentiment_velocity",
-                       when(col("prev_avg_sentiment").isNotNull(),
-                            col("avg_sentiment") - col("prev_avg_sentiment"))
-                       .otherwise(lit(0.0))) \
             .select(
                 col("movie_id"),
                 col("window.start").alias("window_start"),
@@ -243,22 +238,40 @@ class ReviewSentimentStreamProcessor:
                 col("positive_count").cast("int"),
                 col("negative_count").cast("int"),
                 col("neutral_count").cast("int"),
-                col("sentiment_velocity")
+                lit(0.0).alias("sentiment_velocity")  # Placeholder - lag() not supported in streaming
             )
         
         return result_df
     
+    def write_batch_to_cassandra(self, batch_df: DataFrame, batch_id: int):
+        """Write a microbatch to Cassandra using foreachBatch.
+        
+        This approach treats each microbatch as a normal DataFrame, allowing:
+        - Standard batch operations (no streaming aggregation restrictions)
+        - Proper Cassandra upserts (append overwrites same primary key)
+        - TTL-based auto-expiration (48 hours)
+        """
+        if batch_df.count() > 0:
+            cassandra_config = self.config['spark']['cassandra']
+            
+            logger.info(f"Writing batch {batch_id} with {batch_df.count()} rows to review_sentiments")
+            
+            batch_df.write \
+                .format("org.apache.spark.sql.cassandra") \
+                .mode("append") \
+                .option("keyspace", cassandra_config['keyspace']) \
+                .option("table", "review_sentiments") \
+                .save()
+    
     def write_to_cassandra(self, df: DataFrame, checkpoint_location: str):
-        """Write aggregated sentiment data to Cassandra with new schema."""
+        """Write aggregated sentiment data to Cassandra using foreachBatch."""
         
         cassandra_config = self.config['spark']['cassandra']
         
+        # Use foreachBatch to process each microbatch as a regular DataFrame
         query = df.writeStream \
-            .format("org.apache.spark.sql.cassandra") \
-            .option("keyspace", cassandra_config['keyspace']) \
-            .option("table", "review_sentiments") \
+            .foreachBatch(lambda batch_df, batch_id: self.write_batch_to_cassandra(batch_df, batch_id)) \
             .option("checkpointLocation", checkpoint_location) \
-            .outputMode("append") \
             .trigger(processingTime=self.config['processing']['trigger_interval'])
         
         return query.start()
@@ -267,7 +280,7 @@ class ReviewSentimentStreamProcessor:
         """Write results to console for debugging."""
         
         query = df.writeStream \
-            .outputMode("append") \
+            .outputMode("update") \
             .format("console") \
             .option("truncate", False) \
             .queryName(query_name) \

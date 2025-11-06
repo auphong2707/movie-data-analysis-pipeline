@@ -245,7 +245,7 @@ services:
   # Kafka Topics Initialization - Create topics with proper configuration
   kafka-topics-init:
     build:
-      context: ./layers/speed_layer
+      context: .
       dockerfile: Dockerfile
     container_name: kafka-topics-init
     depends_on:
@@ -262,8 +262,8 @@ services:
       PYTHONUNBUFFERED: 1
     command: python kafka_producers/setup_topics.py create
     volumes:
-      - ./layers/speed_layer:/app
-      - ./config:/app/config
+      - .:/app
+      - ../../config:/app/config
     networks:
       - movie-pipeline
     restart: "no"

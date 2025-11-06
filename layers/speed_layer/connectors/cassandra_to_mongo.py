@@ -247,7 +247,8 @@ class CassandraToMongoSync:
         SELECT window_start, window_end, movie_id, title,
                trend_rank, hotness_score, avg_trend_score,
                trend_velocity, trend_acceleration,
-               popularity_delta, rating_change, review_volume,
+               total_review_volume, event_count, velocity_score,
+               acceleration_score, volume_score,
                created_at
         FROM trending_movies
         """
@@ -268,9 +269,11 @@ class CassandraToMongoSync:
                     'avg_trend_score': row.avg_trend_score,
                     'trend_velocity': row.trend_velocity,
                     'trend_acceleration': row.trend_acceleration,
-                    'popularity_delta': row.popularity_delta,
-                    'rating_change': row.rating_change,
-                    'review_volume': row.review_volume
+                    'total_review_volume': row.total_review_volume,
+                    'event_count': row.event_count,
+                    'velocity_score': row.velocity_score,
+                    'acceleration_score': row.acceleration_score,
+                    'volume_score': row.volume_score
                 },
                 'created_at': row.created_at,
                 'updated_at': datetime.utcnow()

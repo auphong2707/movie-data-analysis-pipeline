@@ -5,6 +5,7 @@ Creates and configures Kafka topics with proper partitions, replication, and ret
 
 import logging
 import sys
+import os
 from typing import Dict, List
 from confluent_kafka.admin import AdminClient, NewTopic, ConfigResource, ResourceType
 from confluent_kafka import KafkaException
@@ -19,8 +20,12 @@ logger = logging.getLogger(__name__)
 class KafkaTopicSetup:
     """Setup and configure Kafka topics for Speed Layer."""
     
-    def __init__(self, bootstrap_servers: str = "localhost:9092"):
+    def __init__(self, bootstrap_servers: str = None):
         """Initialize Kafka admin client."""
+        if bootstrap_servers is None:
+            bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+        
+        logger.info(f"Connecting to Kafka: {bootstrap_servers}")
         self.admin_client = AdminClient({
             'bootstrap.servers': bootstrap_servers
         })

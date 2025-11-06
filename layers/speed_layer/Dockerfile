@@ -57,6 +57,7 @@ COPY streaming_jobs/ /app/streaming_jobs/
 # Copy supporting modules
 COPY kafka_producers/ /app/kafka_producers/
 COPY cassandra_views/ /app/cassandra_views/
+COPY connectors/ /app/connectors/
 
 # Note: config/ folder will be mounted as volume in docker-compose.yml
 # so we don't copy it here to avoid conflicts

@@ -190,7 +190,7 @@ class MovieAggregationStreamProcessor:
                 last("vote_count").alias("vote_count"),
                 last("popularity").alias("popularity"),
                 last("title").alias("title"),
-                max("event_time").alias("last_updated")
+                spark_max(col("event_time")).alias("last_updated")
             )
         
         # Calculate rating velocity using window functions
@@ -419,7 +419,7 @@ class MovieAggregationStreamProcessor:
         return query.start()
     
     def run_streaming_pipeline(self, output_mode: str = "cassandra",
-                             checkpoint_base: str = "/tmp/checkpoints/movie_aggregation"):
+                             checkpoint_base: str = "/app/checkpoints/movie_aggregation"):
         """Run the movie aggregation streaming pipeline with new schema."""
         
         logger.info("Starting movie aggregation streaming pipeline...")

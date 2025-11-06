@@ -25,7 +25,7 @@ spark:
   streaming:
     batch_duration: "5 minutes"
     watermark_duration: "10 minutes"
-    checkpoint_location: "/tmp/checkpoints"
+    checkpoint_location: "/app/checkpoints"
     max_offsets_per_trigger: 1000
     
   # Cassandra connector configuration

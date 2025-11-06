@@ -399,7 +399,7 @@ class TrendingDetectionStreamProcessor:
         return query.start()
     
     def run_streaming_pipeline(self, output_mode: str = "cassandra",
-                             checkpoint_base: str = "/tmp/checkpoints/trending_detection"):
+                             checkpoint_base: str = "/app/checkpoints/trending_detection"):
         """Run the trending detection streaming pipeline with new schema."""
         
         logger.info("Starting trending detection streaming pipeline...")

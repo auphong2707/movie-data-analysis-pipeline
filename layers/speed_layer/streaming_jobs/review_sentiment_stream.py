@@ -276,7 +276,7 @@ class ReviewSentimentStreamProcessor:
         return query.start()
     
     def run_streaming_pipeline(self, output_mode: str = "cassandra", 
-                             checkpoint_location: str = "/tmp/checkpoints/review_sentiment"):
+                             checkpoint_location: str = "/app/checkpoints/review_sentiment"):
         """Run the complete streaming pipeline with new schema."""
         
         logger.info("Starting review sentiment streaming pipeline...")

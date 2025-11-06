@@ -10,7 +10,7 @@
 CREATE KEYSPACE IF NOT EXISTS speed_layer
 WITH REPLICATION = {
     'class': 'SimpleStrategy',
-    'replication_factor': 3
+    'replication_factor': 1
 };
 
 USE speed_layer;
@@ -101,41 +101,6 @@ CREATE TABLE IF NOT EXISTS trending_movies (
 -- Index for movie-specific queries
 CREATE INDEX IF NOT EXISTS idx_trending_movies_movie_id 
 ON trending_movies (movie_id);
-CREATE TABLE IF NOT EXISTS declining_movies (
-    window_start timestamp,
-    window_end timestamp,
-    movie_id bigint,
-    title text,
-    decline_rank int,
-    decline_score double,
-    momentum_loss double,
-    trend_velocity double,
-    trend_acceleration double,
-    avg_trend_score double,
-    total_review_volume bigint,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), decline_rank, movie_id)
-) WITH default_time_to_live = 172800
-  AND comment = 'Movies with declining popularity by time window'
-  AND compaction = {
-      'class': 'TimeWindowCompactionStrategy',
-      'compaction_window_unit': 'HOURS',
-      'compaction_window_size': 6
-  };
-
--- Secondary indexes for common query patterns
-
--- Index for querying by movie_id across different windows
-CREATE INDEX IF NOT EXISTS movie_id_idx_review_sentiments ON review_sentiments (movie_id);
-CREATE INDEX IF NOT EXISTS movie_id_idx_movie_stats ON movie_stats (movie_id);
-CREATE INDEX IF NOT EXISTS movie_id_idx_movie_ratings ON movie_ratings_by_window (movie_id);
-CREATE INDEX IF NOT EXISTS movie_id_idx_trending ON trending_movies (movie_id);
-
--- Index for querying by time ranges
-CREATE INDEX IF NOT EXISTS window_start_idx_review_sentiments ON review_sentiments (window_start);
-CREATE INDEX IF NOT EXISTS window_start_idx_movie_stats ON movie_stats (window_start);
-CREATE INDEX IF NOT EXISTS window_start_idx_movie_ratings ON movie_ratings_by_window (window_start);
-CREATE INDEX IF NOT EXISTS window_start_idx_trending ON trending_movies (window_start);
 
 -- Materialized views for common query patterns
 

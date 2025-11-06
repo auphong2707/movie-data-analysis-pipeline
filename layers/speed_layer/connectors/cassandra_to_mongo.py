@@ -132,11 +132,9 @@ class CassandraToMongoSync:
     def _sync_review_sentiments(self) -> int:
         """Sync review sentiment data."""
         query = """
-        SELECT window_start, window_end, movie_id, review_count, 
-               avg_sentiment_compound, avg_sentiment_positive, 
-               avg_sentiment_negative, avg_sentiment_neutral, 
-               avg_rating, positive_count, negative_count, neutral_count,
-               created_at
+        SELECT movie_id, hour, window_start, window_end, review_count, 
+               avg_sentiment, positive_count, negative_count, neutral_count,
+               sentiment_velocity
         FROM review_sentiments
         """
         
@@ -146,21 +144,18 @@ class CassandraToMongoSync:
         for row in rows:
             doc = {
                 'movie_id': row.movie_id,
+                'hour': row.hour,
                 'window_start': row.window_start,
                 'window_end': row.window_end,
                 'data_type': 'sentiment',
                 'sentiment': {
                     'review_count': row.review_count,
-                    'avg_compound': row.avg_sentiment_compound,
-                    'avg_positive': row.avg_sentiment_positive,
-                    'avg_negative': row.avg_sentiment_negative,
-                    'avg_neutral': row.avg_sentiment_neutral,
-                    'avg_rating': row.avg_rating,
+                    'avg_sentiment': row.avg_sentiment,
                     'positive_count': row.positive_count,
                     'negative_count': row.negative_count,
-                    'neutral_count': row.neutral_count
+                    'neutral_count': row.neutral_count,
+                    'sentiment_velocity': row.sentiment_velocity
                 },
-                'created_at': row.created_at,
                 'updated_at': datetime.utcnow()
             }
             
@@ -169,6 +164,7 @@ class CassandraToMongoSync:
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
+                        'hour': row.hour,
                         'window_start': row.window_start,
                         'data_type': 'sentiment'
                     },
@@ -188,11 +184,8 @@ class CassandraToMongoSync:
     def _sync_movie_stats(self) -> int:
         """Sync movie statistics data."""
         query = """
-        SELECT window_start, window_end, movie_id, title,
-               avg_popularity, avg_vote_average, avg_vote_count,
-               update_count, min_popularity, max_popularity,
-               popularity_stddev, popularity_velocity, 
-               popularity_acceleration, created_at
+        SELECT movie_id, hour, vote_average, vote_count,
+               popularity, rating_velocity, last_updated
         FROM movie_stats
         """
         
@@ -202,22 +195,15 @@ class CassandraToMongoSync:
         for row in rows:
             doc = {
                 'movie_id': row.movie_id,
-                'window_start': row.window_start,
-                'window_end': row.window_end,
+                'hour': row.hour,
                 'data_type': 'stats',
-                'title': row.title,
                 'stats': {
-                    'avg_popularity': row.avg_popularity,
-                    'avg_vote_average': row.avg_vote_average,
-                    'avg_vote_count': row.avg_vote_count,
-                    'update_count': row.update_count,
-                    'min_popularity': row.min_popularity,
-                    'max_popularity': row.max_popularity,
-                    'popularity_stddev': row.popularity_stddev,
-                    'popularity_velocity': row.popularity_velocity,
-                    'popularity_acceleration': row.popularity_acceleration
+                    'vote_average': row.vote_average,
+                    'vote_count': row.vote_count,
+                    'popularity': row.popularity,
+                    'rating_velocity': row.rating_velocity
                 },
-                'created_at': row.created_at,
+                'last_updated': row.last_updated,
                 'updated_at': datetime.utcnow()
             }
             
@@ -225,7 +211,7 @@ class CassandraToMongoSync:
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
-                        'window_start': row.window_start,
+                        'hour': row.hour,
                         'data_type': 'stats'
                     },
                     {'$set': doc},
@@ -244,12 +230,8 @@ class CassandraToMongoSync:
     def _sync_trending_movies(self) -> int:
         """Sync trending movies data."""
         query = """
-        SELECT window_start, window_end, movie_id, title,
-               trend_rank, hotness_score, avg_trend_score,
-               trend_velocity, trend_acceleration,
-               total_review_volume, event_count, velocity_score,
-               acceleration_score, volume_score,
-               created_at
+        SELECT hour, rank, movie_id, title,
+               trending_score, velocity, acceleration
         FROM trending_movies
         """
         
@@ -259,23 +241,15 @@ class CassandraToMongoSync:
         for row in rows:
             doc = {
                 'movie_id': row.movie_id,
-                'window_start': row.window_start,
-                'window_end': row.window_end,
+                'hour': row.hour,
                 'data_type': 'trending',
                 'title': row.title,
                 'trending': {
-                    'trend_rank': row.trend_rank,
-                    'hotness_score': row.hotness_score,
-                    'avg_trend_score': row.avg_trend_score,
-                    'trend_velocity': row.trend_velocity,
-                    'trend_acceleration': row.trend_acceleration,
-                    'total_review_volume': row.total_review_volume,
-                    'event_count': row.event_count,
-                    'velocity_score': row.velocity_score,
-                    'acceleration_score': row.acceleration_score,
-                    'volume_score': row.volume_score
+                    'rank': row.rank,
+                    'trending_score': row.trending_score,
+                    'velocity': row.velocity,
+                    'acceleration': row.acceleration
                 },
-                'created_at': row.created_at,
                 'updated_at': datetime.utcnow()
             }
             
@@ -283,7 +257,7 @@ class CassandraToMongoSync:
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
-                        'window_start': row.window_start,
+                        'hour': row.hour,
                         'data_type': 'trending'
                     },
                     {'$set': doc},

@@ -15,139 +15,92 @@ WITH REPLICATION = {
 
 USE speed_layer;
 
--- Table 1: Review Sentiments by Window
--- Stores aggregated sentiment analysis results for TMDB movie reviews
--- Source: movie.reviews Kafka topic (TMDB API /movie/{id}/reviews endpoint)
+-- ============================================================
+-- TABLE 1: review_sentiments
+-- ============================================================
+-- Purpose: Real-time sentiment stats for reviews
+-- Source: movie.reviews Kafka topic (TMDB API /movie/{id}/reviews)
+-- Aggregation: 5-minute tumbling windows
 CREATE TABLE IF NOT EXISTS review_sentiments (
+    movie_id int,
+    hour timestamp,
     window_start timestamp,
     window_end timestamp,
-    movie_id bigint,
-    review_count bigint,
-    avg_sentiment_compound double,
-    avg_sentiment_positive double,
-    avg_sentiment_negative double,
-    avg_sentiment_neutral double,
-    avg_rating double,
-    positive_count bigint,
-    negative_count bigint,
-    neutral_count bigint,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), movie_id)
+    avg_sentiment double,
+    review_count int,
+    positive_count int,
+    negative_count int,
+    neutral_count int,
+    sentiment_velocity double,
+    PRIMARY KEY (movie_id, hour, window_start)
 ) WITH default_time_to_live = 172800
-  AND comment = 'Aggregated sentiment analysis for movie reviews by time window'
+  AND CLUSTERING ORDER BY (hour DESC, window_start DESC)
+  AND comment = 'Real-time review sentiment aggregations by 5-minute windows'
   AND compaction = {
       'class': 'TimeWindowCompactionStrategy',
       'compaction_window_unit': 'HOURS',
       'compaction_window_size': 6
   };
 
--- Table 2: Movie Statistics by Window  
--- Stores aggregated TMDB movie metrics including popularity and vote_average
--- Source: movie.metadata Kafka topic (TMDB API /movie/{id} endpoint)
+-- Index for time-range queries
+CREATE INDEX IF NOT EXISTS idx_review_sentiments_window_start 
+ON review_sentiments (window_start);
+
+-- ============================================================
+-- TABLE 2: movie_stats
+-- ============================================================
+-- Purpose: Real-time movie rating statistics
+-- Source: movie.ratings + movie.metadata Kafka topics
+-- Aggregation: Incremental updates with velocity calculation
 CREATE TABLE IF NOT EXISTS movie_stats (
-    window_start timestamp,
-    window_end timestamp,
-    movie_id bigint,
-    title text,
-    avg_popularity double,
-    avg_vote_average double,
-    avg_vote_count bigint,
-    update_count bigint,
-    min_popularity double,
-    max_popularity double,
-    popularity_stddev double,
-    popularity_velocity double,
-    popularity_acceleration double,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), movie_id)
-) WITH default_time_to_live = 172800
-  AND comment = 'Aggregated movie statistics and velocity metrics by time window'
-  AND compaction = {
-      'class': 'TimeWindowCompactionStrategy',
-      'compaction_window_unit': 'HOURS',
-      'compaction_window_size': 6
-  };
-
--- Table 3: Movie Ratings by Window
--- Stores aggregated TMDB rating statistics (vote_average) and distributions
--- Source: movie.ratings Kafka topic (TMDB aggregated ratings, NOT individual user ratings)
-CREATE TABLE IF NOT EXISTS movie_ratings_by_window (
-    window_start timestamp,
-    window_end timestamp,
-    movie_id bigint,
-    rating_count bigint,
-    avg_rating double,
-    min_rating double,
-    max_rating double,
-    rating_stddev double,
-    high_ratings_count bigint,    -- ratings >= 8.0
-    medium_ratings_count bigint,  -- ratings 6.0-7.9
-    low_ratings_count bigint,     -- ratings < 6.0
+    movie_id int,
+    hour timestamp,
+    vote_average double,
+    vote_count int,
+    popularity double,
     rating_velocity double,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), movie_id)
+    last_updated timestamp,
+    PRIMARY KEY (movie_id, hour)
 ) WITH default_time_to_live = 172800
-  AND comment = 'Aggregated rating statistics and distributions by time window'
+  AND CLUSTERING ORDER BY (hour DESC)
+  AND comment = 'Real-time movie rating statistics with velocity metrics'
   AND compaction = {
       'class': 'TimeWindowCompactionStrategy',
       'compaction_window_unit': 'HOURS',
       'compaction_window_size': 6
   };
 
--- Table 4: Trending Movies
--- Stores trending movie detection results based on TMDB popularity velocity
--- Source: movie.ratings Kafka topic (calculated from popularity changes)
+-- Index for time-range queries
+CREATE INDEX IF NOT EXISTS idx_movie_stats_hour 
+ON movie_stats (hour);
+
+-- ============================================================
+-- TABLE 3: trending_movies
+-- ============================================================
+-- Purpose: Hot/trending movie detection
+-- Source: movie.ratings Kafka topic
+-- Ranking: Top 100 movies by trending_score
 CREATE TABLE IF NOT EXISTS trending_movies (
-    window_start timestamp,
-    window_end timestamp,
-    movie_id bigint,
+    hour timestamp,
+    rank int,
+    movie_id int,
     title text,
-    trend_rank int,
-    hotness_score double,
-    avg_trend_score double,
-    trend_velocity double,
-    trend_acceleration double,
-    total_review_volume bigint,
-    event_count bigint,
-    velocity_score double,
-    acceleration_score double,
-    volume_score double,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), trend_rank, movie_id)
+    trending_score double,
+    velocity double,
+    acceleration double,
+    PRIMARY KEY (hour, rank, movie_id)
 ) WITH default_time_to_live = 172800
-  AND comment = 'Trending and hot movie detection results by time window'
+  AND CLUSTERING ORDER BY (rank ASC, movie_id ASC)
+  AND comment = 'Trending and hot movie detection results by hour'
   AND compaction = {
       'class': 'TimeWindowCompactionStrategy',
       'compaction_window_unit': 'HOURS',
       'compaction_window_size': 6
   };
 
--- Table 5: Breakout Movies
--- Stores movies with sudden popularity spikes
-CREATE TABLE IF NOT EXISTS breakout_movies (
-    window_start timestamp,
-    window_end timestamp,
-    movie_id bigint,
-    title text,
-    breakout_rank int,
-    breakout_score double,
-    surge_multiplier double,
-    trend_acceleration double,
-    trend_velocity double,
-    avg_trend_score double,
-    total_review_volume bigint,
-    created_at timestamp,
-    PRIMARY KEY ((window_start, window_end), breakout_rank, movie_id)
-) WITH default_time_to_live = 172800
-  AND comment = 'Movies with sudden popularity breakouts by time window'
-  AND compaction = {
-      'class': 'TimeWindowCompactionStrategy',
-      'compaction_window_unit': 'HOURS',
-      'compaction_window_size': 6
-  };
-
--- Table 6: Declining Movies
--- Stores movies losing momentum
+-- Index for movie-specific queries
+CREATE INDEX IF NOT EXISTS idx_trending_movies_movie_id 
+ON trending_movies (movie_id);
 CREATE TABLE IF NOT EXISTS declining_movies (
     window_start timestamp,
     window_end timestamp,

@@ -11,7 +11,7 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, avg, count, sum as spark_sum,
     min as spark_min, max as spark_max, stddev, first, last, 
-    lag, lead, coalesce, lit, expr, when, least, log10
+    lag, lead, coalesce, lit, expr, when, least, log10, current_timestamp
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
@@ -82,29 +82,23 @@ class MovieAggregationStreamProcessor:
     def _get_metadata_schema(self) -> StructType:
         """Define schema for movie metadata messages."""
         return StructType([
-            StructField("movie_id", LongType(), False),
+            StructField("movie_id", IntegerType(), False),
             StructField("title", StringType(), False),
             StructField("release_date", StringType(), True),
-            StructField("popularity", DoubleType(), False),
-            StructField("vote_average", DoubleType(), False),
-            StructField("vote_count", LongType(), False),
-            StructField("adult", BooleanType(), True),
-            StructField("genre_ids", ArrayType(IntegerType()), True),
-            StructField("overview", StringType(), True),
-            StructField("poster_path", StringType(), True),
-            StructField("backdrop_path", StringType(), True),
-            StructField("original_language", StringType(), True),
-            StructField("original_title", StringType(), True),
-            StructField("video", BooleanType(), True),
-            StructField("timestamp", LongType(), False)
+            StructField("genres", ArrayType(StringType()), True),
+            StructField("runtime", IntegerType(), True),
+            StructField("budget", LongType(), True),
+            StructField("revenue", LongType(), True),
+            StructField("timestamp", LongType(), False),
+            StructField("event_type", StringType(), False)
         ])
     
     def _get_rating_schema(self) -> StructType:
-        """Define schema for movie rating messages (movie-level aggregates)."""
+        """Define schema for movie rating messages."""
         return StructType([
-            StructField("movie_id", LongType(), False),
+            StructField("movie_id", IntegerType(), False),
             StructField("vote_average", DoubleType(), False),
-            StructField("vote_count", LongType(), False),
+            StructField("vote_count", IntegerType(), False),
             StructField("popularity", DoubleType(), False),
             StructField("timestamp", LongType(), False)
         ])
@@ -160,7 +154,65 @@ class MovieAggregationStreamProcessor:
         
         return timestamped_df
     
-    def calculate_movie_velocity_metrics(self, metadata_df: DataFrame) -> DataFrame:
+    def join_and_aggregate_movie_stats(self, ratings_df: DataFrame, metadata_df: DataFrame) -> DataFrame:
+        """
+        Join ratings and metadata streams, compute incremental aggregations.
+        Matches Cassandra movie_stats table schema.
+        """
+        # Add watermarks to both streams
+        watermark_delay = self.config['processing']['watermark_delay']
+        
+        ratings_watermarked = ratings_df.withWatermark("event_time", watermark_delay)
+        metadata_watermarked = metadata_df.withWatermark("event_time", watermark_delay)
+        
+        # Join on movie_id with time constraints (within 5 minutes)
+        joined_df = ratings_watermarked.alias("r").join(
+            metadata_watermarked.alias("m"),
+            (col("r.movie_id") == col("m.movie_id")) & 
+            (col("r.event_time") >= col("m.event_time") - expr("INTERVAL 5 MINUTES")) &
+            (col("r.event_time") <= col("m.event_time") + expr("INTERVAL 5 MINUTES")),
+            "inner"
+        ).select(
+            col("r.movie_id"),
+            col("r.vote_average"),
+            col("r.vote_count"),
+            col("r.popularity"),
+            col("r.event_time"),
+            col("m.title")
+        )
+        
+        # Aggregate by hour (truncate to hour for partition key)
+        aggregated_df = joined_df \
+            .withColumn("hour", expr("date_trunc('hour', event_time)")) \
+            .groupBy("movie_id", "hour") \
+            .agg(
+                last("vote_average").alias("vote_average"),
+                last("vote_count").alias("vote_count"),
+                last("popularity").alias("popularity"),
+                last("title").alias("title"),
+                max("event_time").alias("last_updated")
+            )
+        
+        # Calculate rating velocity using window functions
+        window_spec = Window.partitionBy("movie_id").orderBy("hour")
+        
+        result_df = aggregated_df \
+            .withColumn("prev_vote_average", lag("vote_average", 1).over(window_spec)) \
+            .withColumn("rating_velocity",
+                       when(col("prev_vote_average").isNotNull(),
+                            col("vote_average") - col("prev_vote_average"))
+                       .otherwise(lit(0.0))) \
+            .select(
+                col("movie_id"),
+                col("hour"),
+                col("vote_average"),
+                col("vote_count").cast("int"),
+                col("popularity"),
+                col("rating_velocity"),
+                col("last_updated")
+            )
+        
+        return result_df
         """Calculate velocity metrics for movies (popularity change rate, etc.)."""
         
         window_duration = self.config['processing']['window_duration']
@@ -366,9 +418,9 @@ class MovieAggregationStreamProcessor:
         
         return query.start()
     
-    def run_streaming_pipeline(self, output_mode: str = "console",
-                             checkpoint_base: str = "/tmp/spark-checkpoint-aggregation"):
-        """Run the complete movie aggregation streaming pipeline."""
+    def run_streaming_pipeline(self, output_mode: str = "cassandra",
+                             checkpoint_base: str = "/tmp/checkpoints/movie_aggregation"):
+        """Run the movie aggregation streaming pipeline with new schema."""
         
         logger.info("Starting movie aggregation streaming pipeline...")
         
@@ -377,29 +429,26 @@ class MovieAggregationStreamProcessor:
             metadata_df = self.read_metadata_stream()
             ratings_df = self.read_ratings_stream()
             
-            # Process aggregations
-            movie_metrics = self.calculate_movie_velocity_metrics(metadata_df)
-            rating_metrics = self.calculate_rating_aggregations(ratings_df)
-            trending_movies = self.detect_trending_movies(movie_metrics, rating_metrics)
+            # Join and aggregate
+            movie_stats_df = self.join_and_aggregate_movie_stats(ratings_df, metadata_df)
             
             queries = []
             
-            # Start streaming queries
+            # Write to Cassandra or console
             if output_mode == "cassandra":
-                queries.append(self.write_to_cassandra(
-                    movie_metrics, "movie_stats", f"{checkpoint_base}/movie_stats"))
-                queries.append(self.write_to_cassandra(
-                    rating_metrics, "movie_ratings_by_window", f"{checkpoint_base}/ratings"))
-                queries.append(self.write_to_cassandra(
-                    trending_movies, "trending_movies", f"{checkpoint_base}/trending"))
+                query = self.write_to_cassandra(
+                    movie_stats_df, 
+                    "movie_stats", 
+                    f"{checkpoint_base}/movie_stats"
+                )
+                queries.append(query)
+                logger.info("Started writing to Cassandra table: movie_stats")
                 
-                # Also write trending movies to Kafka for downstream processing
-                queries.append(self.write_to_kafka(
-                    trending_movies, "movie.trending", f"{checkpoint_base}/kafka_trending"))
             elif output_mode == "console":
-                queries.append(self.write_to_console(movie_metrics, "movie_metrics"))
-                queries.append(self.write_to_console(rating_metrics, "rating_metrics"))
-                queries.append(self.write_to_console(trending_movies, "trending_movies"))
+                query = self.write_to_console(movie_stats_df, "movie_aggregation")
+                queries.append(query)
+                logger.info("Started writing to console")
+            
             else:
                 raise ValueError(f"Unsupported output mode: {output_mode}")
             

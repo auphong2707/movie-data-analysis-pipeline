@@ -64,6 +64,25 @@ class TMDBStreamProducer:
     }
     """
     
+    METADATA_SCHEMA = """
+    {
+        "type": "record",
+        "name": "MovieMetadata",
+        "namespace": "com.moviepipeline.metadata",
+        "fields": [
+            {"name": "movie_id", "type": "int"},
+            {"name": "title", "type": "string"},
+            {"name": "release_date", "type": ["null", "string"]},
+            {"name": "genres", "type": {"type": "array", "items": "string"}},
+            {"name": "runtime", "type": ["null", "int"]},
+            {"name": "budget", "type": ["null", "long"]},
+            {"name": "revenue", "type": ["null", "long"]},
+            {"name": "timestamp", "type": "long", "logicalType": "timestamp-millis"},
+            {"name": "event_type", "type": "string"}
+        ]
+    }
+    """
+    
     def __init__(
         self,
         api_key: str,
@@ -89,6 +108,10 @@ class TMDBStreamProducer:
         self.rating_serializer = AvroSerializer(
             self.schema_registry_client,
             self.RATING_SCHEMA
+        )
+        self.metadata_serializer = AvroSerializer(
+            self.schema_registry_client,
+            self.METADATA_SCHEMA
         )
         
         self.rate_limit_delay = 0.25  # 4 requests/second
@@ -167,6 +190,27 @@ class TMDBStreamProducer:
         except Exception as e:
             logger.error(f"Failed to produce rating: {e}")
     
+    def produce_metadata(self, metadata: Dict[str, Any]):
+        """
+        Produce metadata update to Kafka topic
+        
+        Args:
+            metadata: Metadata dictionary matching METADATA_SCHEMA
+        """
+        try:
+            self.producer.produce(
+                topic='movie.metadata',
+                key=str(metadata['movie_id']),
+                value=self.metadata_serializer(
+                    metadata,
+                    SerializationContext('movie.metadata', MessageField.VALUE)
+                ),
+                on_delivery=self._delivery_report
+            )
+            self.producer.poll(0)
+        except Exception as e:
+            logger.error(f"Failed to produce metadata: {e}")
+    
     def poll_new_reviews(self, movie_ids: list[int]) -> int:
         """
         Poll for new reviews and stream to Kafka
@@ -216,7 +260,7 @@ class TMDBStreamProducer:
     
     def poll_trending_movies(self) -> int:
         """
-        Poll trending movies and stream ratings to Kafka
+        Poll trending movies and stream ratings + metadata to Kafka
         
         Returns:
             Number of rating updates produced
@@ -238,9 +282,25 @@ class TMDBStreamProducer:
                     "timestamp": int(datetime.now().timestamp() * 1000)
                 }
                 
-                # Produce to Kafka
+                # Produce rating to Kafka
                 self.produce_rating(kafka_rating)
                 ratings_count += 1
+                
+                # Prepare metadata for Kafka
+                kafka_metadata = {
+                    "movie_id": movie_id,
+                    "title": movie.get("title", "Unknown"),
+                    "release_date": movie.get("release_date"),
+                    "genres": [str(gid) for gid in movie.get("genre_ids", [])],
+                    "runtime": None,  # Not available in trending endpoint
+                    "budget": None,
+                    "revenue": None,
+                    "timestamp": int(datetime.now().timestamp() * 1000),
+                    "event_type": "trending_update"
+                }
+                
+                # Produce metadata to Kafka
+                self.produce_metadata(kafka_metadata)
             
             self.producer.flush()
             return ratings_count
@@ -249,22 +309,60 @@ class TMDBStreamProducer:
             logger.error(f"Failed to poll trending movies: {e}")
             return 0
     
+    def poll_movie_details(self, movie_id: int) -> bool:
+        """
+        Poll detailed movie information and stream metadata to Kafka
+        
+        Args:
+            movie_id: TMDB movie ID
+            
+        Returns:
+            True if metadata was successfully produced
+        """
+        try:
+            data = self._rate_limited_request(f"movie/{movie_id}")
+            
+            # Prepare metadata for Kafka
+            kafka_metadata = {
+                "movie_id": movie_id,
+                "title": data.get("title", "Unknown"),
+                "release_date": data.get("release_date"),
+                "genres": [genre.get("name", "") for genre in data.get("genres", [])],
+                "runtime": data.get("runtime"),
+                "budget": data.get("budget"),
+                "revenue": data.get("revenue"),
+                "timestamp": int(datetime.now().timestamp() * 1000),
+                "event_type": "detail_update"
+            }
+            
+            # Produce metadata to Kafka
+            self.produce_metadata(kafka_metadata)
+            self.producer.flush()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to poll movie details for {movie_id}: {e}")
+            return False
+    
     def run_streaming(
         self,
         trending_interval_seconds: int = 300,
-        reviews_interval_seconds: int = 300
+        reviews_interval_seconds: int = 300,
+        metadata_interval_seconds: int = 600
     ):
         """
         Run continuous streaming loop
         
         Args:
-            trending_interval_seconds: Interval to poll trending movies
-            reviews_interval_seconds: Interval to poll reviews
+            trending_interval_seconds: Interval to poll trending movies (default: 5 minutes)
+            reviews_interval_seconds: Interval to poll reviews (default: 5 minutes)
+            metadata_interval_seconds: Interval to poll detailed metadata (default: 10 minutes)
         """
         logger.info("Starting streaming producer")
         
         last_trending_poll = 0
         last_reviews_poll = 0
+        last_metadata_poll = 0
         
         # Get initial movie IDs for review polling
         data = self._rate_limited_request("movie/popular", {"page": 1})
@@ -274,10 +372,10 @@ class TMDBStreamProducer:
             while True:
                 current_time = time.time()
                 
-                # Poll trending movies
+                # Poll trending movies (ratings + basic metadata)
                 if current_time - last_trending_poll >= trending_interval_seconds:
                     count = self.poll_trending_movies()
-                    logger.info(f"Produced {count} rating updates")
+                    logger.info(f"Produced {count} rating updates from trending")
                     last_trending_poll = current_time
                 
                 # Poll reviews
@@ -285,6 +383,13 @@ class TMDBStreamProducer:
                     count = self.poll_new_reviews(movie_ids)
                     logger.info(f"Produced {count} new reviews")
                     last_reviews_poll = current_time
+                
+                # Poll detailed metadata for subset of movies
+                if current_time - last_metadata_poll >= metadata_interval_seconds:
+                    for movie_id in movie_ids[:5]:  # Poll details for 5 movies
+                        self.poll_movie_details(movie_id)
+                    logger.info(f"Produced detailed metadata for {min(5, len(movie_ids))} movies")
+                    last_metadata_poll = current_time
                 
                 time.sleep(10)  # Sleep between checks
                 

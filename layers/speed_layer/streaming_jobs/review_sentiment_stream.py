@@ -10,12 +10,13 @@ from typing import Dict, Any
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, avg, count, sum as spark_sum,
-    udf, struct, when, coalesce, lit
+    udf, struct, when, coalesce, lit, lag, expr
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
     LongType, TimestampType, BooleanType
 )
+from pyspark.sql.window import Window
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Add config to path
@@ -84,14 +85,12 @@ class ReviewSentimentStreamProcessor:
         """Define schema for movie review messages."""
         return StructType([
             StructField("review_id", StringType(), False),
-            StructField("movie_id", LongType(), False),
+            StructField("movie_id", IntegerType(), False),
             StructField("author", StringType(), False),
             StructField("content", StringType(), False),
             StructField("rating", DoubleType(), True),
-            StructField("created_at", StringType(), False),
-            StructField("url", StringType(), False),
-            StructField("timestamp", LongType(), False),
-            StructField("language", StringType(), True)
+            StructField("created_at", LongType(), False),
+            StructField("url", StringType(), False)
         ])
     
     def _create_sentiment_udf(self):
@@ -160,7 +159,7 @@ class ReviewSentimentStreamProcessor:
         # Convert timestamp to proper format
         timestamped_df = parsed_df \
             .withColumn("event_time", 
-                       to_timestamp((col("timestamp") / 1000).cast("long"))) \
+                       to_timestamp((col("created_at") / 1000).cast("long"))) \
             .withColumn("kafka_time", 
                        to_timestamp(col("kafka_timestamp")))
         
@@ -198,8 +197,10 @@ class ReviewSentimentStreamProcessor:
         return sentiment_categorized
     
     def aggregate_sentiment_by_window(self, sentiment_df: DataFrame) -> DataFrame:
-        """Aggregate sentiment data by 5-minute windows."""
-        
+        """
+        Aggregate sentiment scores by 5-minute tumbling window.
+        Matches Cassandra review_sentiments table schema.
+        """
         window_duration = self.config['processing']['window_duration']
         watermark_delay = self.config['processing']['watermark_delay']
         
@@ -207,44 +208,48 @@ class ReviewSentimentStreamProcessor:
         watermarked_df = sentiment_df \
             .withWatermark("event_time", watermark_delay)
         
-        # Window aggregation
-        windowed_df = watermarked_df \
+        # Aggregate by movie_id and 5-minute window
+        aggregated_df = watermarked_df \
             .groupBy(
                 window(col("event_time"), window_duration),
                 col("movie_id")
             ) \
             .agg(
+                avg("sentiment_compound").alias("avg_sentiment"),
                 count("review_id").alias("review_count"),
-                avg("sentiment_compound").alias("avg_sentiment_compound"),
-                avg("sentiment_positive").alias("avg_sentiment_positive"),
-                avg("sentiment_negative").alias("avg_sentiment_negative"),
-                avg("sentiment_neutral").alias("avg_sentiment_neutral"),
-                avg("rating").alias("avg_rating"),
-                count(when(col("sentiment_category") == "positive", 1)).alias("positive_count"),
-                count(when(col("sentiment_category") == "negative", 1)).alias("negative_count"),
-                count(when(col("sentiment_category") == "neutral", 1)).alias("neutral_count")
+                spark_sum(when(col("sentiment_category") == "positive", 1).otherwise(0)).alias("positive_count"),
+                spark_sum(when(col("sentiment_category") == "negative", 1).otherwise(0)).alias("negative_count"),
+                spark_sum(when(col("sentiment_category") == "neutral", 1).otherwise(0)).alias("neutral_count")
             )
         
-        # Format output
-        result_df = windowed_df.select(
-            col("window.start").alias("window_start"),
-            col("window.end").alias("window_end"),
-            col("movie_id"),
-            col("review_count"),
-            coalesce(col("avg_sentiment_compound"), lit(0.0)).alias("avg_sentiment_compound"),
-            coalesce(col("avg_sentiment_positive"), lit(0.0)).alias("avg_sentiment_positive"),
-            coalesce(col("avg_sentiment_negative"), lit(0.0)).alias("avg_sentiment_negative"),
-            coalesce(col("avg_sentiment_neutral"), lit(1.0)).alias("avg_sentiment_neutral"),
-            coalesce(col("avg_rating"), lit(0.0)).alias("avg_rating"),
-            col("positive_count"),
-            col("negative_count"),
-            col("neutral_count")
-        )
+        # Calculate sentiment velocity using window functions
+        from pyspark.sql.window import Window
+        window_spec = Window.partitionBy("movie_id").orderBy("window")
+        
+        result_df = aggregated_df \
+            .withColumn("prev_avg_sentiment", lag("avg_sentiment", 1).over(window_spec)) \
+            .withColumn("sentiment_velocity",
+                       when(col("prev_avg_sentiment").isNotNull(),
+                            col("avg_sentiment") - col("prev_avg_sentiment"))
+                       .otherwise(lit(0.0))) \
+            .select(
+                col("movie_id"),
+                col("window.start").alias("window_start"),
+                col("window.end").alias("window_end"),
+                # Hour for partition key (truncate to hour)
+                expr("date_trunc('hour', window.start)").alias("hour"),
+                col("avg_sentiment"),
+                col("review_count").cast("int"),
+                col("positive_count").cast("int"),
+                col("negative_count").cast("int"),
+                col("neutral_count").cast("int"),
+                col("sentiment_velocity")
+            )
         
         return result_df
     
     def write_to_cassandra(self, df: DataFrame, checkpoint_location: str):
-        """Write aggregated sentiment data to Cassandra."""
+        """Write aggregated sentiment data to Cassandra with new schema."""
         
         cassandra_config = self.config['spark']['cassandra']
         
@@ -271,8 +276,8 @@ class ReviewSentimentStreamProcessor:
         return query.start()
     
     def run_streaming_pipeline(self, output_mode: str = "cassandra", 
-                             checkpoint_location: str = "/tmp/spark-checkpoint-sentiment"):
-        """Run the complete streaming pipeline."""
+                             checkpoint_location: str = "/tmp/checkpoints/review_sentiment"):
+        """Run the complete streaming pipeline with new schema."""
         
         logger.info("Starting review sentiment streaming pipeline...")
         

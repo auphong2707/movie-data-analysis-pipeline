@@ -1,5 +1,6 @@
 # Spark Streaming Configuration for Speed Layer
 # Configuration for real-time streaming jobs processing TMDB data
+# Updated to match new schema: review_sentiments, movie_stats, trending_movies
 
 kafka:
   bootstrap_servers: "${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}"
@@ -9,12 +10,11 @@ kafka:
   buffer_memory: 33554432
   schema_registry_url: "${SCHEMA_REGISTRY_URL:http://localhost:8081}"
   
-  # Kafka topic names
+  # Kafka topic names (3 topics as per new architecture)
   topics:
-    reviews: "movie.reviews"
-    ratings: "movie.ratings"
-    metadata: "movie.metadata"
-    trending: "movie.trending"
+    reviews: "movie.reviews"         # Review data from TMDB
+    ratings: "movie.ratings"         # Rating updates from TMDB
+    metadata: "movie.metadata"       # Movie metadata updates
   
 spark:
   app_name: "speed-layer-streaming"
@@ -25,7 +25,7 @@ spark:
   streaming:
     batch_duration: "5 minutes"
     watermark_duration: "10 minutes"
-    checkpoint_location: "/app/checkpoints"
+    checkpoint_location: "/tmp/checkpoints"
     max_offsets_per_trigger: 1000
     
   # Cassandra connector configuration
@@ -78,6 +78,12 @@ processing:
 output:
   mode: "append"
   trigger: "processingTime='5 minutes'"
+  
+# Checkpoint locations for each streaming job
+checkpoints:
+  review_sentiment: "/tmp/checkpoints/review_sentiment"
+  movie_aggregation: "/tmp/checkpoints/movie_aggregation"
+  trending_detection: "/tmp/checkpoints/trending_detection"
   
 # Monitoring Configuration
 monitoring:

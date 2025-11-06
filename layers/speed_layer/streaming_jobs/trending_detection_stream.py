@@ -1,6 +1,7 @@
 """
 Trending Detection Stream Processing
 Detect trending/hot movies using velocity and acceleration metrics.
+Consumes from movie.ratings topic and ranks top 100 movies.
 """
 
 import logging
@@ -11,7 +12,8 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, avg, count, sum as spark_sum,
     min as spark_min, max as spark_max, stddev, first, last, 
-    lag, lead, coalesce, lit, expr, when, rank, dense_rank, desc, asc
+    lag, lead, coalesce, lit, expr, when, rank, dense_rank, desc, asc, abs as spark_abs,
+    row_number, current_timestamp
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrendingDetectionStreamProcessor:
-    """Detect trending movies using real-time velocity and acceleration analysis."""
+    """Detect trending movies using real-time velocity and acceleration analysis from movie.ratings."""
     
     def __init__(self, config_path: str = "/app/config/spark_streaming_config.yaml"):
         """Initialize the trending detection stream processor."""
@@ -38,18 +40,17 @@ class TrendingDetectionStreamProcessor:
         # Initialize Spark session
         self.spark = self._create_spark_session()
         
-        # Define schemas
-        self.trending_schema = self._get_trending_schema()
+        # Define rating schema
+        self.rating_schema = self._get_rating_schema()
         
         # Trending detection parameters
-        self.trending_params = self.config.get('trending_detection', {
+        self.trending_params = {
             'min_popularity_threshold': 10.0,
-            'min_rating_count': 5,
-            'velocity_weight': 0.4,
-            'acceleration_weight': 0.3,
-            'volume_weight': 0.3,
-            'top_n_trending': 20
-        })
+            'min_vote_count': 10,
+            'top_n_trending': 100,
+            'velocity_weight': 0.5,
+            'acceleration_weight': 0.5
+        }
         
         logger.info("Trending Detection Stream Processor initialized")
     
@@ -88,34 +89,31 @@ class TrendingDetectionStreamProcessor:
         
         return builder.getOrCreate()
     
-    def _get_trending_schema(self) -> StructType:
-        """Define schema for trending event messages."""
+    def _get_rating_schema(self) -> StructType:
+        """Define schema for movie rating messages."""
         return StructType([
-            StructField("movie_id", LongType(), False),
-            StructField("title", StringType(), False),
-            StructField("trend_score", DoubleType(), False),
-            StructField("popularity_delta", DoubleType(), False),
-            StructField("rating_velocity", DoubleType(), False),
-            StructField("review_volume", LongType(), False),
-            StructField("time_window", StringType(), False),
+            StructField("movie_id", IntegerType(), False),
+            StructField("vote_average", DoubleType(), False),
+            StructField("vote_count", IntegerType(), False),
+            StructField("popularity", DoubleType(), False),
             StructField("timestamp", LongType(), False)
         ])
     
-    def read_trending_stream(self) -> DataFrame:
-        """Read trending events stream from Kafka."""
+    def read_ratings_stream(self) -> DataFrame:
+        """Read movie ratings stream from Kafka."""
         kafka_config = self.config['kafka']
         
         df = self.spark.readStream \
             .format("kafka") \
             .option("kafka.bootstrap.servers", kafka_config['bootstrap_servers']) \
-            .option("subscribe", kafka_config['topics']['trending']) \
+            .option("subscribe", kafka_config['topics']['ratings']) \
             .option("startingOffsets", "latest") \
             .option("failOnDataLoss", "false") \
             .load()
         
         # Parse JSON messages
         parsed_df = df.select(
-            from_json(col("value").cast("string"), self.trending_schema).alias("data"),
+            from_json(col("value").cast("string"), self.rating_schema).alias("data"),
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         
@@ -126,7 +124,69 @@ class TrendingDetectionStreamProcessor:
         
         return timestamped_df
     
-    def read_movie_stats_stream(self) -> DataFrame:
+    def calculate_trending_scores(self, ratings_df: DataFrame) -> DataFrame:
+        """
+        Calculate trending scores with velocity and acceleration.
+        Rank top 100 movies by trending score.
+        Matches Cassandra trending_movies table schema.
+        """
+        watermark_delay = self.config['processing']['watermark_delay']
+        params = self.trending_params
+        
+        # Add watermark
+        watermarked_df = ratings_df.withWatermark("event_time", watermark_delay)
+        
+        # Group by hour and movie_id
+        hourly_df = watermarked_df \
+            .withColumn("hour", expr("date_trunc('hour', event_time)")) \
+            .groupBy("hour", "movie_id") \
+            .agg(
+                last("vote_average").alias("vote_average"),
+                last("vote_count").alias("vote_count"),
+                last("popularity").alias("popularity"),
+                max("event_time").alias("last_updated")
+            )
+        
+        # Calculate velocity and acceleration using window functions
+        window_spec = Window.partitionBy("movie_id").orderBy("hour")
+        
+        velocity_df = hourly_df \
+            .withColumn("prev_popularity", lag("popularity", 1).over(window_spec)) \
+            .withColumn("velocity",
+                       when(col("prev_popularity").isNotNull(),
+                            col("popularity") - col("prev_popularity"))
+                       .otherwise(lit(0.0))) \
+            .withColumn("prev_velocity", lag("velocity", 1).over(window_spec)) \
+            .withColumn("acceleration",
+                       when(col("prev_velocity").isNotNull(),
+                            col("velocity") - col("prev_velocity"))
+                       .otherwise(lit(0.0)))
+        
+        # Calculate trending score
+        trending_df = velocity_df \
+            .withColumn("trending_score",
+                       (spark_abs(col("velocity")) * params['velocity_weight']) +
+                       (spark_abs(col("acceleration")) * params['acceleration_weight'])) \
+            .filter(col("popularity") >= params['min_popularity_threshold']) \
+            .filter(col("vote_count") >= params['min_vote_count'])
+        
+        # Rank top 100 movies per hour
+        rank_window = Window.partitionBy("hour").orderBy(desc("trending_score"))
+        
+        result_df = trending_df \
+            .withColumn("rank", row_number().over(rank_window)) \
+            .filter(col("rank") <= params['top_n_trending']) \
+            .select(
+                col("hour"),
+                col("rank"),
+                col("movie_id"),
+                lit("Unknown").alias("title"),  # Title will be enriched from metadata
+                col("trending_score"),
+                col("velocity"),
+                col("acceleration")
+            )
+        
+        return result_df
         """Read movie statistics from Cassandra for trending analysis."""
         cassandra_config = self.config['spark']['cassandra']
         
@@ -164,23 +224,16 @@ class TrendingDetectionStreamProcessor:
                 spark_max("trend_score").alias("max_trend_score")
             )
         
-        # Calculate velocity using window functions
-        movie_window = Window.partitionBy("movie_id").orderBy("window")
-        
+        # Calculate velocity within current window (no cross-window lag in streaming)
+        # Use max_trend_score range and average as proxy for velocity
         velocity_df = current_metrics \
-            .withColumn("prev_trend_score",
-                       lag("avg_trend_score", 1).over(movie_window)) \
             .withColumn("trend_velocity",
-                       when(col("prev_trend_score").isNotNull(),
-                            (col("avg_trend_score") - col("prev_trend_score")) / 
-                            (col("prev_trend_score") + 1))  # Avoid division by zero
+                       when(col("event_count") > 1,
+                            (col("max_trend_score") - col("avg_trend_score")) / col("event_count"))
                        .otherwise(lit(0.0))) \
-            .withColumn("prev_trend_velocity",
-                       lag("trend_velocity", 1).over(movie_window)) \
             .withColumn("trend_acceleration",
-                       when(col("prev_trend_velocity").isNotNull(),
-                            col("trend_velocity") - col("prev_trend_velocity"))
-                       .otherwise(lit(0.0)))
+                       # Approximate acceleration using popularity delta and rating velocity
+                       (spark_abs(col("avg_popularity_delta")) + spark_abs(col("avg_rating_velocity"))) / 2.0)
         
         return velocity_df
     
@@ -206,20 +259,20 @@ class TrendingDetectionStreamProcessor:
             .filter(col("total_review_volume") >= params['min_rating_count']) \
             .filter(col("hotness_score") > 0)  # Only positive trending
         
-        # Rank by hotness score within each window
-        window_spec = Window.partitionBy("window").orderBy(desc("hotness_score"))
+        # Add ranking using row_number() which IS supported in streaming
+        # Partition by window and order by hotness_score descending
+        window_spec = Window.partitionBy("window.start", "window.end").orderBy(col("hotness_score").desc())
         
         ranked_df = filtered_df \
-            .withColumn("trend_rank", rank().over(window_spec)) \
-            .filter(col("trend_rank") <= params['top_n_trending'])
+            .withColumn("trend_rank", row_number().over(window_spec))
         
-        # Select final columns
+        # Select final columns with trend_rank and created_at timestamp
         result_df = ranked_df.select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
+            col("trend_rank"),
             col("movie_id"),
             col("title"),
-            col("trend_rank"),
             col("hotness_score"),
             col("avg_trend_score"),
             col("trend_velocity"),
@@ -228,7 +281,8 @@ class TrendingDetectionStreamProcessor:
             col("event_count"),
             col("velocity_score"),
             col("acceleration_score"),
-            col("volume_score")
+            col("volume_score"),
+            current_timestamp().alias("created_at")
         )
         
         return result_df
@@ -248,29 +302,31 @@ class TrendingDetectionStreamProcessor:
                        col("trend_acceleration") * 0.6 + 
                        col("trend_velocity") * 0.4) \
             .withColumn("surge_multiplier",
-                       when(col("prev_trend_score").isNotNull() & (col("prev_trend_score") > 0),
-                            col("avg_trend_score") / col("prev_trend_score"))
+                       # Use ratio of max to avg as proxy for surge
+                       when(col("avg_trend_score") > 0,
+                            col("max_trend_score") / col("avg_trend_score"))
                        .otherwise(lit(1.0)))
         
-        # Rank breakout movies
-        window_spec = Window.partitionBy("window").orderBy(desc("breakout_score"))
+        # Add ranking using row_number() - partition by window, order by breakout_score
+        window_spec = Window.partitionBy("window.start", "window.end").orderBy(col("breakout_score").desc())
         
-        ranked_breakout = breakout_scored \
-            .withColumn("breakout_rank", rank().over(window_spec)) \
-            .filter(col("breakout_rank") <= 10)  # Top 10 breakouts
+        ranked_df = breakout_scored \
+            .withColumn("breakout_rank", row_number().over(window_spec))
         
-        result_df = ranked_breakout.select(
+        # Select breakout movies with ranking and timestamp
+        result_df = ranked_df.select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
+            col("breakout_rank"),
             col("movie_id"),
             col("title"),
-            col("breakout_rank"),
             col("breakout_score"),
             col("surge_multiplier"),
             col("trend_acceleration"),
             col("trend_velocity"),
             col("avg_trend_score"),
-            col("total_review_volume")
+            col("total_review_volume"),
+            current_timestamp().alias("created_at")
         )
         
         return result_df
@@ -287,33 +343,32 @@ class TrendingDetectionStreamProcessor:
         # Calculate decline score
         decline_scored = declining_df \
             .withColumn("decline_score",
-                       abs(col("trend_velocity")) * 0.7 + 
-                       abs(col("trend_acceleration")) * 0.3) \
+                       spark_abs(col("trend_velocity")) * 0.7 + 
+                       spark_abs(col("trend_acceleration")) * 0.3) \
             .withColumn("momentum_loss",
-                       when(col("prev_trend_score").isNotNull(),
-                            (col("prev_trend_score") - col("avg_trend_score")) / 
-                            (col("prev_trend_score") + 1))
-                       .otherwise(lit(0.0)))
+                       # Use negative velocity magnitude as momentum loss indicator
+                       spark_abs(col("trend_velocity")))
         
-        # Rank declining movies
-        window_spec = Window.partitionBy("window").orderBy(desc("decline_score"))
+        # Add ranking using row_number() - partition by window, order by decline_score
+        window_spec = Window.partitionBy("window.start", "window.end").orderBy(col("decline_score").desc())
         
-        ranked_declining = decline_scored \
-            .withColumn("decline_rank", rank().over(window_spec)) \
-            .filter(col("decline_rank") <= 10)  # Top 10 declining
+        ranked_df = decline_scored \
+            .withColumn("decline_rank", row_number().over(window_spec))
         
-        result_df = ranked_declining.select(
+        # Select declining movies with ranking and timestamp
+        result_df = ranked_df.select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
+            col("decline_rank"),
             col("movie_id"),
             col("title"),
-            col("decline_rank"),
             col("decline_score"),
             col("momentum_loss"),
             col("trend_velocity"),
             col("trend_acceleration"),
             col("avg_trend_score"),
-            col("total_review_volume")
+            col("total_review_volume"),
+            current_timestamp().alias("created_at")
         )
         
         return result_df
@@ -343,38 +398,35 @@ class TrendingDetectionStreamProcessor:
         
         return query.start()
     
-    def run_streaming_pipeline(self, output_mode: str = "console",
-                             checkpoint_base: str = "/tmp/spark-checkpoint-trending"):
-        """Run the complete trending detection streaming pipeline."""
+    def run_streaming_pipeline(self, output_mode: str = "cassandra",
+                             checkpoint_base: str = "/tmp/checkpoints/trending_detection"):
+        """Run the trending detection streaming pipeline with new schema."""
         
         logger.info("Starting trending detection streaming pipeline...")
         
         try:
-            # Read trending stream
-            trending_df = self.read_trending_stream()
+            # Read ratings stream
+            ratings_df = self.read_ratings_stream()
             
-            # Calculate velocity metrics
-            velocity_df = self.calculate_trending_velocity(trending_df)
-            
-            # Detect different types of trends
-            hot_movies = self.detect_hot_movies(velocity_df)
-            breakout_movies = self.detect_breakout_movies(velocity_df)
-            declining_movies = self.detect_declining_movies(velocity_df)
+            # Calculate trending scores
+            trending_df = self.calculate_trending_scores(ratings_df)
             
             queries = []
             
-            # Start streaming queries
+            # Write to Cassandra or console
             if output_mode == "cassandra":
-                queries.append(self.write_to_cassandra(
-                    hot_movies, "trending_movies", f"{checkpoint_base}/hot"))
-                queries.append(self.write_to_cassandra(
-                    breakout_movies, "breakout_movies", f"{checkpoint_base}/breakout"))
-                queries.append(self.write_to_cassandra(
-                    declining_movies, "declining_movies", f"{checkpoint_base}/declining"))
+                query = self.write_to_cassandra(
+                    trending_df,
+                    "trending_movies",
+                    f"{checkpoint_base}/trending"
+                )
+                queries.append(query)
+                logger.info("Started writing to Cassandra table: trending_movies")
+                
             elif output_mode == "console":
-                queries.append(self.write_to_console(hot_movies, "hot_movies"))
-                queries.append(self.write_to_console(breakout_movies, "breakout_movies"))
-                queries.append(self.write_to_console(declining_movies, "declining_movies"))
+                query = self.write_to_console(trending_df, "trending_movies")
+                queries.append(query)
+                logger.info("Started writing to console")
             else:
                 raise ValueError(f"Unsupported output mode: {output_mode}")
             

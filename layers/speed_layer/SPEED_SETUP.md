@@ -18,11 +18,13 @@ The Speed Layer runs completely in Docker containers using `docker-compose.speed
 **Speed Layer Application Services:**
 | Service | Purpose |
 |---------|---------|
-| `tmdb-producer` | Streams TMDB API data to Kafka |
-| `event-producer` | Generates synthetic user events |
-| `sentiment-stream` | Real-time sentiment analysis (Spark) |
+| `tmdb-producer` | Streams TMDB API data to Kafka (reviews, ratings, metadata) |
+| `sentiment-stream` | Real-time sentiment analysis using VADER (Spark) |
 | `aggregation-stream` | Movie metrics aggregation (Spark) |
-| `trending-stream` | Trending movie detection (Spark) |
+| `trending-stream` | Trending movie detection and ranking (Spark) |
+| `cassandra-mongo-sync` | Syncs speed layer data to MongoDB (300s interval) |
+
+> **Note**: This pipeline uses **TMDB API data only**. No synthetic or user-generated events are included.
 
 ## 🚀 Quick Start
 
@@ -44,61 +46,86 @@ notepad .env  # Windows
 nano .env     # Linux/Mac
 ```
 
-### Step 2: Validate Setup (Optional)
-```bash
-bash validate-speed-layer.sh
-```
-
-### Step 3: Start Speed Layer
-```bash
+### Step 2: Start Speed Layer
+```powershell
 # From the speed_layer directory
-bash start-speed-layer-docker.sh start
+docker-compose -f docker-compose.speed.yml up -d
 
-# Or simply
-bash start-speed-layer-docker.sh
+# Or if already in the directory with the file
+docker-compose up -d
 ```
+
+The system will start all services in the correct order with health checks.
+
+### Service Startup Order
+Docker Compose automatically manages dependencies and health checks:
+
+1. **Infrastructure Layer** (parallel start):
+   - `zookeeper` - Kafka coordination
+   - `cassandra` - Speed layer storage
+   - `mongodb` - Serving layer storage
+
+2. **Messaging Layer** (waits for Zookeeper):
+   - `kafka` - Event streaming
+   - `schema-registry` - Avro schema management
+
+3. **Schema Initialization** (waits for Cassandra):
+   - `cassandra-init` - Creates keyspace and tables (one-time job)
+
+4. **Data Producers** (waits for Kafka + Schema Registry):
+   - `tmdb-producer` - Starts streaming TMDB data
+
+5. **Streaming Jobs** (waits for Kafka + Cassandra + TMDB producer):
+   - `sentiment-stream` - Sentiment analysis
+   - `aggregation-stream` - Movie metrics
+   - `trending-stream` - Trending detection
+
+6. **Sync Service** (waits for all streaming jobs healthy):
+   - `cassandra-mongo-sync` - Syncs to MongoDB every 5 minutes
+
+All services include health checks to ensure proper initialization before dependent services start.
 
 ## 📖 Management Commands
 
-The unified script supports multiple operations:
+Use standard docker-compose commands:
 
-```bash
+```powershell
 # Start all services
-bash start-speed-layer-docker.sh start
+docker-compose -f docker-compose.speed.yml up -d
 
 # Stop all services (containers remain)
-bash start-speed-layer-docker.sh stop
+docker-compose -f docker-compose.speed.yml stop
 
 # Restart all services
-bash start-speed-layer-docker.sh restart
+docker-compose -f docker-compose.speed.yml restart
 
 # Check service status
-bash start-speed-layer-docker.sh status
+docker-compose -f docker-compose.speed.yml ps
 
 # Follow logs from all services
-bash start-speed-layer-docker.sh logs
+docker-compose -f docker-compose.speed.yml logs -f
 
 # Stop and remove containers
-bash start-speed-layer-docker.sh cleanup
+docker-compose -f docker-compose.speed.yml down
 
 # Complete cleanup including data volumes
-bash start-speed-layer-docker.sh purge
+docker-compose -f docker-compose.speed.yml down -v
 ```
 
 ## 🔍 Monitoring & Debugging
 
 ### View Logs
-```bash
+```powershell
 # All services
-docker-compose logs -f
+docker-compose -f docker-compose.speed.yml logs -f
 
 # Specific service
-docker-compose logs -f tmdb-producer
-docker-compose logs -f sentiment-stream
-docker-compose logs -f kafka
+docker-compose -f docker-compose.speed.yml logs -f tmdb-producer
+docker-compose -f docker-compose.speed.yml logs -f sentiment-stream
+docker-compose -f docker-compose.speed.yml logs -f cassandra-mongo-sync
 
 # Last 100 lines
-docker-compose logs --tail=100
+docker-compose -f docker-compose.speed.yml logs --tail=100
 ```
 
 ### Check Kafka Topics
@@ -113,56 +140,68 @@ docker exec -it kafka kafka-console-consumer --topic movie.reviews --from-beginn
 ```
 
 ### Query Cassandra
-```bash
+```powershell
 # Enter cqlsh
 docker exec -it cassandra cqlsh
 
 # Query from host
-docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.movie_aggregations;"
+docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.movie_stats;"
 docker exec -it cassandra cqlsh -e "SELECT * FROM speed_layer.review_sentiments LIMIT 10;"
+docker exec -it cassandra cqlsh -e "SELECT * FROM speed_layer.trending_movies LIMIT 10;"
 ```
 
 ### Check Schema Registry
-```bash
+```powershell
 # List subjects
 curl http://localhost:8081/subjects
 
-# Get schema for a subject
+# Get schema for reviews
 curl http://localhost:8081/subjects/movie.reviews-value/versions/latest
+
+# Get schema for ratings
+curl http://localhost:8081/subjects/movie.ratings-value/versions/latest
+
+# Get schema for metadata
+curl http://localhost:8081/subjects/movie.metadata-value/versions/latest
 ```
 
 ### Monitor Container Resources
-```bash
+```powershell
 # Resource usage
 docker stats
 
 # Specific containers
-docker stats kafka cassandra mongodb
+docker stats kafka cassandra mongodb spark-master
+```
+
+### Validate TMDB-Only Architecture
+```powershell
+# Run validation script to ensure no synthetic data
+python validate_tmdb_only.py
 ```
 
 ## 🏗️ Architecture
 
 ### Data Flow
 ```
-TMDB API → TMDB Producer → Kafka Topics → Streaming Jobs → Cassandra
-                              ↓
-                      Schema Registry
-                              
-User Events → Event Producer → Kafka Topics → Streaming Jobs → Cassandra
+TMDB API → TMDB Producer → Kafka Topics (Avro) → Spark Streaming Jobs → Cassandra
+                              ↓                                            ↓
+                      Schema Registry                        Cassandra-MongoDB Sync
+                                                                          ↓
+                                                                      MongoDB
 ```
 
 ### Kafka Topics
-- `movie.reviews` - Movie reviews from TMDB
-- `movie.ratings` - User ratings
-- `movie.metadata` - Movie information
-- `movie.trending` - Trending detection results
-- `user.events` - Synthetic user events
+- `movie.reviews` - Movie reviews from TMDB API
+- `movie.ratings` - Rating updates extracted from TMDB data
+- `movie.metadata` - Movie metadata and updates from TMDB
+
+> **Data Format**: All messages use Confluent Avro serialization with Wire Format (5-byte header)
 
 ### Cassandra Tables (48h TTL)
-- `review_sentiments` - Real-time sentiment scores
-- `movie_aggregations` - Aggregated metrics
-- `trending_movies` - Detected trends
-- `real_time_stats` - Live statistics
+- `review_sentiments` - Real-time sentiment scores from movie reviews
+- `movie_stats` - Aggregated movie statistics (vote avg, popularity, velocity)
+- `trending_movies` - Hourly ranked trending movies by score
 
 ## 🔧 Configuration
 
@@ -180,13 +219,17 @@ SCHEMA_REGISTRY_URL=http://schema-registry:8081
 # Cassandra
 CASSANDRA_HOSTS=cassandra
 CASSANDRA_KEYSPACE=speed_layer
+CASSANDRA_PORT=9042
 
-# MongoDB
+# MongoDB (for serving layer sync)
 MONGO_HOST=mongodb
 MONGO_PORT=27017
 MONGO_USERNAME=admin
 MONGO_PASSWORD=password
 MONGO_DATABASE=moviedb
+
+# Sync Configuration
+SYNC_INTERVAL=300  # MongoDB sync interval in seconds (default: 5 minutes)
 ```
 
 ### Spark Configuration
@@ -195,6 +238,21 @@ Located in `config/spark_streaming_config.yaml`:
 - Window durations
 - Batch sizes
 - Cassandra connection settings
+
+### MongoDB Sync Configuration
+The `cassandra-mongo-sync` service automatically syncs speed layer data to MongoDB:
+- **Sync Interval**: 300 seconds (5 minutes) by default
+- **Collections Synced**:
+  - `movie_stats` - Aggregated movie statistics
+  - `trending_movies` - Hourly trending movie rankings
+  - `review_sentiments` - Sentiment analysis results
+- **Sync Strategy**: Bulk upsert operations to prevent duplicates
+- **Health Checks**: Service only starts after all streaming jobs are healthy
+
+To trigger manual sync:
+```powershell
+docker exec -it cassandra-mongo-sync python /app/connectors/cassandra_to_mongo.py
+```
 
 ## 🐛 Troubleshooting
 
@@ -238,33 +296,60 @@ docker exec -it cassandra cqlsh -e "DESCRIBE KEYSPACE speed_layer;"
 ```
 
 ### Container Keeps Restarting
-```bash
+```powershell
 # Check logs for specific container
 docker logs <container-name> --tail=50
 
 # Check exit code
 docker inspect <container-name> --format='{{.State.ExitCode}}'
+
+# Common issues:
+# - tmdb-producer: Check TMDB_API_KEY in .env
+# - streaming jobs: Check Kafka and Cassandra are healthy
+# - cassandra-mongo-sync: Verify all streaming jobs started successfully
+```
+
+### No Data in MongoDB
+```powershell
+# Check sync service is running
+docker-compose -f docker-compose.speed.yml ps cassandra-mongo-sync
+
+# Check sync logs
+docker-compose -f docker-compose.speed.yml logs cassandra-mongo-sync
+
+# Verify Cassandra has data first
+docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.movie_stats;"
+
+# Manually trigger sync
+docker exec -it cassandra-mongo-sync python /app/connectors/cassandra_to_mongo.py
 ```
 
 ## 📝 Development Workflow
 
 ### Making Code Changes
-```bash
+```powershell
 # 1. Edit code in the speed_layer directory
 # 2. Rebuild affected containers
-bash start-speed-layer-docker.sh restart
+docker-compose -f docker-compose.speed.yml up -d --build
 
 # Or rebuild specific service
-docker-compose up -d --build tmdb-producer
+docker-compose -f docker-compose.speed.yml up -d --build tmdb-producer
+docker-compose -f docker-compose.speed.yml up -d --build sentiment-stream
 ```
 
 ### Testing Changes
-```bash
-# Run tests (if available)
-docker-compose exec tmdb-producer python -m pytest
-
-# Check data flow
+```powershell
+# Check data flow in Cassandra
 docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.review_sentiments;"
+docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.movie_stats;"
+docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM speed_layer.trending_movies;"
+
+# Check MongoDB sync
+docker exec -it mongodb mongosh moviedb --eval "db.movie_stats.countDocuments()"
+docker exec -it mongodb mongosh moviedb --eval "db.trending_movies.countDocuments()"
+
+# Run validation
+python validate_tmdb_only.py
 ```
 
 ## 🚀 Production Deployment
@@ -324,8 +409,19 @@ command: >
 ## 🆘 Getting Help
 
 If you encounter issues:
-1. Check logs: `bash start-speed-layer-docker.sh logs`
-2. Verify status: `bash start-speed-layer-docker.sh status`
+1. Check logs: `docker-compose -f docker-compose.speed.yml logs -f`
+2. Verify status: `docker-compose -f docker-compose.speed.yml ps`
 3. Review configuration in `.env`
 4. Check Docker resources (RAM, disk space)
-5. Consult troubleshooting section above
+5. Run validation: `python validate_tmdb_only.py`
+6. Consult troubleshooting section above
+
+## ✅ Validation
+
+The `validate_tmdb_only.py` script verifies:
+- ✅ No synthetic data generators in codebase
+- ✅ TMDB-only schemas registered
+- ✅ Docker compose has only TMDB producer (no event-producer)
+- ✅ Streaming jobs consume only TMDB topics
+
+Run after setup to confirm TMDB-only architecture.

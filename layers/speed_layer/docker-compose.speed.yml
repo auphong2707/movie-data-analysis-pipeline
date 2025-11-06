@@ -184,32 +184,12 @@ services:
     networks:
       - movie-pipeline
     restart: unless-stopped
-
-  # Event Producer - Generates synthetic user events
-  event-producer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: event-producer
-    depends_on:
-      kafka:
-        condition: service_healthy
-      schema-registry:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      PYTHONUNBUFFERED: 1
-    command: python kafka_producers/event_producer.py
-    volumes:
-      - .:/app
-      - ../../config:/app/config
-      - speed-layer-logs:/app/logs
-    networks:
-      - movie-pipeline
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep tmdb_stream_producer.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   # Review Sentiment Stream - Analyzes sentiment in real-time
   sentiment-stream:
@@ -241,6 +221,12 @@ services:
     networks:
       - movie-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep review_sentiment_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # Movie Aggregation Stream - Aggregates movie metrics
   aggregation-stream:
@@ -272,6 +258,12 @@ services:
     networks:
       - movie-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep movie_aggregation_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # Trending Detection Stream - Detects trending movies
   trending-stream:
@@ -303,6 +295,54 @@ services:
     networks:
       - movie-pipeline
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep trending_detection_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Cassandra to MongoDB Sync - Syncs speed layer data to serving layer
+  cassandra-mongo-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cassandra-mongo-sync
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      aggregation-stream:
+        condition: service_healthy
+      trending-stream:
+        condition: service_healthy
+      sentiment-stream:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      MONGO_URI: mongodb://admin:password@mongodb:27017
+      MONGO_DATABASE: moviedb
+      SYNC_INTERVAL: 300
+      CLEANUP_INTERVAL: 3600
+      PYTHONUNBUFFERED: 1
+    command: python connectors/cassandra_to_mongo.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
+    volumes:
+      - .:/app
+      - ../../config:/app/config
+      - speed-layer-logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep cassandra_to_mongo.py | grep -v grep || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   zookeeper-data:

@@ -63,10 +63,12 @@ class ReviewSentimentStreamProcessor:
         # spark-sql-kafka: 3.4.4 matches PySpark version
         # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
         # kafka-clients: 3.4.0 compatible with Kafka 7.4.x (Confluent)
+        # spark-avro: 3.4.4 for Avro deserialization
         packages = [
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
             "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
-            "org.apache.kafka:kafka-clients:3.4.0"
+            "org.apache.kafka:kafka-clients:3.4.0",
+            "org.apache.spark:spark-avro_2.12:3.4.4"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
         
@@ -138,8 +140,9 @@ class ReviewSentimentStreamProcessor:
         return udf(analyze_sentiment, sentiment_schema)
     
     def read_review_stream(self) -> DataFrame:
-        """Read movie review stream from Kafka."""
+        """Read movie review stream from Kafka with Avro deserialization."""
         kafka_config = self.config['kafka']
+        schema_registry_url = os.getenv("SCHEMA_REGISTRY_URL", "http://schema-registry:8081")
         
         # Read from Kafka
         df = self.spark.readStream \
@@ -150,9 +153,30 @@ class ReviewSentimentStreamProcessor:
             .option("failOnDataLoss", "false") \
             .load()
         
-        # Parse JSON messages
+        # Import Avro functions
+        from pyspark.sql.avro.functions import from_avro
+        
+        # Define the Avro schema for reviews
+        avro_schema = """
+        {
+            "type": "record",
+            "name": "MovieReview",
+            "namespace": "com.moviepipeline.reviews",
+            "fields": [
+                {"name": "review_id", "type": "string"},
+                {"name": "movie_id", "type": "int"},
+                {"name": "author", "type": "string"},
+                {"name": "content", "type": "string"},
+                {"name": "rating", "type": ["null", "double"]},
+                {"name": "created_at", "type": "long", "logicalType": "timestamp-millis"},
+                {"name": "url", "type": "string"}
+            ]
+        }
+        """
+        
+        # Deserialize Avro - skip the Confluent 5-byte header
         parsed_df = df.select(
-            from_json(col("value").cast("string"), self.review_schema).alias("data"),
+            from_avro(expr("substring(value, 6, length(value)-5)"), avro_schema).alias("data"),
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         

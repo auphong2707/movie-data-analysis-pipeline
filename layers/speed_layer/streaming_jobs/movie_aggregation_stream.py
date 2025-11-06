@@ -61,10 +61,12 @@ class MovieAggregationStreamProcessor:
         # spark-sql-kafka: 3.4.4 matches PySpark version
         # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
         # kafka-clients: 3.4.0 compatible with Kafka 7.4.x (Confluent)
+        # spark-avro: 3.4.4 for Avro deserialization
         packages = [
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
             "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
-            "org.apache.kafka:kafka-clients:3.4.0"
+            "org.apache.kafka:kafka-clients:3.4.0",
+            "org.apache.spark:spark-avro_2.12:3.4.4"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
         
@@ -104,8 +106,9 @@ class MovieAggregationStreamProcessor:
         ])
     
     def read_metadata_stream(self) -> DataFrame:
-        """Read movie metadata stream from Kafka."""
+        """Read movie metadata stream from Kafka with Avro deserialization."""
         kafka_config = self.config['kafka']
+        schema_registry_url = os.getenv("SCHEMA_REGISTRY_URL", "http://schema-registry:8081")
         
         df = self.spark.readStream \
             .format("kafka") \
@@ -115,9 +118,37 @@ class MovieAggregationStreamProcessor:
             .option("failOnDataLoss", "false") \
             .load()
         
-        # Parse JSON messages
+        # Import ABRiS functions for Avro deserialization
+        from pyspark.sql.avro.functions import from_avro
+        from pyspark.sql.functions import expr
+        
+        # For ABRiS with Schema Registry, we need to use the Scala API via expr
+        # The value includes a 5-byte Confluent Wire Format header (magic byte + schema ID)
+        # We need to use ABRiS to handle this properly
+        
+        # Create the ABRiS from_confluent_avro configuration
+        abris_config = f"""
+        {{
+            "type": "record",
+            "name": "MovieMetadata",
+            "namespace": "com.moviepipeline.metadata",
+            "fields": [
+                {{"name": "movie_id", "type": "int"}},
+                {{"name": "title", "type": "string"}},
+                {{"name": "release_date", "type": ["null", "string"]}},
+                {{"name": "genres", "type": {{"type": "array", "items": "string"}}}},
+                {{"name": "runtime", "type": ["null", "int"]}},
+                {{"name": "budget", "type": ["null", "long"]}},
+                {{"name": "revenue", "type": ["null", "long"]}},
+                {{"name": "timestamp", "type": "long", "logicalType": "timestamp-millis"}},
+                {{"name": "event_type", "type": "string"}}
+            ]
+        }}
+        """
+        
+        # Use from_avro with the schema (without Schema Registry for now, we'll parse directly)
         parsed_df = df.select(
-            from_json(col("value").cast("string"), self.metadata_schema).alias("data"),
+            from_avro(col("value"), abris_config).alias("data"),
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         
@@ -129,8 +160,9 @@ class MovieAggregationStreamProcessor:
         return timestamped_df
     
     def read_ratings_stream(self) -> DataFrame:
-        """Read movie ratings stream from Kafka."""
+        """Read movie ratings stream from Kafka with Avro deserialization."""
         kafka_config = self.config['kafka']
+        schema_registry_url = os.getenv("SCHEMA_REGISTRY_URL", "http://schema-registry:8081")
         
         df = self.spark.readStream \
             .format("kafka") \
@@ -140,9 +172,28 @@ class MovieAggregationStreamProcessor:
             .option("failOnDataLoss", "false") \
             .load()
         
-        # Parse JSON messages
+        # Import Avro functions
+        from pyspark.sql.avro.functions import from_avro
+        
+        # Define the Avro schema for ratings
+        avro_schema = """
+        {
+            "type": "record",
+            "name": "MovieRating",
+            "namespace": "com.moviepipeline.ratings",
+            "fields": [
+                {"name": "movie_id", "type": "int"},
+                {"name": "vote_average", "type": "double"},
+                {"name": "vote_count", "type": "int"},
+                {"name": "popularity", "type": "double"},
+                {"name": "timestamp", "type": "long", "logicalType": "timestamp-millis"}
+            ]
+        }
+        """
+        
+        # Deserialize Avro - skip the Confluent 5-byte header
         parsed_df = df.select(
-            from_json(col("value").cast("string"), self.rating_schema).alias("data"),
+            from_avro(expr("substring(value, 6, length(value)-5)"), avro_schema).alias("data"),
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         

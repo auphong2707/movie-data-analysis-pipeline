@@ -71,10 +71,12 @@ class TrendingDetectionStreamProcessor:
         # spark-sql-kafka: 3.4.4 matches PySpark version
         # spark-cassandra-connector: 3.4.1 is latest stable for Cassandra 4.x
         # kafka-clients: 3.4.0 compatible with Kafka 7.4.x (Confluent)
+        # spark-avro: 3.4.4 for Avro deserialization
         packages = [
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4",
             "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1",
-            "org.apache.kafka:kafka-clients:3.4.0"
+            "org.apache.kafka:kafka-clients:3.4.0",
+            "org.apache.spark:spark-avro_2.12:3.4.4"
         ]
         builder = builder.config("spark.jars.packages", ",".join(packages))
         
@@ -100,8 +102,9 @@ class TrendingDetectionStreamProcessor:
         ])
     
     def read_ratings_stream(self) -> DataFrame:
-        """Read movie ratings stream from Kafka."""
+        """Read movie ratings stream from Kafka with Avro deserialization."""
         kafka_config = self.config['kafka']
+        schema_registry_url = os.getenv("SCHEMA_REGISTRY_URL", "http://schema-registry:8081")
         
         df = self.spark.readStream \
             .format("kafka") \
@@ -111,9 +114,28 @@ class TrendingDetectionStreamProcessor:
             .option("failOnDataLoss", "false") \
             .load()
         
-        # Parse JSON messages
+        # Import Avro functions
+        from pyspark.sql.avro.functions import from_avro
+        
+        # Define the Avro schema for ratings
+        avro_schema = """
+        {
+            "type": "record",
+            "name": "MovieRating",
+            "namespace": "com.moviepipeline.ratings",
+            "fields": [
+                {"name": "movie_id", "type": "int"},
+                {"name": "vote_average", "type": "double"},
+                {"name": "vote_count", "type": "int"},
+                {"name": "popularity", "type": "double"},
+                {"name": "timestamp", "type": "long", "logicalType": "timestamp-millis"}
+            ]
+        }
+        """
+        
+        # Deserialize Avro - skip the Confluent 5-byte header
         parsed_df = df.select(
-            from_json(col("value").cast("string"), self.rating_schema).alias("data"),
+            from_avro(expr("substring(value, 6, length(value)-5)"), avro_schema).alias("data"),
             col("timestamp").alias("kafka_timestamp")
         ).select("data.*", "kafka_timestamp")
         

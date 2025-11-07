@@ -47,14 +47,38 @@ class Config:
         self.mongodb_database = os.getenv('MONGODB_DATABASE', 'moviedb')
         
         # Spark Configuration
-        self.spark_master_url = os.getenv('SPARK_MASTER_URL', 'spark://localhost:7077')
+        self.spark_master_url = os.getenv('SPARK_MASTER_URL', 'local[*]')
+        self.spark_app_name = os.getenv('SPARK_APP_NAME', 'movie-analytics-pipeline')
+        self.spark_executor_memory = os.getenv('SPARK_EXECUTOR_MEMORY', '4g')
+        self.spark_executor_cores = int(os.getenv('SPARK_EXECUTOR_CORES', '2'))
+        self.spark_driver_memory = os.getenv('SPARK_DRIVER_MEMORY', '2g')
+        
+        # HDFS Configuration
+        self.hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+        self.hdfs_replication = int(os.getenv('HDFS_REPLICATION', '3'))
+        self.hdfs_block_size = os.getenv('HDFS_BLOCK_SIZE', '128m')
+        self.hdfs_paths = {
+            'bronze': os.getenv('HDFS_PATH_BRONZE', '/data/bronze'),
+            'silver': os.getenv('HDFS_PATH_SILVER', '/data/silver'),
+            'gold': os.getenv('HDFS_PATH_GOLD', '/data/gold')
+        }
+        
+        # Batch Layer Configuration
+        self.batch_interval_hours = int(os.getenv('BATCH_INTERVAL_HOURS', '4'))
+        self.bronze_retention_days = int(os.getenv('BRONZE_RETENTION_DAYS', '90'))
+        self.silver_retention_days = int(os.getenv('SILVER_RETENTION_DAYS', '730'))
+        self.gold_retention_days = int(os.getenv('GOLD_RETENTION_DAYS', '1825'))
+        
+        # TMDB API Rate Limiting
+        self.tmdb_rate_limit = float(os.getenv('TMDB_RATE_LIMIT', '4.0'))  # requests per second
+        self.tmdb_retry_attempts = int(os.getenv('TMDB_RETRY_ATTEMPTS', '3'))
+        self.tmdb_retry_backoff = float(os.getenv('TMDB_RETRY_BACKOFF', '2.0'))
         
         # Airbyte Configuration
         self.airbyte_host = os.getenv('AIRBYTE_HOST', 'localhost')
         self.airbyte_port = int(os.getenv('AIRBYTE_PORT', '8001'))
         self.airbyte_workspace_id = os.getenv('AIRBYTE_WORKSPACE_ID')
         self.airbyte_webapp_url = os.getenv('AIRBYTE_WEBAPP_URL', 'http://localhost:8000')
-        self.spark_app_name = os.getenv('SPARK_APP_NAME', 'movie-analytics-pipeline')
         
         # Monitoring Configuration
         self.grafana_url = os.getenv('GRAFANA_URL', 'http://localhost:3000')
@@ -100,6 +124,9 @@ class Config:
             'mongodb_database': self.mongodb_database,
             'spark_master_url': self.spark_master_url,
             'spark_app_name': self.spark_app_name,
+            'hdfs_namenode': self.hdfs_namenode,
+            'hdfs_paths': self.hdfs_paths,
+            'batch_interval_hours': self.batch_interval_hours,
             'grafana_url': self.grafana_url,
             'superset_url': self.superset_url,
             'log_level': self.log_level

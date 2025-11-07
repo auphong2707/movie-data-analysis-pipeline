@@ -187,3 +187,150 @@ SCHEMAS = {
     'reviews': REVIEW_SCHEMA,
     'ratings': RATING_SCHEMA
 }
+
+# ==================== PARQUET SCHEMAS FOR BATCH LAYER ====================
+
+from pyspark.sql.types import (
+    StructType, StructField, StringType, IntegerType, LongType, 
+    DoubleType, BooleanType, TimestampType, DateType, ArrayType
+)
+
+# Bronze Layer Schemas (Raw Data)
+BRONZE_MOVIE_SCHEMA = StructType([
+    StructField("movie_id", IntegerType(), False),
+    StructField("raw_json", StringType(), False),
+    StructField("api_endpoint", StringType(), False),
+    StructField("extraction_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False),
+    StructField("partition_day", IntegerType(), False),
+    StructField("partition_hour", IntegerType(), False)
+])
+
+BRONZE_REVIEW_SCHEMA = StructType([
+    StructField("review_id", StringType(), False),
+    StructField("movie_id", IntegerType(), False),
+    StructField("raw_json", StringType(), False),
+    StructField("api_endpoint", StringType(), False),
+    StructField("extraction_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False),
+    StructField("partition_day", IntegerType(), False),
+    StructField("partition_hour", IntegerType(), False)
+])
+
+# Silver Layer Schemas (Cleaned & Enriched)
+SILVER_MOVIE_SCHEMA = StructType([
+    StructField("movie_id", IntegerType(), False),
+    StructField("title", StringType(), False),
+    StructField("original_title", StringType(), True),
+    StructField("overview", StringType(), True),
+    StructField("release_date", DateType(), True),
+    StructField("adult", BooleanType(), True),
+    StructField("popularity", DoubleType(), True),
+    StructField("vote_average", DoubleType(), True),
+    StructField("vote_count", IntegerType(), True),
+    StructField("budget", LongType(), True),
+    StructField("revenue", LongType(), True),
+    StructField("runtime", IntegerType(), True),
+    StructField("status", StringType(), True),
+    StructField("tagline", StringType(), True),
+    StructField("original_language", StringType(), True),
+    StructField("genres", ArrayType(StringType()), True),
+    StructField("production_companies", ArrayType(StringType()), True),
+    StructField("cast", ArrayType(StringType()), True),
+    StructField("crew", ArrayType(StringType()), True),
+    StructField("keywords", ArrayType(StringType()), True),
+    StructField("quality_flag", StringType(), True),
+    StructField("processed_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False),
+    StructField("partition_genre", StringType(), True)
+])
+
+SILVER_REVIEW_SCHEMA = StructType([
+    StructField("review_id", StringType(), False),
+    StructField("movie_id", IntegerType(), False),
+    StructField("author", StringType(), True),
+    StructField("content", StringType(), False),
+    StructField("created_at", TimestampType(), True),
+    StructField("rating", DoubleType(), True),
+    StructField("sentiment_score", DoubleType(), True),
+    StructField("sentiment_label", StringType(), True),
+    StructField("sentiment_compound", DoubleType(), True),
+    StructField("sentiment_positive", DoubleType(), True),
+    StructField("sentiment_neutral", DoubleType(), True),
+    StructField("sentiment_negative", DoubleType(), True),
+    StructField("quality_flag", StringType(), True),
+    StructField("processed_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False)
+])
+
+# Gold Layer Schemas (Aggregated Views)
+GOLD_GENRE_ANALYTICS_SCHEMA = StructType([
+    StructField("genre", StringType(), False),
+    StructField("year", IntegerType(), False),
+    StructField("month", IntegerType(), False),
+    StructField("total_movies", IntegerType(), False),
+    StructField("avg_rating", DoubleType(), True),
+    StructField("total_revenue", LongType(), True),
+    StructField("avg_budget", LongType(), True),
+    StructField("avg_popularity", DoubleType(), True),
+    StructField("avg_sentiment", DoubleType(), True),
+    StructField("total_reviews", IntegerType(), True),
+    StructField("top_movies", ArrayType(StringType()), True),
+    StructField("computed_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False)
+])
+
+GOLD_TRENDING_SCHEMA = StructType([
+    StructField("movie_id", IntegerType(), False),
+    StructField("title", StringType(), False),
+    StructField("window", StringType(), False),  # 7d, 30d, 90d
+    StructField("trend_score", DoubleType(), True),
+    StructField("velocity", DoubleType(), True),
+    StructField("acceleration", DoubleType(), True),
+    StructField("popularity_start", DoubleType(), True),
+    StructField("popularity_end", DoubleType(), True),
+    StructField("popularity_change_pct", DoubleType(), True),
+    StructField("computed_date", DateType(), False),
+    StructField("computed_timestamp", TimestampType(), False),
+    StructField("partition_window", StringType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), False)
+])
+
+GOLD_TEMPORAL_ANALYTICS_SCHEMA = StructType([
+    StructField("year", IntegerType(), False),
+    StructField("month", IntegerType(), True),
+    StructField("total_movies", IntegerType(), False),
+    StructField("total_revenue", LongType(), True),
+    StructField("avg_rating", DoubleType(), True),
+    StructField("avg_budget", LongType(), True),
+    StructField("top_genre", StringType(), True),
+    StructField("avg_sentiment", DoubleType(), True),
+    StructField("yoy_movie_growth_pct", DoubleType(), True),
+    StructField("yoy_revenue_growth_pct", DoubleType(), True),
+    StructField("computed_timestamp", TimestampType(), False),
+    StructField("partition_year", IntegerType(), False),
+    StructField("partition_month", IntegerType(), True)
+])
+
+# Schema mapping for easy access
+PARQUET_SCHEMAS = {
+    'bronze': {
+        'movies': BRONZE_MOVIE_SCHEMA,
+        'reviews': BRONZE_REVIEW_SCHEMA
+    },
+    'silver': {
+        'movies': SILVER_MOVIE_SCHEMA,
+        'reviews': SILVER_REVIEW_SCHEMA
+    },
+    'gold': {
+        'genre_analytics': GOLD_GENRE_ANALYTICS_SCHEMA,
+        'trending': GOLD_TRENDING_SCHEMA,
+        'temporal_analytics': GOLD_TEMPORAL_ANALYTICS_SCHEMA
+    }
+}

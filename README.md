@@ -438,14 +438,24 @@ Access API documentation at http://localhost:8000/docs
 - [x] Documentation (12+ markdown files)
 - [x] Template code for all layers
 
-### Phase 2: Batch Layer - 🔲 TODO
-- [ ] Deploy HDFS cluster (3 datanodes + namenode)
-- [ ] Implement TMDB → HDFS ingestion
-- [ ] Create Airflow DAGs (batch orchestration)
-- [ ] Bronze → Silver transformations (deduplication, validation)
-- [ ] Silver → Gold aggregations (genre, trends, ratings)
-- [ ] Sentiment analysis (batch processing)
-- [ ] Export batch views to MongoDB
+### Phase 2: Batch Layer - ✅ COMPLETED
+- [x] Configuration enhanced (HDFS, Spark, MongoDB settings)
+- [x] Parquet schemas for Bronze/Silver/Gold layers
+- [x] TMDB API client with rate limiting and retry logic
+- [x] Bronze layer ingestion to HDFS (partitioned by date/hour)
+- [x] Silver layer transformations (deduplication, validation, enrichment)
+- [x] Sentiment analysis (VADER-based batch processing)
+- [x] Gold layer aggregations (genre analytics, trends, temporal analysis)
+- [x] MongoDB export with bulk upserts and indexing
+- [x] Airflow DAG (4-hour schedule with retry logic)
+- [x] Great Expectations data quality validation
+- [x] Utility modules (Spark session, HDFS ops, logging, transformations)
+- [x] Unit tests and integration tests
+- [x] CLI tools for all components
+- [x] Makefile for common operations
+- [x] Comprehensive documentation and run instructions
+
+**See [Batch Layer Implementation Guide](layers/batch_layer/IMPLEMENTATION.md) for details**
 
 ### Phase 3: Speed Layer - 🔲 TODO
 - [ ] Deploy Kafka cluster (3 brokers + Zookeeper)

@@ -263,7 +263,6 @@ services:
     command: python kafka_producers/setup_topics.py create
     volumes:
       - .:/app
-      - ../../config:/app/config
     networks:
       - movie-pipeline
     restart: "no"
@@ -287,7 +286,6 @@ services:
     command: python kafka_producers/tmdb_stream_producer.py
     volumes:
       - .:/app
-      - ../../config:/app/config
       - speed-layer-logs:/app/logs
     networks:
       - movie-pipeline
@@ -323,7 +321,6 @@ services:
     command: python streaming_jobs/review_sentiment_stream.py
     volumes:
       - .:/app
-      - ../../config:/app/config
       - speed-layer-logs:/app/logs
       - spark-checkpoints:/app/checkpoints
     networks:
@@ -360,7 +357,6 @@ services:
     command: python streaming_jobs/movie_aggregation_stream.py
     volumes:
       - .:/app
-      - ../../config:/app/config
       - speed-layer-logs:/app/logs
       - spark-checkpoints:/app/checkpoints
     networks:
@@ -397,7 +393,6 @@ services:
     command: python streaming_jobs/trending_detection_stream.py
     volumes:
       - .:/app
-      - ../../config:/app/config
       - speed-layer-logs:/app/logs
       - spark-checkpoints:/app/checkpoints
     networks:
@@ -440,7 +435,6 @@ services:
     command: python connectors/cassandra_to_mongo.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
     volumes:
       - .:/app
-      - ../../config:/app/config
       - speed-layer-logs:/app/logs
     networks:
       - movie-pipeline

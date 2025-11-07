@@ -233,7 +233,7 @@ SYNC_INTERVAL=300  # MongoDB sync interval in seconds (default: 5 minutes)
 ```
 
 ### Spark Configuration
-Located in `config/spark_streaming_config.yaml`:
+Located in `layers/speed_layer/config/spark_streaming_config.yaml`:
 - Checkpoint locations
 - Window durations
 - Batch sizes

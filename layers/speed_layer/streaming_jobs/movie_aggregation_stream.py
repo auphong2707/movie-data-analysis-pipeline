@@ -20,8 +20,8 @@ from pyspark.sql.types import (
 from pyspark.sql.window import Window
 
 # Add config to path
-sys.path.insert(0, '/app/config')
-from config_loader import load_config
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from config.config_loader import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class MovieAggregationStreamProcessor:
     """Process movie data for real-time aggregations and metrics."""
     
-    def __init__(self, config_path: str = "/app/config/spark_streaming_config.yaml"):
+    def __init__(self, config_path: str = "config/spark_streaming_config.yaml"):
         """Initialize the movie aggregation stream processor."""
         
         # Load configuration with env var substitution

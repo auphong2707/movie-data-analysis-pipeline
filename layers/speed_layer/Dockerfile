@@ -58,9 +58,7 @@ COPY streaming_jobs/ /app/streaming_jobs/
 COPY kafka_producers/ /app/kafka_producers/
 COPY cassandra_views/ /app/cassandra_views/
 COPY connectors/ /app/connectors/
-
-# Note: config/ folder will be mounted as volume in docker-compose.yml
-# so we don't copy it here to avoid conflicts
+COPY config/ /app/config/
 
 # ---------------------------------------------------------------------
 # STEP 7: Create logs and checkpoints directories
@@ -72,8 +70,8 @@ RUN mkdir -p /app/logs /app/checkpoints
 # ---------------------------------------------------------------------
 # STEP 8: Set up PYTHONPATH
 # ---------------------------------------------------------------------
-# Ensure Python finds modules from /app and /app/config
-ENV PYTHONPATH=/app:/app/config
+# Ensure Python finds modules from /app
+ENV PYTHONPATH=/app
 
 # ---------------------------------------------------------------------
 # STEP 9: Expose Spark UI port

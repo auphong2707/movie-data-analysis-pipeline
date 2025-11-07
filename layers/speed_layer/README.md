@@ -88,7 +88,9 @@ speed_layer/
 │   ├── sync_scheduler.py          # Periodic sync
 │   └── README.md                  # Connector documentation
 │
-├── config/                        # Configuration
+├── config/                        # Speed Layer Configuration
+│   ├── __init__.py                # Config module init
+│   ├── config_loader.py           # YAML config loader with env vars
 │   ├── kafka_config.yaml          # Kafka settings
 │   ├── spark_streaming_config.yaml # Streaming settings
 │   └── cassandra_config.yaml      # Cassandra settings
@@ -483,7 +485,7 @@ db.speed_views.createIndex({ "ttl_expires_at": 1 }, { expireAfterSeconds: 0 })
 
 ## Configuration
 
-### Kafka Configuration (`config/kafka_config.yaml`)
+### Kafka Configuration (`layers/speed_layer/config/kafka_config.yaml`)
 
 ```yaml
 kafka:
@@ -518,7 +520,7 @@ kafka:
 
 ---
 
-### Spark Streaming Configuration (`config/spark_streaming_config.yaml`)
+### Spark Streaming Configuration (`layers/speed_layer/config/spark_streaming_config.yaml`)
 
 ```yaml
 spark_streaming:
@@ -550,7 +552,7 @@ spark_streaming:
 
 ---
 
-### Cassandra Configuration (`config/cassandra_config.yaml`)
+### Cassandra Configuration (`layers/speed_layer/config/cassandra_config.yaml`)
 
 ```yaml
 cassandra:

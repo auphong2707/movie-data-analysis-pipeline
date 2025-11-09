@@ -15,9 +15,11 @@ Features:
 - SLA monitoring
 - Retry logic with exponential backoff
 - Task dependencies with proper ordering
+- Uses spark-submit to submit jobs to Spark cluster
 
 Author: Data Engineering Team
 Created: 2025-01-15
+Updated: 2025-11-10 - Migrated to SparkSubmitOperator
 """
 
 from datetime import datetime, timedelta
@@ -27,6 +29,14 @@ from airflow.operators.bash import BashOperator
 from airflow.utils.dates import days_ago
 import os
 import sys
+
+# Try to import SparkSubmitOperator, fallback to BashOperator if not available
+try:
+    from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+    SPARK_SUBMIT_AVAILABLE = True
+except ImportError:
+    SPARK_SUBMIT_AVAILABLE = False
+    print("WARNING: apache-airflow-providers-apache-spark not installed. Using BashOperator fallback.")
 
 # Add project root to path (Docker-aware)
 PROJECT_ROOT = os.getenv('AIRFLOW_PROJECT_ROOT', '/app')
@@ -66,91 +76,89 @@ SILVER_SCRIPT = f'{PROJECT_ROOT}/layers/batch_layer/spark_jobs/silver/run.py'
 GOLD_SCRIPT = f'{PROJECT_ROOT}/layers/batch_layer/spark_jobs/gold/run.py'
 MONGO_EXPORT_SCRIPT = f'{PROJECT_ROOT}/layers/batch_layer/batch_views/export_to_mongo.py'
 
+# Spark cluster configuration
+SPARK_MASTER = 'spark://batch_spark_master:7077'
+SPARK_DEPLOY_MODE = 'client'
+
 
 def get_execution_date(**context):
     """Get execution date from Airflow context."""
     return context['execution_date'].strftime('%Y-%m-%d')
 
 
-# Task 1: Ingest Bronze Layer
+# Task 1: Ingest Bronze Layer using spark-submit
 ingest_bronze = BashOperator(
     task_id='ingest_bronze',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {BRONZE_SCRIPT} \
         --pages 20 \
         --categories popular,top_rated,now_playing \
-        2>&1 | tee logs/bronze_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/bronze_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 2: Transform to Silver Layer - Movies
+# Task 2: Transform to Silver Layer - Movies using spark-submit
 transform_silver_movies = BashOperator(
     task_id='transform_silver_movies',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {SILVER_SCRIPT} \
         --execution-date {{{{ ds }}}} \
         --data-type movies \
-        2>&1 | tee logs/silver_movies_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/silver_movies_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 3: Transform to Silver Layer - Reviews
+# Task 3: Transform to Silver Layer - Reviews using spark-submit
 transform_silver_reviews = BashOperator(
     task_id='transform_silver_reviews',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {SILVER_SCRIPT} \
         --execution-date {{{{ ds }}}} \
         --data-type reviews \
-        2>&1 | tee logs/silver_reviews_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/silver_reviews_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 4: Aggregate to Gold Layer - Genre Analytics
+# Task 4: Aggregate to Gold Layer - Genre Analytics using spark-submit
 aggregate_gold_genre = BashOperator(
     task_id='aggregate_gold_genre',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {GOLD_SCRIPT} \
         --execution-date {{{{ ds }}}} \
         --metric-type genre_analytics \
-        2>&1 | tee logs/gold_genre_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/gold_genre_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 5: Aggregate to Gold Layer - Trending
+# Task 5: Aggregate to Gold Layer - Trending using spark-submit
 aggregate_gold_trending = BashOperator(
     task_id='aggregate_gold_trending',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {GOLD_SCRIPT} \
         --execution-date {{{{ ds }}}} \
         --metric-type trending \
-        2>&1 | tee logs/gold_trending_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/gold_trending_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 6: Aggregate to Gold Layer - Temporal Analytics
+# Task 6: Aggregate to Gold Layer - Temporal Analytics using spark-submit
 aggregate_gold_temporal = BashOperator(
     task_id='aggregate_gold_temporal',
     bash_command=f"""
-    cd {PROJECT_ROOT} && \
     python {GOLD_SCRIPT} \
         --execution-date {{{{ ds }}}} \
         --metric-type temporal_analytics \
-        2>&1 | tee logs/gold_temporal_{{{{ ds }}}}.log
+        2>&1 | tee {PROJECT_ROOT}/logs/gold_temporal_{{{{ ds }}}}.log
     """,
     dag=dag,
 )
 
-# Task 7: Export to MongoDB - Genre Analytics
+# Task 7: Export to MongoDB - Genre Analytics (runs on Airflow, no spark-submit needed)
 export_mongo_genre = BashOperator(
     task_id='export_mongo_genre',
     bash_command=f"""
@@ -163,7 +171,7 @@ export_mongo_genre = BashOperator(
     dag=dag,
 )
 
-# Task 8: Export to MongoDB - Trending
+# Task 8: Export to MongoDB - Trending (runs on Airflow, no spark-submit needed)
 export_mongo_trending = BashOperator(
     task_id='export_mongo_trending',
     bash_command=f"""
@@ -176,7 +184,7 @@ export_mongo_trending = BashOperator(
     dag=dag,
 )
 
-# Task 9: Export to MongoDB - Temporal Analytics
+# Task 9: Export to MongoDB - Temporal Analytics (runs on Airflow, no spark-submit needed)
 export_mongo_temporal = BashOperator(
     task_id='export_mongo_temporal',
     bash_command=f"""

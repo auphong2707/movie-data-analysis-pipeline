@@ -1,1316 +1,975 @@
-# Batch Layer - Movie Data Analysis Pipeline# Batch Layer - Historical Data Processing
+# Batch Layer - Historical Data Processing
 
+Complete batch processing layer for ingesting, transforming, and serving movie analytics data from TMDB API using the Lambda Architecture pattern.
 
+## Table of Contents
 
-Complete batch processing layer for ingesting, transforming, and serving movie analytics data from TMDB API using the Lambda Architecture pattern.## Table of Contents
-
-
-
----- [Overview](#overview)
-
+- [Overview](#overview)
 - [Quick Start with Docker](#quick-start-with-docker)
-
-## 🎯 Overview- [Architecture](#architecture)
-
+- [Architecture](#architecture)
 - [Data Layers](#data-layers)
+- [Service URLs](#service-urls)
+- [Usage](#usage)
+- [Data Pipeline](#data-pipeline)
+- [Airflow DAGs](#airflow-dags)
+- [Spark Jobs](#spark-jobs)
+- [Testing & Validation](#testing--validation)
+- [Troubleshooting](#troubleshooting)
+- [Configuration](#configuration)
 
-The Batch Layer implements a multi-stage data pipeline that:- [Manual Usage](#manual-usage)
-
-1. **Ingests** movie data from TMDB API (Bronze Layer)- [Development](#development)
-
-2. **Transforms** and cleans data with quality checks (Silver Layer)  
-
-3. **Aggregates** analytics by genre, trending, and temporal metrics (Gold Layer)## Overview
-
-4. **Serves** pre-computed views via MongoDB for fast queries
+## Overview
 
 The **Batch Layer** is responsible for processing the complete historical dataset to generate accurate, comprehensive views. It runs periodically (every 4 hours) and prioritizes accuracy over latency.
 
-### Architecture
+The Batch Layer implements a multi-stage data pipeline that:
 
----
+1. **Ingests** movie data from TMDB API (Bronze Layer)
+2. **Transforms** and cleans data with quality checks (Silver Layer)
+3. **Aggregates** analytics by genre, trending, and temporal metrics (Gold Layer)
+4. **Serves** pre-computed views via MongoDB for fast queries
+
+## Architecture
 
 ```
-
-TMDB API → Bronze (Raw) → Silver (Clean) → Gold (Aggregated) → MongoDB (Serving)## Quick Start with Docker
-
+TMDB API → Bronze (Raw) → Silver (Clean) → Gold (Aggregated) → MongoDB (Serving)
             HDFS           HDFS             HDFS                  NoSQL DB
+```
 
-```### Prerequisites
+**Data Flow:**
 
+```
+TMDB API (scheduled extraction)
+    ↓ (Airflow DAG - every 4 hours)
+┌───────────────────────────────────────┐
+│         BRONZE LAYER (HDFS)           │
+│  • Raw JSON → Parquet                 │
+│  • Partition: /year/month/day/hour    │
+│  • No transformations, immutable      │
+└────────────────┬──────────────────────┘
+                 ↓ (Spark Batch Job)
+┌───────────────────────────────────────┐
+│         SILVER LAYER (HDFS)           │
+│  • Deduplication (movie_id)           │
+│  • Schema validation & enrichment     │
+│  • Genre/cast joins                   │
+│  • Historical sentiment analysis      │
+│  • Partition: /year/month/genre       │
+└────────────────┬──────────────────────┘
+                 ↓ (Spark Aggregations)
+┌───────────────────────────────────────┐
+│          GOLD LAYER (HDFS)            │
+│  • Aggregations by genre/year/tier    │
+│  • Trend scores (7d, 30d, 90d)        │
+│  • Popularity metrics                 │
+│  • Partition: /metric_type/year/month │
+└────────────────┬──────────────────────┘
+                 ↓ (Export to Serving)
+┌───────────────────────────────────────┐
+│      MONGODB (Batch Views)            │
+│  • Collection: batch_views            │
+│  • Updated every 4 hours              │
+│  • Indexed for fast queries           │
+└───────────────────────────────────────┘
+```
 
-
----- Docker 24.0+ and Docker Compose 2.0+
-
-- At least 8GB RAM allocated to Docker
-
-## 🚀 Quick Start- 20GB free disk space
-
-- TMDB API Key (already configured: `36bdc639ae379da0a89bfb9c556e2136`)
+## Quick Start with Docker
 
 ### Prerequisites
 
-### Start the Stack
+- Docker 24.0+ and Docker Compose 2.0+
+- At least 8GB RAM allocated to Docker
+- 20GB free disk space
+- TMDB API key (get from https://www.themoviedb.org/settings/api)
 
-- Docker & Docker Compose 2.0+
+### Setup Steps
 
-- 8GB+ RAM recommended```bash
-
-- 20GB+ free disk space# Navigate to batch layer directory
-
-- TMDB API key (get from https://www.themoviedb.org/settings/api)cd layers/batch_layer
-
-
-
-### 1. Setup Environment# Start all services (HDFS, Spark, Airflow, MongoDB)
-
-make up
+**Step 1: Navigate to batch layer**
 
 ```bash
-
-# Navigate to batch layer directory# Check service status
-
-cd layers/batch_layermake ps
-
-
-
-# Copy environment template# View service URLs
-
-cp .env.example .envmake ui
-
+cd layers/batch_layer
 ```
+
+**Step 2: Setup environment**
+
+```bash
+# Copy environment template
+cp .env.example .env
 
 # Edit .env and add your TMDB API key
-
-nano .env  # or vim, code, etc.### Service URLs
-
+nano .env  # or vim, code, etc.
 ```
-
-Once all services are running:
 
 **Required:** Update `TMDB_API_KEY` in `.env` file.
 
-| Service | URL | Credentials |
-
-### 2. Start Services|---------|-----|-------------|
-
-| **Airflow UI** | http://localhost:8080 | admin / admin |
-
-```bash| **Spark Master UI** | http://localhost:8081 | - |
-
-# Start all services (HDFS, Spark, Airflow, MongoDB)| **HDFS Namenode UI** | http://localhost:9870 | - |
-
-sudo docker compose -f docker-compose.batch.yml up -d| **Mongo Express** | http://localhost:8082 | admin / admin |
-
-| **MongoDB** | mongodb://localhost:27017 | admin / password |
-
-# Wait for services to be healthy (~30-60 seconds)
-
-sudo docker compose -f docker-compose.batch.yml ps### Run Your First Pipeline
-
-```
+**Step 3: Start all services**
 
 ```bash
+# Start all services (HDFS, Spark, Airflow, MongoDB)
+make up
 
-### 3. Verify Deployment# Wait for all services to be healthy (2-3 minutes)
+# Check service status
+make ps
 
+# View service URLs
+make ui
+```
+
+**Step 4: Verify deployment**
+
+```bash
+# Wait for all services to be healthy (2-3 minutes)
 make health
 
-```bash
-
-# Check all services are running# Create HDFS directories
-
-sudo docker compose -f docker-compose.batch.yml psmake hdfs-create-dirs
-
-
-
-# Expected: 11 services with status "Up" or "Healthy"# Trigger the batch pipeline DAG
-
-```make trigger-dag
-
-
-
-All services should show status "Up (healthy)":# Monitor logs
-
-- ✅ HDFS: namenode + 3 datanodes  make logs-airflow
-
-- ✅ Spark: master + 2 workers
-
-- ✅ Airflow: webserver + scheduler + init# Check HDFS data
-
-- ✅ PostgreSQL (Airflow metadata)make hdfs-ls
-
-- ✅ MongoDB + Mongo Express
-
-# Query MongoDB batch_views
-
----make mongo-query-views
-
+# Create HDFS directories
+make hdfs-create-dirs
 ```
 
-## 📊 Data Pipeline
+All services should show status "Up (healthy)":
+- ✅ HDFS: namenode + 3 datanodes
+- ✅ Spark: master + 2 workers
+- ✅ Airflow: webserver + scheduler + init
+- ✅ PostgreSQL (Airflow metadata)
+- ✅ MongoDB + Mongo Express
+
+## Service URLs
+
+Once all services are running:
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| **Airflow UI** | http://localhost:8080 | admin / admin |
+| **Spark Master UI** | http://localhost:8081 | - |
+| **HDFS Namenode UI** | http://localhost:9870 | - |
+| **Mongo Express** | http://localhost:8082 | admin / admin |
+| **MongoDB** | mongodb://localhost:27017 | admin / password |
+
+## Usage
+
+### Run Your First Pipeline
+
+```bash
+# Trigger the batch pipeline DAG
+make trigger-dag
+
+# Monitor logs
+make logs-airflow
+
+# Check HDFS data
+make hdfs-ls
+
+# Query MongoDB batch_views
+make mongo-query-views
+```
 
 ### Common Commands
 
-### Input Source
-
 ```bash
+# View all available commands
+make help
 
-**TMDB API** - The Movie Database API# View all available commands
-
-- **Endpoints**: `/movie/popular`, `/movie/top_rated`, `/movie/now_playing`make help
-
-- **Rate Limit**: 4 requests/second
-
-- **Volume**: ~1,200 movies per 4-hour batch run (20 pages × 3 categories)# Follow logs for specific services
-
+# Follow logs for specific services
 make logs-airflow    # Airflow logs
+make logs-spark      # Spark logs
+make logs-hdfs       # HDFS logs
+make logs-mongo      # MongoDB logs
 
-**Sample API Response Fields:**make logs-spark      # Spark logs
+# Run a backfill for a date range
+make backfill START=2024-01-01 END=2024-01-31
 
-```jsonmake logs-hdfs       # HDFS logs
+# Stop all services
+make down
 
-{make logs-mongo      # MongoDB logs
+# Stop and remove all data
+make down-v
 
-  "id": 550,
-
-  "title": "Fight Club",# Run a backfill for a date range
-
-  "release_date": "1999-10-15",make backfill START=2024-01-01 END=2024-01-31
-
-  "vote_average": 8.4,
-
-  "vote_count": 26280,# Stop all services
-
-  "popularity": 61.416,make down
-
-  "genre_ids": [18, 53, 35],
-
-  "overview": "A ticking-time-bomb insomniac...",# Stop and remove all data
-
-  ...make down-v
-
-}
-
-```# Rebuild images
-
+# Rebuild images
 make build
 
-### Processing Layers
-
 # Open shells
-
-#### 🥉 Bronze Layer (Raw Storage)make airflow-shell        # Airflow container
-
-- **Location**: HDFS `/movie-data/bronze/movies/`make spark-master-shell   # Spark master container
-
-- **Format**: Parquet (Snappy compressed)make mongo-shell          # MongoDB shell
-
-- **Partitioning**: `year/month/day/hour````
-
-- **Schema**: Raw JSON + extraction metadata
-
-- **Retention**: 90 days### Verify Pipeline Execution
-
-- **Purpose**: Immutable raw data for reprocessing
-
-1. **Check Airflow DAG**:
-
-#### 🥈 Silver Layer (Clean & Enriched)   - Open http://localhost:8080
-
-- **Location**: HDFS `/movie-data/silver/movies/`   - Login with `admin` / `admin`
-
-- **Format**: Parquet (Snappy compressed)   - Navigate to DAGs → `tmdb_batch_pipeline`
-
-- **Partitioning**: `year/month/genre`   - Unpause the DAG (toggle switch)
-
-- **Schema**: 40+ typed fields with quality metrics   - Click "Trigger DAG" or wait for scheduled run
-
-- **Retention**: 2 years
-
-- **Processing**:2. **Monitor Spark Jobs**:
-
-  - ✓ Deduplication by `movie_id`   - Open http://localhost:8081
-
-  - ✓ Data type validation & casting   - Check running applications
-
-  - ✓ Genre ID → Genre name mapping
-
-  - ✓ Quality score calculation (0-1)3. **Verify HDFS Data**:
-
-  - ✓ Null handling & default values   ```bash
-
-  - ✓ Date extraction (year, month, day)   make hdfs-ls
-
-   # Should show data in /data/bronze, /data/silver, /data/gold
-
-**Key Fields:**   ```
-
-```python
-
-- movie_id (integer, unique)4. **Check MongoDB Data**:
-
-- title, original_title (strings)   ```bash
-
-- release_date, release_year, release_month (date fields)   make mongo-query-views
-
-- vote_average (float, 0-10), vote_count (integer)   # Should show documents in batch_views collection
-
-- popularity (float)   ```
-
-- genres (array), primary_genre (string)
-
-- quality_score (float, 0-1)### Troubleshooting
-
-- is_complete (boolean)
-
-- processed_timestamp (timestamp)**Services not starting?**
-
-``````bash
-
-# Check service health
-
-#### 🥇 Gold Layer (Aggregated Analytics)make health
-
-- **Location**: HDFS `/movie-data/gold/{metric_type}/`
-
-- **Format**: Parquet (Snappy compressed)# View logs for failing service
-
-- **Partitioning**: `year/month`make logs
-
-- **Retention**: 5 years
-
-- **Metrics**: 3 types# Restart services
-
-make restart
-
-**1. Genre Analytics** (`/gold/genre_analytics/`)```
-
-```python
-
-{**HDFS safe mode?**
-
-  "genre": "Action",```bash
-
-  "year": 2025,# Wait 30 seconds for HDFS to exit safe mode
-
-  "month": 11,docker compose -f docker-compose.batch.yml exec namenode hdfs dfsadmin -safemode get
-
-  "total_movies": 45,```
-
-  "avg_rating": 7.2,
-
-  "avg_popularity": 68.5,**Airflow DAG not showing?**
-
-  "total_revenue": 2500000000,```bash
-
-  "avg_budget": 120000000,# List DAGs
-
-  "top_movies": ["Movie 1", "Movie 2", ...],  # Top 10make list-dags
-
-  "computed_timestamp": "2025-11-09T10:00:00Z"
-
-}# Check Airflow logs
-
-```make logs-airflow
-
+make airflow-shell        # Airflow container
+make spark-master-shell   # Spark master container
+make mongo-shell          # MongoDB shell
 ```
 
-**2. Trending Movies** (`/gold/trending/`)
+### Verify Pipeline Execution
 
-```python**Out of memory?**
+1. **Check Airflow DAG**:
+   - Open http://localhost:8080
+   - Login with `admin` / `admin`
+   - Navigate to DAGs → `tmdb_batch_pipeline`
+   - Unpause the DAG (toggle switch)
+   - Click "Trigger DAG" or wait for scheduled run
 
-{```bash
+2. **Monitor Spark Jobs**:
+   - Open http://localhost:8081
+   - Check running applications
 
-  "movie_id": 550,# Check Docker resources
+3. **Verify HDFS Data**:
+   ```bash
+   make hdfs-ls
+   # Should show data in /data/bronze, /data/silver, /data/gold
+   ```
 
-  "title": "Dune Part 3",docker stats
+4. **Check MongoDB Data**:
+   ```bash
+   make mongo-query-views
+   # Should show documents in batch_views collection
+   ```
 
-  "window_days": 7,  # or 30
+## Data Pipeline
 
-  "trending_score": 98.5,# Reduce Spark worker memory in docker-compose.batch.yml
+### Input Source
 
-  "rank": 1,# SPARK_WORKER_MEMORY=2g (instead of 4g)
+**TMDB API** - The Movie Database API
 
-  "computed_timestamp": "2025-11-09T10:00:00Z"```
+- **Endpoints**: `/movie/popular`, `/movie/top_rated`, `/movie/now_playing`
+- **Rate Limit**: 4 requests/second
+- **Volume**: ~1,200 movies per 4-hour batch run (20 pages × 3 categories)
 
+**Sample API Response Fields:**
+
+```json
+{
+  "id": 550,
+  "title": "Fight Club",
+  "release_date": "1999-10-15",
+  "vote_average": 8.4,
+  "vote_count": 26280,
+  "popularity": 61.416,
+  "genre_ids": [18, 53, 35],
+  "overview": "A ticking-time-bomb insomniac...",
+  ...
 }
+```
 
-```---
+### Data Layers
 
+#### Bronze Layer (Raw Data)
 
+**Purpose**: Store immutable, raw data exactly as received from TMDB API
 
-**3. Temporal Analytics** (`/gold/temporal_analytics/`)## Architecture
-
+**Schema**:
 ```python
+# Parquet format
+bronze_schema = {
+    "movie_id": "int",
+    "raw_json": "string",  # Complete API response
+    "api_endpoint": "string",  # movies/people/reviews
+    "extraction_timestamp": "timestamp",
+    "partition_year": "int",
+    "partition_month": "int",
+    "partition_day": "int",
+    "partition_hour": "int"
+}
+```
 
-{```
+**Partitioning**:
+```
+/bronze/movies/year=2025/month=10/day=17/hour=14/
+/bronze/reviews/year=2025/month=10/day=17/hour=14/
+/bronze/people/year=2025/month=10/day=17/hour=14/
+```
 
-  "year": 2025,TMDB API (scheduled extraction)
+**Retention**: 90 days (configurable)
 
-  "month": 11,    ↓ (Airflow DAG - every 4 hours)
+**Implementation**: `master_dataset/ingestion.py`
 
-  "total_movies": 243,┌───────────────────────────────────────┐
+---
 
-  "avg_rating": 7.35,│         BRONZE LAYER (HDFS)           │
+#### Silver Layer (Cleaned Data)
 
-  "avg_popularity": 55.8,│  • Raw JSON → Parquet                 │
+**Purpose**: Cleaned, validated, and enriched data ready for analytics
 
-  "top_genre": "Action",│  • Partition: /year/month/day/hour    │
+**Transformations**:
+1. **Deduplication**: Remove duplicate movie_id entries
+2. **Schema Validation**: Ensure data quality
+3. **Enrichment**: 
+   - Join genre names from genre_ids
+   - Join cast/crew information
+   - Extract keywords and production companies
+4. **Sentiment Analysis**: Historical review sentiment
+5. **Data Type Casting**: Proper types for all fields
 
-  "release_distribution": {"1-10": 78, "11-20": 82, "21-30": 83}│  • No transformations, immutable      │
+**Schema**:
+```python
+silver_schema = {
+    "movie_id": "int",
+    "title": "string",
+    "release_date": "date",
+    "genres": "array<string>",
+    "vote_average": "double",
+    "vote_count": "int",
+    "popularity": "double",
+    "budget": "long",
+    "revenue": "long",
+    "runtime": "int",
+    "cast": "array<struct<name:string, character:string>>",
+    "crew": "array<struct<name:string, job:string>>",
+    "sentiment_score": "double",  # -1 to 1
+    "sentiment_label": "string",  # positive/neutral/negative
+    "quality_flag": "string",  # OK/WARNING/ERROR
+    "processed_timestamp": "timestamp",
+    "partition_year": "int",
+    "partition_month": "int",
+    "partition_genre": "string"
+}
+```
 
-}└────────────────┬──────────────────────┘
+**Partitioning**:
+```
+/silver/movies/year=2025/month=10/genre=action/
+/silver/reviews/year=2025/month=10/genre=action/
+```
 
-```                 ↓ (Spark Batch Job)
+**Retention**: 2 years
 
-┌───────────────────────────────────────┐
+**Implementation**: `spark_jobs/bronze_to_silver.py`
 
-### Output Destination│         SILVER LAYER (HDFS)           │
+---
 
-│  • Deduplication (movie_id)           │
+#### Gold Layer (Aggregated Data)
 
-**MongoDB** - Serving Layer│  • Schema validation & enrichment     │
+**Purpose**: Business-ready aggregations and analytics
 
-- **Database**: `moviedb`│  • Genre/cast joins                   │
+**Aggregations**:
+1. **Movie Popularity Trends**: 7-day, 30-day, 90-day rolling windows
+2. **Genre Analytics**: Average ratings, revenue by genre
+3. **Temporal Analysis**: Year-over-year comparisons
+4. **Actor Networks**: Collaboration graphs
+5. **Sentiment Trends**: Sentiment changes over time
 
-- **Collection**: `batch_views`│  • Historical sentiment analysis      │
-
-- **Connection**: `mongodb://admin:password@localhost:27017/moviedb`│  • Partition: /year/month/genre       │
-
-- **Update Strategy**: Upsert (insert or replace)└────────────────┬──────────────────────┘
-
-- **Indexes**: 6 optimized indexes for fast queries                 ↓ (Spark Aggregations)
-
-┌───────────────────────────────────────┐
-
-**Document Structure:**│          GOLD LAYER (HDFS)            │
-
-```javascript│  • Aggregations by genre/year/tier    │
-
-{│  • Trend scores (7d, 30d, 90d)        │
-
-  "_id": ObjectId("..."),│  • Popularity metrics                 │
-
-  "view_type": "genre_analytics",  // or "trending_movies", "temporal_analytics"│  • Partition: /metric_type/year/month │
-
-  "batch_run_id": "batch_2025_11_09_10",└────────────────┬──────────────────────┘
-
-  "computed_at": ISODate("2025-11-09T10:00:00Z"),                 ↓ (Export to Serving)
-
-  "data_freshness": "batch",┌───────────────────────────────────────┐
-
-  "update_frequency": "4_hours",│      MONGODB (Batch Views)            │
-
-  │  • Collection: batch_views            │
-
-  // Type-specific fields│  • Updated every 4 hours              │
-
-  "genre": "Action",│  • Indexed for fast queries           │
-
-  "year": 2025,└───────────────────────────────────────┘
-
-  "month": 11,```
-
-  "total_movies": 45,
-
-  "avg_rating": 7.2,---
-
-  "top_movies": [...],
-
-  ...## Key Characteristics
-
+**Views**:
+```python
+# Genre aggregations
+genre_analytics = {
+    "genre": "string",
+    "year": "int",
+    "month": "int",
+    "total_movies": "int",
+    "avg_rating": "double",
+    "total_revenue": "long",
+    "avg_sentiment": "double",
+    "top_movies": "array<string>"
 }
 
-```| Property | Value | Rationale |
+# Trending scores
+trending_scores = {
+    "movie_id": "int",
+    "window": "string",  # 7d/30d/90d
+    "trend_score": "double",
+    "velocity": "double",  # rate of popularity change
+    "computed_date": "date"
+}
+```
 
-|----------|-------|-----------|
+**Partitioning**:
+```
+/gold/genre_analytics/year=2025/month=10/
+/gold/trending_scores/window=7d/year=2025/month=10/
+/gold/actor_networks/year=2025/month=10/
+```
 
-**Indexes:**| **Schedule** | Every 4 hours | Balances freshness vs cost |
+**Retention**: 5 years
 
-1. `_id_` - Default primary key| **Accuracy** | 100% | No approximations allowed |
+**Implementation**: `spark_jobs/silver_to_gold.py`
 
-2. `view_type + genre + year + month` - Genre analytics queries| **Latency** | Hours | Acceptable for historical data |
+---
 
-3. `view_type + movie_id` - Movie-specific queries| **Reprocessing** | Full history | Can recompute from scratch |
+### Output Destination
 
-4. `view_type + computed_at` - Freshness queries| **Storage** | HDFS | Distributed, fault-tolerant |
+**MongoDB** - Serving Layer
 
-5. `batch_run_id` - Batch run tracking| **Retention** | Bronze: 90d, Silver: 2y, Gold: 5y | Cost vs compliance |
+- **Database**: `moviedb`
+- **Collection**: `batch_views`
+- **Connection**: `mongodb://admin:password@localhost:27017/moviedb`
+- **Update Strategy**: Upsert (insert or replace)
+- **Indexes**: 6 optimized indexes for fast queries
 
+**Document Structure:**
+```javascript
+{
+  "_id": ObjectId("..."),
+  "view_type": "genre_analytics",  // or "trending_movies", "temporal_analytics"
+  "batch_run_id": "batch_2025_11_09_10",
+  "computed_at": ISODate("2025-11-09T10:00:00Z"),
+  "data_freshness": "batch",
+  "update_frequency": "4_hours",
+  
+  // Type-specific fields
+  "genre": "Action",
+  "year": 2025,
+  "month": 11,
+  "total_movies": 45,
+  "avg_rating": 7.2,
+  "top_movies": [...],
+  ...
+}
+```
+
+**Indexes**:
+1. `_id_` - Default primary key
+2. `view_type + genre + year + month` - Genre analytics queries
+3. `view_type + movie_id` - Movie-specific queries
+4. `view_type + computed_at` - Freshness queries
+5. `batch_run_id` - Batch run tracking
 6. `view_type + window_days + trending_score` - Trending queries
 
 ---
+
+## Key Characteristics
+
+| Property | Value | Rationale |
+|----------|-------|-----------|
+| **Schedule** | Every 4 hours | Balances freshness vs cost |
+| **Accuracy** | 100% | No approximations allowed |
+| **Latency** | Hours | Acceptable for historical data |
+| **Reprocessing** | Full history | Can recompute from scratch |
+| **Storage** | HDFS | Distributed, fault-tolerant |
+| **Retention** | Bronze: 90d, Silver: 2y, Gold: 5y | Cost vs compliance |
+
+---
+
+## Airflow DAGs
+
+### 1. Batch Ingestion DAG (`batch_ingestion_dag.py`)
+
+**Schedule**: Every 4 hours  
+**Purpose**: Extract data from TMDB API and store in Bronze layer
+
+**DAG Structure**:
+```
+[start] 
+  → [check_api_health]
+  → [extract_movies] 
+  → [extract_reviews]
+  → [extract_people]
+  → [validate_extraction]
+  → [store_to_hdfs_bronze]
+  → [update_metadata]
+  → [end]
+```
+
+**Tasks**:
+- `check_api_health`: Verify TMDB API availability
+- `extract_*`: Parallel extraction from different endpoints
+- `validate_extraction`: Check data completeness
+- `store_to_hdfs_bronze`: Write Parquet to HDFS
+- `update_metadata`: Update extraction logs
+
+---
+
+### 2. Batch Transform DAG (`batch_transform_dag.py`)
+
+**Schedule**: 30 minutes after ingestion  
+**Purpose**: Transform Bronze → Silver
+
+**DAG Structure**:
+```
+[start]
+  → [wait_for_bronze]
+  → [spark_deduplicate]
+  → [spark_validate_schema]
+  → [spark_enrich_data]
+  → [spark_sentiment_analysis]
+  → [write_to_silver]
+  → [data_quality_checks]
+  → [end]
+```
+
+**Spark Job**: `spark_jobs/bronze_to_silver.py`
+
+---
+
+### 3. Batch Aggregate DAG (`batch_aggregate_dag.py`)
+
+**Schedule**: 1 hour after transformation  
+**Purpose**: Create Gold layer views and export to MongoDB
+
+**DAG Structure**:
+```
+[start]
+  → [wait_for_silver]
+  → [spark_genre_aggregations]
+  → [spark_trending_scores]
+  → [spark_actor_networks]
+  → [write_to_gold]
+  → [export_to_mongodb]
+  → [update_serving_indexes]
+  → [end]
+```
+
+**Spark Jobs**: `spark_jobs/silver_to_gold.py`, `batch_views/export_to_mongo.py`
+
+---
+
+## Spark Jobs
+
+### Bronze to Silver (`spark_jobs/bronze_to_silver.py`)
+
+**Input**: HDFS Bronze layer Parquet files  
+**Output**: HDFS Silver layer Parquet files
+
+**Processing Steps**:
+1. Read Bronze Parquet with pushdown filters
+2. Parse raw JSON and extract fields
+3. Deduplicate by movie_id (keep latest)
+4. Validate schema and data types
+5. Enrich with genre names, cast info
+6. Run sentiment analysis on reviews
+7. Add quality flags
+8. Write to Silver with partitioning
+
+**Key Optimizations**:
+- Broadcast small lookup tables (genres)
+- Partition by year/month/genre
+- Use bucketing for frequent joins
+- Z-ordering on movie_id
+
+**Template**: See `spark_jobs/bronze_to_silver.py`
+
+---
+
+### Silver to Gold (`spark_jobs/silver_to_gold.py`)
+
+**Input**: HDFS Silver layer Parquet files  
+**Output**: HDFS Gold layer aggregated views
+
+**Aggregations**:
+1. **Genre Analytics**: GROUP BY genre, year, month
+2. **Trending Scores**: Window functions for moving averages
+3. **Actor Networks**: GraphX for collaboration graphs
+4. **Temporal Analysis**: Year-over-year comparisons
+
+**Window Functions**:
+```python
+# 7-day rolling average popularity
+window_7d = Window.partitionBy("movie_id").orderBy("date").rowsBetween(-6, 0)
+df = df.withColumn("popularity_7d_avg", avg("popularity").over(window_7d))
+```
+
+**Template**: See `spark_jobs/silver_to_gold.py`
+
+---
+
+## Batch Views (MongoDB Export)
+
+### Collections in MongoDB
+
+```javascript
+// batch_views collection
+{
+  "_id": ObjectId("..."),
+  "movie_id": 12345,
+  "view_type": "genre_analytics",  // genre/trending/temporal
+  "data": {
+    "genre": "Action",
+    "year": 2025,
+    "month": 10,
+    "avg_rating": 7.5,
+    "total_movies": 150,
+    "total_revenue": 5000000000
+  },
+  "computed_at": ISODate("2025-10-17T14:00:00Z"),
+  "batch_run_id": "batch_2025_10_17_14"
+}
+```
+
+**Indexes**:
+```javascript
+db.batch_views.createIndex({ "movie_id": 1, "view_type": 1 })
+db.batch_views.createIndex({ "view_type": 1, "data.genre": 1, "data.year": 1 })
+db.batch_views.createIndex({ "computed_at": -1 })
+```
+
+**Export Process**:
+1. Read Gold layer aggregations
+2. Transform to MongoDB document format
+3. Bulk upsert to `batch_views` collection
+4. Update indexes
+5. Log export metrics
+
+**Template**: See `batch_views/export_to_mongo.py`
+
+---
+
+### Query MongoDB Data
+
+```bash
+# Using mongosh
+sudo docker exec batch_mongo mongosh moviedb -u admin -p password --authenticationDatabase admin
+
+# Sample queries:
+
+# 1. Count documents by view type
+db.batch_views.aggregate([
+  { $group: { _id: "$view_type", count: { $sum: 1 } } }
+])
+
+# 2. Get genre analytics
+db.batch_views.find({ 
+  view_type: "genre_analytics",
+  genre: "Action"
+}).pretty()
+
+# 3. Top 5 trending movies
+db.batch_views.find({
+  view_type: "trending_movies"
+}).sort({
+  trending_score: -1
+}).limit(5)
+
+# 4. Temporal analytics for November 2025
+db.batch_views.find({
+  view_type: "temporal_analytics",
+  year: 2025,
+  month: 11
+})
+```
+
+---
+
+## Testing & Validation
+
+### Run Complete Test Suite
+
+```bash
+# Comprehensive end-to-end test
+/tmp/test_batch_layer_complete.sh
+```
+
+**Test Coverage:**
+- ✅ Infrastructure validation (HDFS, Spark, MongoDB, Airflow)
+- ✅ Data population with realistic batch views
+- ✅ Data quality checks (counts, types, freshness)
+- ✅ Query performance tests
+- ✅ Index validation
+
+### Manual Verification
+
+```bash
+# Check service status
+sudo docker compose -f docker-compose.batch.yml ps
+
+# Check HDFS health
+sudo docker exec batch_namenode hdfs dfsadmin -report
+
+# Check Spark cluster
+sudo docker exec batch_spark_master /opt/spark/bin/spark-shell --version
+
+# Check MongoDB data
+sudo docker exec batch_mongo mongosh moviedb -u admin -p password --authenticationDatabase admin --eval "db.batch_views.countDocuments({})"
+
+# Check Airflow DAGs
+sudo docker exec batch_airflow_webserver airflow dags list
+```
+
+---
+
+## Performance Metrics
+
+### Expected Execution Times
+
+**Test Run (2 pages)**:
+
+| Stage | Duration | Data Volume |
+|-------|----------|-------------|
+| Bronze Ingestion | 30-60 sec | ~40 movies, 2-5 MB |
+| Silver Transformation | 1-2 min | ~38 movies, 2-4 MB |
+| Gold Aggregation | 1-2 min | ~15-20 records, 100-500 KB |
+| MongoDB Export | 10-30 sec | ~15-20 documents, 50-200 KB |
+| **Total** | **3-5 min** | **~5-10 MB** |
+
+**Full Production Run (20 pages × 3 categories)**:
+
+| Stage | Duration | Data Volume |
+|-------|----------|-------------|
+| Bronze Ingestion | 3-5 min | ~1,200 movies, 20-30 MB |
+| Silver Transformation | 5-10 min | ~1,140 movies, 18-25 MB |
+| Gold Aggregation | 5-10 min | ~50-200 records, 1-2 MB |
+| MongoDB Export | 2-5 min | ~50-200 documents, 500 KB-1 MB |
+| **Total** | **15-30 min** | **~40-60 MB** |
+
+### Deduplication Rate
+
+- **Bronze → Silver**: ~5% duplicates removed
+- **Unique Keys**: `movie_id` (TMDB unique identifier)
+
+---
+
+## Troubleshooting
+
+### Services Won't Start
+
+```bash
+# Check Docker resources
+docker system df
+
+# Clean up if needed
+sudo docker compose -f docker-compose.batch.yml down -v
+sudo docker system prune -f
+
+# Restart services
+sudo docker compose -f docker-compose.batch.yml up -d
+```
+
+### HDFS Issues
+
+```bash
+# Check HDFS status
+sudo docker exec batch_namenode hdfs dfsadmin -report
+
+# List directories
+sudo docker exec batch_namenode hdfs dfs -ls /movie-data
+
+# Check namenode logs
+sudo docker logs batch_namenode --tail 100
+```
+
+### Spark Job Failures
+
+```bash
+# Check Spark master logs
+sudo docker logs batch_spark_master --tail 100
+
+# Check worker logs
+sudo docker logs batch_spark_worker_1 --tail 100
+
+# View Spark UI for failed jobs
+# http://localhost:8081
+```
+
+### MongoDB Connection Issues
+
+```bash
+# Test MongoDB connection
+sudo docker exec batch_mongo mongosh --eval "db.version()"
+
+# Check MongoDB logs
+sudo docker logs batch_mongo --tail 100
+
+# Verify credentials
+sudo docker exec batch_mongo mongosh -u admin -p password --authenticationDatabase admin --eval "db.adminCommand('listDatabases')"
+```
+
+### Airflow DAG Not Loading
+
+```bash
+# Check for import errors
+sudo docker exec batch_airflow_webserver airflow dags list-import-errors
+
+# Check scheduler logs
+sudo docker logs batch_airflow_scheduler --tail 100
+
+# Restart scheduler
+sudo docker compose -f docker-compose.batch.yml restart airflow-scheduler
+```
+
+### Python Version Compatibility
+
+**Known Issue:** The current pipeline scripts use Python 3.9+ type hints (`tuple[DataFrame, dict]`) but the Spark container has Python 3.8.
+
+**Workaround Options:**
+1. Update Spark Docker image to use Python 3.9+
+2. Modify type hints to be Python 3.8 compatible: `from typing import Tuple; Tuple[DataFrame, dict]`
+3. Use `SparkSubmitOperator` in Airflow instead of direct Python execution
+
+---
+
+## Stopping Services
+
+```bash
+# Stop all services
+sudo docker compose -f docker-compose.batch.yml stop
+
+# Stop and remove containers (keeps volumes)
+sudo docker compose -f docker-compose.batch.yml down
+
+# Stop and remove everything including data volumes
+sudo docker compose -f docker-compose.batch.yml down -v
+```
 
 ---
 
 ## Directory Structure
 
-## 🔧 Configuration
-
 ```
-
-### Environment Variablesbatch_layer/
-
+batch_layer/
 ├── README.md                    # This file
-
-Key variables in `.env`:│
-
-├── airflow_dags/               # Orchestration
-
-```bash│   ├── __init__.py
-
-# TMDB API│   ├── batch_ingestion_dag.py  # Bronze layer ingestion
-
-TMDB_API_KEY=your_api_key_here          # Required: Get from TMDB│   ├── batch_transform_dag.py  # Silver layer processing
-
-TMDB_BASE_URL=https://api.themoviedb.org/3│   ├── batch_aggregate_dag.py  # Gold layer aggregations
-
-TMDB_RATE_LIMIT=4.0                      # Requests per second│   └── README.md               # DAG documentation
-
+├── docker-compose.batch.yml      # Service orchestration
+├── .env                          # Environment configuration
+├── .env.example                  # Environment template
+├── Makefile                      # Task automation
 │
-
-# HDFS├── spark_jobs/                 # Batch processing
-
-HDFS_NAMENODE=hdfs://namenode:8020│   ├── __init__.py
-
-HDFS_REPLICATION=3│   ├── bronze_to_silver.py     # Cleaning & enrichment
-
-│   ├── silver_to_gold.py       # Aggregations
-
-# Spark│   ├── sentiment_batch.py      # Historical sentiment
-
-SPARK_MASTER_URL=spark://spark-master:7077│   ├── actor_networks.py       # Graph analytics
-
-SPARK_EXECUTOR_MEMORY=4g│   └── README.md               # Job documentation
-
-SPARK_EXECUTOR_CORES=2│
-
-├── master_dataset/             # Immutable raw data
-
-# MongoDB│   ├── __init__.py
-
-MONGODB_CONNECTION_STRING=mongodb://admin:password@mongo:27017/moviedb?authSource=admin│   ├── ingestion.py            # TMDB → HDFS pipeline
-
-MONGODB_DATABASE=moviedb│   ├── schema.py               # Data schemas
-
-│   ├── partitioning.py         # Partition strategies
-
-# Batch Processing│   └── README.md               # Dataset documentation
-
-BATCH_INTERVAL_HOURS=4                   # Run every 4 hours│
-
-BRONZE_RETENTION_DAYS=90├── batch_views/                # Pre-computed views
-
-SILVER_RETENTION_DAYS=730│   ├── __init__.py
-
-GOLD_RETENTION_DAYS=1825│   ├── movie_analytics.py      # Movie-level aggregations
-
-│   ├── genre_trends.py         # Genre-based analytics
-
-# Airflow│   ├── temporal_analysis.py    # Time-series views
-
-AIRFLOW__CORE__EXECUTOR=LocalExecutor│   ├── export_to_mongo.py      # MongoDB integration
-
-AIRFLOW__CORE__FERNET_KEY=your_key_here  # Generate with cryptography.fernet│   └── README.md               # Views documentation
-
-```│
-
-├── config/                     # Configuration
-
-### Resource Requirements│   ├── spark_config.yaml       # Spark settings
-
-│   ├── hdfs_config.yaml        # HDFS settings
-
-**Minimum:**│   └── airflow_config.yaml     # DAG settings
-
-- CPU: 4 cores│
-
-- RAM: 8GB└── tests/                      # Unit tests
-
-- Disk: 20GB    ├── test_transformations.py
-
-    ├── test_aggregations.py
-
-**Recommended:**    └── test_data_quality.py
-
-- CPU: 8 cores```
-
-- RAM: 16GB
-
-- Disk: 50GB+---
-
-
-
----## Data Layers
-
-
-
-## 🌐 Access Points### Bronze Layer (Raw Data)
-
-
-
-Once services are running:**Purpose**: Store immutable, raw data exactly as received from TMDB API
-
-
-
-| Service | URL | Credentials | Purpose |**Schema**:
-
-|---------|-----|-------------|---------|```python
-
-| **Airflow UI** | http://localhost:8080 | admin/admin | DAG monitoring & management |# Parquet format
-
-| **Spark Master UI** | http://localhost:8081 | None | Spark cluster status |bronze_schema = {
-
-| **HDFS NameNode UI** | http://localhost:9870 | None | HDFS filesystem browser |    "movie_id": "int",
-
-| **Mongo Express UI** | http://localhost:8082 | admin/password | MongoDB data browser |    "raw_json": "string",  # Complete API response
-
-| **MongoDB** | mongodb://localhost:27017 | admin/password | Direct DB connection |    "api_endpoint": "string",  # movies/people/reviews
-
-    "extraction_timestamp": "timestamp",
-
----    "partition_year": "int",
-
-    "partition_month": "int",
-
-## 🎮 Usage    "partition_day": "int",
-
-    "partition_hour": "int"
-
-### View Batch Views Data}
-
-```
-
-```bash
-
-# Display comprehensive batch views report**Partitioning**:
-
-/tmp/show_mongodb_batch_views.sh```
-
-/bronze/movies/year=2025/month=10/day=17/hour=14/
-
-# Output shows:/bronze/reviews/year=2025/month=10/day=17/hour=14/
-
-# - Collection statistics  /bronze/people/year=2025/month=10/day=17/hour=14/
-
-# - Documents by view type```
-
-# - Genre analytics details
-
-# - Trending movies**Retention**: 90 days (configurable)
-
-# - Temporal analytics
-
-# - Data freshness & indexes**Implementation**: `master_dataset/ingestion.py`
-
-```
-
----
-
-### Manual Pipeline Execution
-
-### Silver Layer (Cleaned Data)
-
-#### Option 1: Run Complete DAG (Recommended)
-
-**Purpose**: Cleaned, validated, and enriched data ready for analytics
-
-```bash
-
-# Unpause the DAG**Transformations**:
-
-sudo docker exec batch_airflow_webserver airflow dags unpause tmdb_batch_pipeline1. **Deduplication**: Remove duplicate movie_id entries
-
-2. **Schema Validation**: Ensure data quality
-
-# Trigger manual run3. **Enrichment**: 
-
-sudo docker exec batch_airflow_webserver airflow dags trigger tmdb_batch_pipeline   - Join genre names from genre_ids
-
-   - Join cast/crew information
-
-# Monitor progress   - Extract keywords and production companies
-
-sudo docker exec batch_airflow_webserver airflow dags list-runs -d tmdb_batch_pipeline4. **Sentiment Analysis**: Historical review sentiment
-
-5. **Data Type Casting**: Proper types for all fields
-
-# View in Airflow UI: http://localhost:8080
-
-```**Schema**:
-
-```python
-
-#### Option 2: Run Individual Stepssilver_schema = {
-
-    "movie_id": "int",
-
-**Note:** Currently, the pipeline scripts have Python 3.9+ syntax but Spark container has Python 3.8. The manual commands below demonstrate the intended workflow.    "title": "string",
-
-    "release_date": "date",
-
-```bash    "genres": "array<string>",
-
-# Step 1: Ingest Bronze (TMDB API → HDFS)    "vote_average": "double",
-
-sudo docker exec batch_airflow_webserver python \    "vote_count": "int",
-
-  /app/layers/batch_layer/master_dataset/ingestion.py \    "popularity": "double",
-
-  --pages 2 \    "budget": "long",
-
-  --categories popular    "revenue": "long",
-
-    "runtime": "int",
-
-# Step 2: Transform Silver (Bronze → Silver)    "cast": "array<struct<name:string, character:string>>",
-
-sudo docker exec batch_airflow_webserver python \    "crew": "array<struct<name:string, job:string>>",
-
-  /app/layers/batch_layer/spark_jobs/silver/run.py \    "sentiment_score": "double",  # -1 to 1
-
-  --execution-date $(date +%Y-%m-%d) \    "sentiment_label": "string",  # positive/neutral/negative
-
-  --data-type movies    "quality_flag": "string",  # OK/WARNING/ERROR
-
-    "processed_timestamp": "timestamp",
-
-# Step 3: Aggregate Gold (Silver → Gold)    "partition_year": "int",
-
-sudo docker exec batch_airflow_webserver python \    "partition_month": "int",
-
-  /app/layers/batch_layer/spark_jobs/gold/run.py \    "partition_genre": "string"
-
-  --execution-date $(date +%Y-%m-%d) \}
-
-  --metric-type genre_analytics```
-
-
-
-# Step 4: Export to MongoDB (Gold → MongoDB)**Partitioning**:
-
-sudo docker exec batch_airflow_webserver python \```
-
-  /app/layers/batch_layer/batch_views/export_to_mongo.py \/silver/movies/year=2025/month=10/genre=action/
-
-  --execution-date $(date +%Y-%m-%d) \/silver/reviews/year=2025/month=10/genre=action/
-
-  --metric-type genre_analytics```
-
-```
-
-**Retention**: 2 years
-
-### Query MongoDB Data
-
-**Implementation**: `spark_jobs/bronze_to_silver.py`
-
-```bash
-
-# Using mongosh---
-
-sudo docker exec batch_mongo mongosh moviedb -u admin -p password --authenticationDatabase admin
-
-### Gold Layer (Aggregated Data)
-
-# Sample queries:
-
-**Purpose**: Business-ready aggregations and analytics
-
-# 1. Count documents by view type
-
-db.batch_views.aggregate([**Aggregations**:
-
-  { $group: { _id: "$view_type", count: { $sum: 1 } } }1. **Movie Popularity Trends**: 7-day, 30-day, 90-day rolling windows
-
-])2. **Genre Analytics**: Average ratings, revenue by genre
-
-3. **Temporal Analysis**: Year-over-year comparisons
-
-# 2. Get genre analytics4. **Actor Networks**: Collaboration graphs
-
-db.batch_views.find({ 5. **Sentiment Trends**: Sentiment changes over time
-
-  view_type: "genre_analytics",
-
-  genre: "Action" **Views**:
-
-}).pretty()```python
-
-# Genre aggregations
-
-# 3. Top 5 trending moviesgenre_analytics = {
-
-db.batch_views.find({     "genre": "string",
-
-  view_type: "trending_movies"     "year": "int",
-
-}).sort({     "month": "int",
-
-  trending_score: -1     "total_movies": "int",
-
-}).limit(5)    "avg_rating": "double",
-
-    "total_revenue": "long",
-
-# 4. Temporal analytics for November 2025    "avg_sentiment": "double",
-
-db.batch_views.find({    "top_movies": "array<string>"
-
-  view_type: "temporal_analytics",}
-
-  year: 2025,
-
-  month: 11# Trending scores
-
-})trending_scores = {
-
-```    "movie_id": "int",
-
-    "window": "string",  # 7d/30d/90d
-
----    "trend_score": "double",
-
-    "velocity": "double",  # rate of popularity change
-
-## 🧪 Testing & Validation    "computed_date": "date"
-
-}
-
-### Run Complete Test Suite```
-
-
-
-```bash**Partitioning**:
-
-# Comprehensive end-to-end test```
-
-/tmp/test_batch_layer_complete.sh/gold/genre_analytics/year=2025/month=10/
-
-```/gold/trending_scores/window=7d/year=2025/month=10/
-
-/gold/actor_networks/year=2025/month=10/
-
-**Test Coverage:**```
-
-- ✅ Infrastructure validation (HDFS, Spark, MongoDB, Airflow)
-
-- ✅ Data population with realistic batch views**Retention**: 5 years
-
-- ✅ Data quality checks (counts, types, freshness)
-
-- ✅ Query performance tests**Implementation**: `spark_jobs/silver_to_gold.py`
-
-- ✅ Index validation
-
----
-
-### Manual Verification
-
-## Airflow DAGs
-
-```bash
-
-# Check service status### 1. Batch Ingestion DAG (`batch_ingestion_dag.py`)
-
-sudo docker compose -f docker-compose.batch.yml ps
-
-**Schedule**: Every 4 hours  
-
-# Check HDFS health**Purpose**: Extract data from TMDB API and store in Bronze layer
-
-sudo docker exec batch_namenode hdfs dfsadmin -report
-
-```python
-
-# Check Spark cluster# DAG Structure
-
-sudo docker exec batch_spark_master /opt/spark/bin/spark-shell --version[start] 
-
-  → [check_api_health]
-
-# Check MongoDB data  → [extract_movies] 
-
-sudo docker exec batch_mongo mongosh moviedb -u admin -p password --authenticationDatabase admin --eval "db.batch_views.countDocuments({})"  → [extract_reviews]
-
-  → [extract_people]
-
-# Check Airflow DAGs  → [validate_extraction]
-
-sudo docker exec batch_airflow_webserver airflow dags list  → [store_to_hdfs_bronze]
-
-```  → [update_metadata]
-
-  → [end]
-
----```
-
-
-
-## 📈 Performance Metrics**Tasks**:
-
-- `check_api_health`: Verify TMDB API availability
-
-### Expected Execution Times- `extract_*`: Parallel extraction from different endpoints
-
-- `validate_extraction`: Check data completeness
-
-| Stage | Duration | Data Volume |- `store_to_hdfs_bronze`: Write Parquet to HDFS
-
-|-------|----------|-------------|- `update_metadata`: Update extraction logs
-
-| Bronze Ingestion (2 pages) | 30-60 sec | ~40 movies, 2-5 MB |
-
-| Silver Transformation | 1-2 min | ~38 movies, 2-4 MB |---
-
-| Gold Aggregation | 1-2 min | ~15-20 records, 100-500 KB |
-
-| MongoDB Export | 10-30 sec | ~15-20 documents, 50-200 KB |### 2. Batch Transform DAG (`batch_transform_dag.py`)
-
-| **Total (Test Run)** | **3-5 min** | **~5-10 MB** |
-
-**Schedule**: 30 minutes after ingestion  
-
-### Full Production Run (20 pages × 3 categories)**Purpose**: Transform Bronze → Silver
-
-
-
-| Stage | Duration | Data Volume |```python
-
-|-------|----------|-------------|# DAG Structure
-
-| Bronze Ingestion | 3-5 min | ~1,200 movies, 20-30 MB |[start]
-
-| Silver Transformation | 5-10 min | ~1,140 movies, 18-25 MB |  → [wait_for_bronze]
-
-| Gold Aggregation | 5-10 min | ~50-200 records, 1-2 MB |  → [spark_deduplicate]
-
-| MongoDB Export | 2-5 min | ~50-200 documents, 500 KB-1 MB |  → [spark_validate_schema]
-
-| **Total (Full Run)** | **15-30 min** | **~40-60 MB** |  → [spark_enrich_data]
-
-  → [spark_sentiment_analysis]
-
-### Deduplication Rate  → [write_to_silver]
-
-  → [data_quality_checks]
-
-- **Bronze → Silver**: ~5% duplicates removed  → [end]
-
-- **Unique Keys**: `movie_id` (TMDB unique identifier)```
-
-
-
----**Spark Job**: `spark_jobs/bronze_to_silver.py`
-
-
-
-## 🐛 Troubleshooting---
-
-
-
-### Services Won't Start### 3. Batch Aggregate DAG (`batch_aggregate_dag.py`)
-
-
-
-```bash**Schedule**: 1 hour after transformation  
-
-# Check Docker resources**Purpose**: Create Gold layer views and export to MongoDB
-
-docker system df
-
-```python
-
-# Clean up if needed# DAG Structure
-
-sudo docker compose -f docker-compose.batch.yml down -v[start]
-
-sudo docker system prune -f  → [wait_for_silver]
-
-  → [spark_genre_aggregations]
-
-# Restart services  → [spark_trending_scores]
-
-sudo docker compose -f docker-compose.batch.yml up -d  → [spark_actor_networks]
-
-```  → [write_to_gold]
-
-  → [export_to_mongodb]
-
-### HDFS Issues  → [update_serving_indexes]
-
-  → [end]
-
-```bash```
-
-# Check HDFS status
-
-sudo docker exec batch_namenode hdfs dfsadmin -report**Spark Jobs**: `spark_jobs/silver_to_gold.py`, `batch_views/export_to_mongo.py`
-
-
-
-# List directories---
-
-sudo docker exec batch_namenode hdfs dfs -ls /movie-data
-
-## Spark Jobs
-
-# Check namenode logs
-
-sudo docker logs batch_namenode --tail 100### Bronze to Silver (`spark_jobs/bronze_to_silver.py`)
-
-```
-
-**Input**: HDFS Bronze layer Parquet files  
-
-### Spark Job Failures**Output**: HDFS Silver layer Parquet files
-
-
-
-```bash**Processing Steps**:
-
-# Check Spark master logs1. Read Bronze Parquet with pushdown filters
-
-sudo docker logs batch_spark_master --tail 1002. Parse raw JSON and extract fields
-
-3. Deduplicate by movie_id (keep latest)
-
-# Check worker logs4. Validate schema and data types
-
-sudo docker logs batch_spark_worker_1 --tail 1005. Enrich with genre names, cast info
-
-6. Run sentiment analysis on reviews
-
-# View Spark UI for failed jobs7. Add quality flags
-
-# http://localhost:80818. Write to Silver with partitioning
-
-```
-
-**Key Optimizations**:
-
-### MongoDB Connection Issues- Broadcast small lookup tables (genres)
-
-- Partition by year/month/genre
-
-```bash- Use bucketing for frequent joins
-
-# Test MongoDB connection- Z-ordering on movie_id
-
-sudo docker exec batch_mongo mongosh --eval "db.version()"
-
-**Template**: See `spark_jobs/bronze_to_silver.py`
-
-# Check MongoDB logs
-
-sudo docker logs batch_mongo --tail 100---
-
-
-
-# Verify credentials### Silver to Gold (`spark_jobs/silver_to_gold.py`)
-
-sudo docker exec batch_mongo mongosh -u admin -p password --authenticationDatabase admin --eval "db.adminCommand('listDatabases')"
-
-```**Input**: HDFS Silver layer Parquet files  
-
-**Output**: HDFS Gold layer aggregated views
-
-### Airflow DAG Not Loading
-
-**Aggregations**:
-
-```bash1. **Genre Analytics**: GROUP BY genre, year, month
-
-# Check for import errors2. **Trending Scores**: Window functions for moving averages
-
-sudo docker exec batch_airflow_webserver airflow dags list-import-errors3. **Actor Networks**: GraphX for collaboration graphs
-
-4. **Temporal Analysis**: Year-over-year comparisons
-
-# Check scheduler logs
-
-sudo docker logs batch_airflow_scheduler --tail 100**Window Functions**:
-
-```python
-
-# Restart scheduler# 7-day rolling average popularity
-
-sudo docker compose -f docker-compose.batch.yml restart airflow-schedulerwindow_7d = Window.partitionBy("movie_id").orderBy("date").rowsBetween(-6, 0)
-
-```df = df.withColumn("popularity_7d_avg", avg("popularity").over(window_7d))
-
-```
-
-### Python Version Compatibility
-
-**Template**: See `spark_jobs/silver_to_gold.py`
-
-**Known Issue:** The current pipeline scripts use Python 3.9+ type hints (`tuple[DataFrame, dict]`) but the Spark container has Python 3.8.
-
----
-
-**Workaround Options:**
-
-1. Update Spark Docker image to use Python 3.9+## Batch Views (MongoDB Export)
-
-2. Modify type hints to be Python 3.8 compatible: `from typing import Tuple; Tuple[DataFrame, dict]`
-
-3. Use `SparkSubmitOperator` in Airflow instead of direct Python execution### Collections in MongoDB
-
-
-
----```javascript
-
-// batch_views collection
-
-## 🛑 Stopping Services{
-
-  "_id": ObjectId("..."),
-
-```bash  "movie_id": 12345,
-
-# Stop all services  "view_type": "genre_analytics",  // genre/trending/temporal
-
-sudo docker compose -f docker-compose.batch.yml stop  "data": {
-
-    "genre": "Action",
-
-# Stop and remove containers (keeps volumes)    "year": 2025,
-
-sudo docker compose -f docker-compose.batch.yml down    "month": 10,
-
-    "avg_rating": 7.5,
-
-# Stop and remove everything including data volumes    "total_movies": 150,
-
-sudo docker compose -f docker-compose.batch.yml down -v    "total_revenue": 5000000000
-
-```  },
-
-  "computed_at": ISODate("2025-10-17T14:00:00Z"),
-
----  "batch_run_id": "batch_2025_10_17_14"
-
-}
-
-## 📁 Project Structure```
-
-
-
-```**Indexes**:
-
-batch_layer/```javascript
-
-├── docker-compose.batch.yml      # Service orchestrationdb.batch_views.createIndex({ "movie_id": 1, "view_type": 1 })
-
-├── .env                          # Environment configurationdb.batch_views.createIndex({ "view_type": 1, "data.genre": 1, "data.year": 1 })
-
-├── .env.example                  # Environment templatedb.batch_views.createIndex({ "computed_at": -1 })
-
-├── README.md                     # This file```
-
+├── docker/
+│   ├── spark.Dockerfile          # Spark + PySpark image
+│   ├── airflow.Dockerfile        # Airflow + dependencies
+│   ├── mongo-init.js             # MongoDB initialization
+│   └── airflow-init.sh           # Airflow setup script
 │
-
-├── dockerfiles/**Export Process**:
-
-│   ├── spark.Dockerfile          # Spark + PySpark image1. Read Gold layer aggregations
-
-│   └── airflow.Dockerfile        # Airflow + dependencies2. Transform to MongoDB document format
-
-│3. Bulk upsert to `batch_views` collection
-
-├── master_dataset/4. Update indexes
-
-│   └── ingestion.py              # Bronze layer ingestion (TMDB API)5. Log export metrics
-
+├── master_dataset/
+│   ├── __init__.py
+│   ├── ingestion.py              # Bronze layer ingestion (TMDB API)
+│   ├── schema.py                 # Data schemas
+│   ├── partitioning.py           # Partition strategies
+│   └── README.md                 # Dataset documentation
 │
-
-├── spark_jobs/**Template**: See `batch_views/export_to_mongo.py`
-
+├── spark_jobs/
+│   ├── __init__.py
 │   ├── bronze/
-
-│   │   └── run.py                # Bronze layer processing (future)---
-
+│   │   └── run.py                # Bronze layer processing
 │   ├── silver/
-
-│   │   └── run.py                # Silver layer transformation## Docker Infrastructure
-
+│   │   └── run.py                # Silver layer transformation
 │   ├── gold/
+│   │   └── run.py                # Gold layer aggregation
+│   ├── utils/
+│   │   ├── spark_session.py      # Spark session management
+│   │   ├── logging_utils.py      # Logging & metrics
+│   │   └── transformations.py    # Data transformations
+│   └── README.md                 # Job documentation
+│
+├── batch_views/
+│   ├── __init__.py
+│   ├── movie_analytics.py        # Movie-level aggregations
+│   ├── genre_trends.py           # Genre-based analytics
+│   ├── temporal_analysis.py      # Time-series views
+│   ├── export_to_mongo.py        # MongoDB integration
+│   └── README.md                 # Views documentation
+│
+├── config/
+│   ├── __init__.py
+│   ├── spark_config.yaml         # Spark settings
+│   ├── hdfs_config.yaml          # HDFS settings
+│   └── airflow_config.yaml       # DAG settings
+│
+├── ge_expectations/
+│   └── batch_layer_suite.py      # Data quality expectations
+│
+└── tests/
+    ├── __init__.py
+    ├── test_transformations.py
+    ├── test_aggregations.py
+    ├── test_data_quality.py
+    └── test_integration.py
+```
 
-│   │   └── run.py                # Gold layer aggregation### Container Architecture
+---
 
-│   └── utils/
+## Configuration
 
-│       ├── spark_session.py      # Spark session managementThe batch layer runs in a containerized environment with the following services:
+### Environment Variables
 
-│       ├── logging_utils.py      # Logging & metrics
+Core environment variables (defined in `.env`):
 
-│       └── transformations.py    # Data transformations#### HDFS Cluster
+```bash
+# TMDB API
+TMDB_API_KEY=your_api_key_here          # Required: Get from TMDB
+TMDB_BASE_URL=https://api.themoviedb.org/3
+TMDB_RATE_LIMIT=4.0                      # Requests per second
 
-│- **namenode**: 1 instance (9870: Web UI, 8020: FS port)
+# HDFS
+HDFS_NAMENODE=hdfs://namenode:8020
+HDFS_REPLICATION=3
 
-├── batch_views/- **datanode**: 3 instances (replicated storage)
+# Spark
+SPARK_MASTER_URL=spark://spark-master:7077
+SPARK_EXECUTOR_MEMORY=4g
+SPARK_DRIVER_MEMORY=2g
 
-│   └── export_to_mongo.py        # MongoDB export- **Image**: `bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8`
+# MongoDB
+MONGODB_CONNECTION_STRING=mongodb://admin:password@mongo:27017/moviedb?authSource=admin
+MONGODB_DATABASE=moviedb
 
-│- **Volumes**: Persistent volumes for each datanode
+# Batch Processing
+BATCH_INTERVAL_HOURS=4                   # Run every 4 hours
+BRONZE_RETENTION_DAYS=90
+SILVER_RETENTION_DAYS=730
+GOLD_RETENTION_DAYS=1825
 
-└── tests/- **Replication**: Factor of 3 for data durability
+# Airflow
+AIRFLOW__CORE__EXECUTOR=LocalExecutor
+AIRFLOW__CORE__FERNET_KEY=your_key_here  # Generate with cryptography.fernet
+```
 
-    └── ...                       # Unit & integration tests
+### Resource Requirements
 
-```#### Spark Cluster
+**Minimum:**
+- CPU: 4 cores
+- RAM: 8GB
+- Disk: 20GB
+
+**Recommended:**
+- CPU: 8 cores
+- RAM: 16GB
+- Disk: 50GB+
+
+---
+
+## Docker Infrastructure
+
+### Container Architecture
+
+The batch layer runs in a containerized environment with the following services:
+
+#### HDFS Cluster
+
+- **namenode**: 1 instance (9870: Web UI, 8020: FS port)
+- **datanode**: 3 instances (replicated storage)
+- **Image**: `bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8`
+- **Volumes**: Persistent volumes for each datanode
+- **Replication**: Factor of 3 for data durability
+
+#### Spark Cluster
 
 - **spark-master**: 1 instance (8081: Web UI, 7077: Master port)
-
----- **spark-worker**: 2 instances (4g memory, 2 cores each)
-
+- **spark-worker**: 2 instances (4g memory, 2 cores each)
 - **Base Image**: `apache/spark:3.5.0-python3`
-
-## 📚 Documentation- **Custom Build**: Includes Python dependencies and project code
-
+- **Custom Build**: Includes Python dependencies and project code
 - **Dockerfile**: `docker/spark.Dockerfile`
-
-Additional documentation:
 
 #### Airflow Services
 
-- **[INPUT_OUTPUT_DOCUMENTATION.md](./INPUT_OUTPUT_DOCUMENTATION.md)** - Complete data schemas for all layers- **postgres**: PostgreSQL 15 (Airflow metadata DB)
-
-- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Step-by-step testing procedures- **airflow-init**: Initializes DB, creates users, sets up connections
-
-- **[OUTPUT_VALIDATION_GUIDE.md](./OUTPUT_VALIDATION_GUIDE.md)** - Expected outputs and validation- **airflow-webserver**: Web UI on port 8080
-
+- **postgres**: PostgreSQL 15 (Airflow metadata DB)
+- **airflow-init**: Initializes DB, creates users, sets up connections
+- **airflow-webserver**: Web UI on port 8080
 - **airflow-scheduler**: DAG scheduler
-
----- **Base Image**: `apache/airflow:2.8.0-python3.11`
-
+- **Base Image**: `apache/airflow:2.8.0-python3.11`
 - **Custom Build**: Includes batch layer dependencies
+- **Dockerfile**: `docker/airflow.Dockerfile`
 
-## 🔄 Scheduled Runs- **Dockerfile**: `docker/airflow.Dockerfile`
+#### MongoDB Services
 
-
-
-The DAG is configured to run **every 4 hours**:#### MongoDB Services
-
-- Schedule: `0 */4 * * *` (at minute 0 of every 4th hour)- **mongo**: MongoDB 7.0 (port 27017)
-
-- Execution times: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC- **mongo-express**: Web UI on port 8082
-
+- **mongo**: MongoDB 7.0 (port 27017)
+- **mongo-express**: Web UI on port 8082
 - **Initialization**: Auto-creates batch_views collection with indexes
+- **Script**: `docker/mongo-init.js`
 
-To enable automatic scheduling:- **Script**: `docker/mongo-init.js`
+### Volume Management
 
-```bash
-
-# Unpause the DAG in Airflow UI or:### Volume Management
-
-sudo docker exec batch_airflow_webserver airflow dags unpause tmdb_batch_pipeline
-
-``````yaml
-
+```yaml
 volumes:
-
----  namenode_data:      # HDFS namenode metadata
-
+  namenode_data:      # HDFS namenode metadata
   datanode1_data:     # HDFS datanode 1 blocks
-
-## 💡 Tips  datanode2_data:     # HDFS datanode 2 blocks
-
+  datanode2_data:     # HDFS datanode 2 blocks
   datanode3_data:     # HDFS datanode 3 blocks
-
-1. **Monitor Disk Space**: HDFS data grows over time. Monitor with `sudo docker exec batch_namenode hdfs dfs -df -h`  airflow_dags:       # Airflow DAG definitions
-
-2. **Check Data Freshness**: MongoDB data should be < 4 hours old. Check with `/tmp/show_mongodb_batch_views.sh`  airflow_logs:       # Airflow execution logs
-
-3. **Resource Limits**: Adjust Spark executor memory in `.env` if you have more/less RAM  airflow_plugins:    # Airflow plugins
-
-4. **API Rate Limits**: Stay within TMDB's 4 req/s limit by not running multiple ingestions simultaneously  postgres_data:      # Airflow metadata
-
-5. **Backup MongoDB**: Export batch views periodically: `mongodump --db moviedb --collection batch_views`  mongo_data:         # MongoDB batch_views data
-
+  airflow_dags:       # Airflow DAG definitions
+  airflow_logs:       # Airflow execution logs
+  airflow_plugins:    # Airflow plugins
+  postgres_data:      # Airflow metadata
+  mongo_data:         # MongoDB batch_views data
 ```
-
----
 
 ### Network Configuration
 
-## 🎓 Next Steps
-
 All services run on a bridge network `movie_batch_net`:
-
-After batch layer is running:- DNS resolution between containers by service name
-
+- DNS resolution between containers by service name
 - Internal communication (HDFS, Spark, MongoDB)
+- Exposed ports for external access (UIs, APIs)
 
-1. **Integrate Speed Layer**: Add Kafka streaming for real-time updates- Exposed ports for external access (UIs, APIs)
+### Health Checks
 
-2. **Build Serving Layer API**: Create REST API on top of MongoDB batch views
-
-3. **Add Data Quality Monitoring**: Implement Great Expectations for data validation### Environment Variables
-
-4. **Set Up Alerts**: Configure Airflow email/Slack alerts for failures
-
-5. **Optimize Performance**: Tune Spark partitions and MongoDB indexes based on query patternsCore environment variables (defined in `.env`):
-
-
-
----```bash
-
-# TMDB API
-
-## ✅ Verification SummaryTMDB_API_KEY=36bdc639ae379da0a89bfb9c556e2136
-
-TMDB_BASE_URL=https://api.themoviedb.org/3
-
-**Current Status (as of November 9, 2025):**TMDB_RATE_LIMIT=4.0
-
-
-
-- ✅ **Infrastructure**: All 11 services running and healthy# HDFS
-
-- ✅ **MongoDB**: `moviedb.batch_views` collection with 38 documentsHDFS_NAMENODE=hdfs://namenode:8020
-
-- ✅ **Data Quality**: HDFS_REPLICATION=3
-
-  - 8 genres (Action, Drama, Comedy, Thriller, Sci-Fi, Horror, Romance, Animation)
-
-  - 10 trending movies with scores 86-99# Spark
-
-  - 1 temporal analytics record for Nov 2025SPARK_MASTER_URL=spark://spark-master:7077
-
-- ✅ **Indexes**: 6 optimized indexes createdSPARK_EXECUTOR_MEMORY=4g
-
-- ✅ **Queries**: All query types tested and workingSPARK_DRIVER_MEMORY=2g
-
-- ✅ **Test Suite**: 13/13 tests passed
-
-# MongoDB
-
-**Quick Verification:**MONGODB_CONNECTION_STRING=mongodb://admin:password@mongo:27017/moviedb?authSource=admin
-
-```bash
-
-# Run: /tmp/test_batch_layer_complete.sh# Batch Config
-
-# Expected: All tests pass, 38 documents in MongoDBBATCH_INTERVAL_HOURS=4
-
-``````
-
-
-
----### Health Checks
-
-
-
-**Questions or Issues?** Check troubleshooting section or review logs in service UIs.All critical services have health checks:
-
-
-
-**Happy Data Processing! 🚀**- **namenode**: `curl http://localhost:9870`
-
-- **spark-master**: `curl http://localhost:8080`
+All critical services have health checks:
+- **namenode**: `curl http://localhost:9870`
+- **spark-master**: `curl http://localhost:8081`
 - **airflow-webserver**: `curl http://localhost:8080/health`
 - **mongo**: `mongosh --eval "db.adminCommand('ping')"`
 - **postgres**: `pg_isready -U airflow`
@@ -1327,14 +986,18 @@ TMDB_BASE_URL=https://api.themoviedb.org/3
 8. **airflow-webserver** and **airflow-scheduler** start
 9. **mongo-express** provides UI for MongoDB
 
-### Resource Requirements
+### Scheduled Runs
 
-Minimum system requirements:
-- **CPU**: 4 cores
-- **RAM**: 8GB (16GB recommended)
-- **Disk**: 20GB free space
-- **Docker**: 24.0+
-- **Docker Compose**: 2.0+
+The DAG is configured to run **every 4 hours**:
+- Schedule: `0 */4 * * *` (at minute 0 of every 4th hour)
+- Execution times: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+
+To enable automatic scheduling:
+
+```bash
+# Unpause the DAG in Airflow UI or:
+sudo docker exec batch_airflow_webserver airflow dags unpause tmdb_batch_pipeline
+```
 
 ### Dockerfile Details
 
@@ -1356,7 +1019,9 @@ FROM apache/airflow:2.8.0-python3.11
 # Set AIRFLOW_HOME and PYTHONPATH
 ```
 
-### Makefile Commands
+---
+
+## Makefile Commands
 
 The `Makefile` provides convenient commands for managing the stack:
 
@@ -1380,7 +1045,9 @@ The `Makefile` provides convenient commands for managing the stack:
 | `make spark-master-shell` | Open Spark master shell |
 | `make mongo-shell` | Open MongoDB shell |
 
-### Development Workflow
+---
+
+## Development Workflow
 
 1. **Start services**: `make up`
 2. **Check health**: `make health`
@@ -1394,7 +1061,9 @@ The `Makefile` provides convenient commands for managing the stack:
 7. **Check data**: `make hdfs-ls`
 8. **View logs**: `make logs-airflow`
 
-### Cleanup and Reset
+---
+
+## Cleanup and Reset
 
 ```bash
 # Stop services but keep data
@@ -1412,9 +1081,9 @@ make build
 
 ---
 
-## Configuration
+## Spark Configuration
 
-### Spark Configuration (`config/spark_config.yaml`)
+### `config/spark_config.yaml`
 
 ```yaml
 spark:
@@ -1438,7 +1107,11 @@ spark:
   serializer: "org.apache.spark.serializer.KryoSerializer"
 ```
 
-### HDFS Configuration (`config/hdfs_config.yaml`)
+---
+
+## HDFS Configuration
+
+### `config/hdfs_config.yaml`
 
 ```yaml
 hdfs:
@@ -1459,155 +1132,58 @@ hdfs:
 
 ---
 
-## Next Phase Implementation Tasks
+## Tips & Best Practices
 
-### Phase 2A: Master Dataset Ingestion (Week 3)
-- [ ] Implement `master_dataset/ingestion.py`
-  - TMDB API client with rate limiting
-  - Batch extraction for movies, reviews, people
-  - Write raw JSON to HDFS Bronze layer
-  - Implement retry logic and error handling
-
-- [ ] Create `master_dataset/schema.py`
-  - Define Bronze layer Parquet schemas
-  - Validation rules
-  - Partition strategies
-
-- [ ] Build `airflow_dags/batch_ingestion_dag.py`
-  - 4-hour schedule
-  - Parallel extraction tasks
-  - Health checks and monitoring
-  - Slack/email alerts
-
-### Phase 2B: Silver Layer Transformations (Week 4)
-- [ ] Implement `spark_jobs/bronze_to_silver.py`
-  - Read Bronze Parquet
-  - Deduplication logic
-  - Schema validation
-  - Data enrichment (genres, cast)
-
-- [ ] Create `spark_jobs/sentiment_batch.py`
-  - Historical sentiment analysis
-  - VADER or transformer model
-  - Batch processing of reviews
-
-- [ ] Build `airflow_dags/batch_transform_dag.py`
-  - Trigger after ingestion
-  - Spark job orchestration
-  - Data quality checks
-
-### Phase 2C: Gold Layer Aggregations (Week 5)
-- [ ] Implement `spark_jobs/silver_to_gold.py`
-  - Genre aggregations
-  - Trending scores with window functions
-  - Temporal analysis
-
-- [ ] Create `spark_jobs/actor_networks.py`
-  - GraphX-based network analysis
-  - Collaboration strength calculations
-  - Community detection
-
-- [ ] Build `batch_views/export_to_mongo.py`
-  - Gold → MongoDB pipeline
-  - Bulk upsert logic
-  - Index maintenance
-
-- [ ] Create `airflow_dags/batch_aggregate_dag.py`
-  - Trigger after transformations
-  - Gold layer processing
-  - MongoDB export
-
-### Phase 2D: Testing & Monitoring (Week 5)
-- [ ] Write unit tests
-  - Test deduplication logic
-  - Test aggregation accuracy
-  - Test MongoDB export
-
-- [ ] Set up data quality checks
-  - Row count validation
-  - Schema validation
-  - Completeness checks
-
-- [ ] Configure monitoring
-  - DAG success/failure rates
-  - Spark job duration
-  - HDFS storage utilization
+1. **Monitor Disk Space**: HDFS data grows over time. Monitor with `sudo docker exec batch_namenode hdfs dfs -df -h`
+2. **Check Data Freshness**: MongoDB data should be < 4 hours old. Check with `/tmp/show_mongodb_batch_views.sh`
+3. **Resource Limits**: Adjust Spark executor memory in `.env` if you have more/less RAM
+4. **API Rate Limits**: Stay within TMDB's 4 req/s limit by not running multiple ingestions simultaneously
+5. **Backup MongoDB**: Export batch views periodically: `mongodump --db moviedb --collection batch_views`
 
 ---
 
-## Testing Strategy
+## Documentation
 
-### Unit Tests
-```python
-# tests/test_transformations.py
-def test_deduplication():
-    # Create sample DataFrame with duplicates
-    # Run deduplication
-    # Assert no duplicates remain
-    pass
+Additional documentation:
 
-def test_sentiment_analysis():
-    # Sample reviews with known sentiments
-    # Run sentiment analysis
-    # Assert accuracy > 80%
-    pass
-```
+- **[INPUT_OUTPUT_DOCUMENTATION.md](./INPUT_OUTPUT_DOCUMENTATION.md)** - Complete data schemas for all layers
+- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Step-by-step testing procedures
+- **[OUTPUT_VALIDATION_GUIDE.md](./OUTPUT_VALIDATION_GUIDE.md)** - Expected outputs and validation
 
-### Integration Tests
-```python
-# tests/test_end_to_end.py
-def test_bronze_to_silver_pipeline():
-    # Write sample Bronze data
-    # Run Spark job
-    # Validate Silver output
-    pass
-```
+---
 
-### Data Quality Tests
-```python
-# tests/test_data_quality.py
-def test_completeness():
-    # Check for null values in required fields
-    pass
+## Verification Summary
 
-def test_schema_compliance():
-    # Validate schema matches expected
-    pass
+**Current Status (as of November 9, 2025):**
+
+- ✅ **Infrastructure**: All 11 services running and healthy
+- ✅ **MongoDB**: `moviedb.batch_views` collection with 38 documents
+- ✅ **Data Quality**: 
+  - 8 genres (Action, Drama, Comedy, Thriller, Sci-Fi, Horror, Romance, Animation)
+  - 10 trending movies with scores 86-99
+  - 1 temporal analytics record for Nov 2025
+- ✅ **Indexes**: 6 optimized indexes created
+- ✅ **Queries**: All query types tested and working
+- ✅ **Test Suite**: 13/13 tests passed
+
+**Quick Verification:**
+
+```bash
+# Run: /tmp/test_batch_layer_complete.sh
+# Expected: All tests pass, 38 documents in MongoDB
 ```
 
 ---
 
-## Monitoring & Alerts
+## Next Steps
 
-### Key Metrics
-- **Batch Job Success Rate**: Target > 99%
-- **Processing Time**: < 2 hours per batch
-- **Data Quality Score**: > 95% rows passing validation
-- **HDFS Storage Growth**: Track and predict capacity
+After batch layer is running:
 
-### Alerts
-- DAG failure → Slack channel + email
-- Data quality below threshold → PagerDuty
-- HDFS capacity > 80% → Ops team notification
-- Job duration > 3 hours → Warning alert
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Issue**: Spark job OOM errors  
-**Solution**: Increase executor memory, reduce partition size
-
-**Issue**: HDFS write failures  
-**Solution**: Check namenode health, verify replication factor
-
-**Issue**: Duplicate records in Silver  
-**Solution**: Review deduplication logic, check for partition key issues
-
-**Issue**: Slow MongoDB export  
-**Solution**: Use bulk writes, create appropriate indexes
+1. **Integrate Speed Layer**: Add Kafka streaming for real-time updates
+2. **Build Serving Layer API**: Create REST API on top of MongoDB batch views
+3. **Add Data Quality Monitoring**: Implement Great Expectations for data validation
+4. **Set Up Alerts**: Configure Airflow email/Slack alerts for failures
+5. **Optimize Performance**: Tune Spark partitions and MongoDB indexes based on query patterns
 
 ---
 
@@ -1621,3 +1197,5 @@ def test_schema_compliance():
 ---
 
 **Next Step**: Proceed to [Speed Layer README](../speed_layer/README.md)
+
+**Happy Data Processing! 🚀**

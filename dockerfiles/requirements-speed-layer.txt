@@ -1,0 +1,55 @@
+# =====================================================================
+# Speed Layer Python Dependencies
+# =====================================================================
+# Compatible with Python 3.10 + Java 11 + Spark 3.4.4
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Kafka & Streaming
+# ---------------------------------------------------------------------
+# kafka-python: Native Python client for Kafka
+# confluent-kafka: Kafka producers with Avro serialization (for tmdb producer)
+# avro: Schema serialization/deserialization
+# fastavro: Required by confluent-kafka for Avro serialization
+kafka-python==2.0.2
+confluent-kafka==2.3.0
+avro==1.11.3
+fastavro==1.9.4
+
+# ---------------------------------------------------------------------
+# PySpark & Streaming (EXACT VERSION - Must match Dockerfile!)
+# ---------------------------------------------------------------------
+# PySpark 3.4.4: Compatible with Java 11, Spark packages 3.4.x
+pyspark==3.4.4
+
+# ---------------------------------------------------------------------
+# Cassandra Database Driver
+# ---------------------------------------------------------------------
+# cassandra-driver 3.29.1: Compatible with Cassandra 4.x
+cassandra-driver==3.29.1
+
+# ---------------------------------------------------------------------
+# MongoDB Driver
+# ---------------------------------------------------------------------
+# pymongo: MongoDB driver for Python (for Cassandra-MongoDB sync)
+pymongo==4.6.1
+
+# ---------------------------------------------------------------------
+# Sentiment Analysis
+# ---------------------------------------------------------------------
+# vaderSentiment: Real-time sentiment analysis for reviews
+vaderSentiment==3.3.2
+
+# ---------------------------------------------------------------------
+# HTTP & API
+# ---------------------------------------------------------------------
+# requests: HTTP client for TMDB API
+requests==2.31.0
+
+# ---------------------------------------------------------------------
+# Configuration & Environment
+# ---------------------------------------------------------------------
+# PyYAML: YAML config parser
+# python-dotenv: Load environment variables from .env
+pyyaml==6.0.1
+python-dotenv==1.0.0

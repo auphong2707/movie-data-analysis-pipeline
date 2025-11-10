@@ -1,0 +1,678 @@
+# =====================================================================
+# Movie Data Analysis Pipeline - Unified Docker Compose
+# =====================================================================
+# This file combines BOTH Batch Layer and Speed Layer infrastructure
+# Implements Lambda Architecture with MongoDB as the serving layer intersection
+# =====================================================================
+
+networks:
+  movie-pipeline:
+    driver: bridge
+
+volumes:
+  # Batch Layer Volumes
+  minio-data:
+  mongodb-data:
+  postgres-data:
+  airflow-logs:
+  
+  # Speed Layer Volumes
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
+  cassandra-data:
+  speed-layer-logs:
+  spark-checkpoints:
+
+services:
+  # =====================================================================
+  # SERVING LAYER - MongoDB (Intersection Point)
+  # =====================================================================
+  # MongoDB serves as the unified query interface
+  # - Batch Layer writes to: batch_views collection (historical data >48h)
+  # - Speed Layer syncs to: speed_views collection (recent data ≤48h)
+  # =====================================================================
+  
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    hostname: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-moviedb}
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # =====================================================================
+  # BATCH LAYER INFRASTRUCTURE
+  # =====================================================================
+
+  # MinIO - S3-compatible Object Storage (Bronze/Silver/Gold layers)
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # MinIO Client - Create buckets for Bronze/Silver/Gold layers
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin};
+      mc mb myminio/${S3_BUCKET_BRONZE:-bronze-data} || true;
+      mc mb myminio/${S3_BUCKET_SILVER:-silver-data} || true;
+      mc mb myminio/${S3_BUCKET_GOLD:-gold-data} || true;
+      echo 'Buckets created successfully';
+      "
+    networks:
+      - movie-pipeline
+    restart: "no"
+
+  # PostgreSQL - Airflow Metadata Database
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-airflow}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Airflow Init - Database initialization
+  airflow-init:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.airflow
+    image: movie-pipeline-airflow:latest
+    container_name: airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
+    networks:
+      - movie-pipeline
+    restart: "no"
+
+  # Airflow Webserver
+  airflow-webserver:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.airflow
+    image: movie-pipeline-airflow:latest
+    container_name: airflow-webserver
+    hostname: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
+      - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
+      - airflow-logs:/opt/airflow/logs
+      - ./.env:/opt/airflow/.env
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: ${AIRFLOW__WEBSERVER__EXPOSE_CONFIG:-true}
+      PYTHONPATH: /opt/airflow/spark_jobs
+    command: webserver
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.airflow
+    image: movie-pipeline-airflow:latest
+    container_name: airflow-scheduler
+    hostname: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
+      - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
+      - airflow-logs:/opt/airflow/logs
+      - ./.env:/opt/airflow/.env
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
+      PYTHONPATH: /opt/airflow/spark_jobs
+    command: scheduler
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # PySpark Job Runner - Container for manual Spark job execution
+  pyspark-runner:
+    image: apache/spark:3.5.4-python3
+    container_name: pyspark-runner
+    hostname: pyspark-runner
+    depends_on:
+      minio:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./layers/batch_layer/spark_jobs:/opt/spark-jobs
+      - ./.env:/opt/.env
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /opt/spark-jobs
+    networks:
+      - movie-pipeline
+    command: sleep infinity
+    restart: unless-stopped
+
+  # =====================================================================
+  # SPEED LAYER INFRASTRUCTURE
+  # =====================================================================
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT:-2181}
+      ZOOKEEPER_TICK_TIME: ${ZOOKEEPER_TICK_TIME:-2000}
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "srvr,mntr,ruok,stat"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Kafka Broker 1
+  kafka-1:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka-1
+    container_name: kafka-1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_DEFAULT_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_MIN_INSYNC_REPLICAS: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_MESSAGE_MAX_BYTES: 2097152
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Kafka Broker 2
+  kafka-2:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka-2
+    container_name: kafka-2
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9093:9093"
+      - "9102:9102"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_DEFAULT_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_MIN_INSYNC_REPLICAS: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_MESSAGE_MAX_BYTES: 2097152
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9093"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Kafka Broker 3
+  kafka-3:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka-3
+    container_name: kafka-3
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9094:9094"
+      - "9103:9103"
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:29092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_DEFAULT_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
+      KAFKA_MIN_INSYNC_REPLICAS: ${KAFKA_MIN_INSYNC_REPLICAS:-2}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_MESSAGE_MAX_BYTES: 2097152
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9094"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Schema Registry - Avro Schema Management
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.4.0
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: '${KAFKA_BOOTSTRAP_SERVERS:-kafka-1:29092,kafka-2:29092,kafka-3:29092}'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Apache Cassandra - Speed Layer Storage (48h TTL)
+  cassandra:
+    image: cassandra:4.1
+    hostname: cassandra
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: movie-pipeline
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra
+      CASSANDRA_START_TIMEOUT: 300
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 100M
+      JVM_EXTRA_OPTS: "-Dcassandra.materialized_views_enabled=true -Dcassandra.user_defined_functions_enabled=true -Dcassandra.enable_user_defined_functions=true -Dcassandra.enable_scripted_user_defined_functions=true"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Cassandra Schema Initializer
+  cassandra-init:
+    image: cassandra:4.1
+    container_name: cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
+    networks:
+      - movie-pipeline
+    command: >
+      bash -c "
+        echo 'Waiting for Cassandra to be fully ready...' &&
+        sleep 10 &&
+        echo 'Initializing Cassandra schema...' &&
+        cqlsh cassandra -f /schema.cql &&
+        echo 'Schema initialized successfully!'
+      "
+    restart: "no"
+
+  # =====================================================================
+  # SPEED LAYER APPLICATIONS
+  # =====================================================================
+
+  # Kafka Topics Initialization
+  kafka-topics-init:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: kafka-topics-init
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+    command: python kafka_producers/setup_topics.py create
+    volumes:
+      - ./layers/speed_layer:/app
+    networks:
+      - movie-pipeline
+    restart: "no"
+
+  # TMDB Stream Producer
+  tmdb-producer:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: tmdb-producer
+    depends_on:
+      kafka-topics-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+    command: python kafka_producers/tmdb_stream_producer.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - speed-layer-logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep tmdb_stream_producer.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Review Sentiment Stream
+  sentiment-stream:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: sentiment-stream
+    depends_on:
+      kafka-topics-init:
+        condition: service_completed_successfully
+      cassandra:
+        condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
+    command: python streaming_jobs/review_sentiment_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep review_sentiment_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Movie Aggregation Stream
+  aggregation-stream:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: aggregation-stream
+    depends_on:
+      kafka-topics-init:
+        condition: service_completed_successfully
+      cassandra:
+        condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
+    command: python streaming_jobs/movie_aggregation_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep movie_aggregation_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Trending Detection Stream
+  trending-stream:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: trending-stream
+    depends_on:
+      kafka-topics-init:
+        condition: service_completed_successfully
+      cassandra:
+        condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
+    command: python streaming_jobs/trending_detection_stream.py
+    volumes:
+      - ./layers/speed_layer:/app
+      - speed-layer-logs:/app/logs
+      - spark-checkpoints:/app/checkpoints
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep trending_detection_stream.py | grep -v grep || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Cassandra to MongoDB Sync
+  cassandra-mongo-sync:
+    build:
+      context: ./dockerfiles
+      dockerfile: Dockerfile.speed-layer
+    image: movie-pipeline-speed-layer:latest
+    container_name: cassandra-mongo-sync
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      aggregation-stream:
+        condition: service_healthy
+      trending-stream:
+        condition: service_healthy
+      sentiment-stream:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: 1
+    command: python connectors/cassandra_to_mongo.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
+    volumes:
+      - ./layers/speed_layer:/app
+      - speed-layer-logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep cassandra_to_mongo.py | grep -v grep || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

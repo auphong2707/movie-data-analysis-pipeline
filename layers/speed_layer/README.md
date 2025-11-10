@@ -1,4 +1,8 @@
-# Speed Layer - Real-Time Data Processing
+# Speed Layer - Real-Time Movie Data Processing
+
+> **📢 IMPORTANT**: This layer is now part of the unified setup at project root.  
+> **See [SETUP.md](../../SETUP.md) for the recommended way to run the complete Lambda Architecture.**  
+> The instructions below are for running the speed layer in isolation (development/testing only).
 
 ## Overview
 

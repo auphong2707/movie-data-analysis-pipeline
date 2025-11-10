@@ -143,6 +143,20 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+*.env
+!.env.example
+
+# Docker volumes (unified setup)
+minio-data/
+mongodb-data/
+postgres-data/
+airflow-logs/
+zookeeper-data/
+zookeeper-logs/
+kafka-*-data/
+cassandra-data/
+speed-layer-logs/
+spark-checkpoints/
 
 # Spyder project settings
 .spyderproject

@@ -1,0 +1,20 @@
+# =====================================================================
+# Airflow Requirements for Batch Layer
+# =====================================================================
+# Compatible with Apache Airflow 2.7.3 and Python 3.11
+# =====================================================================
+
+# Spark & Big Data Processing
+pyspark==3.5.4
+
+# MongoDB Driver
+pymongo==4.10.1
+
+# HTTP Client for TMDB API
+requests==2.32.4
+
+# AWS SDK for MinIO/S3
+boto3==1.37.38
+
+# Environment Configuration
+python-dotenv==1.0.0

@@ -357,16 +357,22 @@ movie-data-analysis-pipeline/
     └── (test files)
 ```
 
-## 🚀 Quick Start (Dummy, didn't work yet)
+## 🚀 Quick Start
+
+> **✨ NEW: Unified Setup Available!**  
+> The batch and speed layers are now combined into a single setup at the project root.  
+> See [QUICKSTART.md](QUICKSTART.md) for the fastest way to get started, or [SETUP.md](SETUP.md) for detailed instructions.
 
 ### Prerequisites
 
 - **Docker Desktop** or **Docker Engine** (version 20.10+)
 - **Docker Compose** (version 1.29+)
-- **Python 3.11+** (for local development)
+- **At least 8GB RAM** allocated to Docker
 - **TMDB API Key** (free from [themoviedb.org](https://www.themoviedb.org/settings/api))
 
-### Local Development Setup
+### Unified Setup (Recommended)
+
+The unified setup runs both Batch Layer and Speed Layer with a single command:
 
 1. **Clone the Repository**
    ```bash
@@ -376,59 +382,55 @@ movie-data-analysis-pipeline/
 
 2. **Configure Environment Variables**
    ```bash
-   # Create .env file
+   # Copy template and add your TMDB API key
    cp .env.example .env
-   
-   # Edit .env and add your TMDB API key
-   echo "TMDB_API_KEY=your_api_key_here" >> .env
+   nano .env  # Set TMDB_API_KEY=your_key_here
    ```
 
-3. **Start Infrastructure Services**
+3. **Start All Services**
    ```bash
-   # Start all services with Docker Compose
+   # Start complete infrastructure (Batch + Speed layers)
    docker-compose up -d
    
-   # Verify services are running
+   # Verify all services are running
    docker-compose ps
    ```
 
-4. **Install Python Dependencies**
-   ```bash
-   # Create virtual environment
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   
-   # Install dependencies
-   pip install -r requirements.txt
-   ```
+4. **Access Web Interfaces**
+   - **Airflow (Batch Layer)**: http://localhost:8088 (admin/admin)
+   - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
+   - **Schema Registry**: http://localhost:8081
 
-5. **Initialize Kafka Topics**
-   ```bash
-   python config/kafka_setup.py
-   ```
-
-6. **Access Web Interfaces**
-   - **Kafka UI**: http://localhost:9021
-   - **Airflow**: http://localhost:8080 (admin/admin)
-   - **Spark Master**: http://localhost:8081
-   - **MongoDB Express**: http://localhost:8082
-   - **Grafana**: http://localhost:3000 (admin/admin)
+For detailed instructions and troubleshooting, see:
+- **Quick Reference**: [QUICKSTART.md](QUICKSTART.md)
+- **Complete Setup Guide**: [SETUP.md](SETUP.md)
 
 ### Running the Pipeline
 
+**Batch Layer** (historical data processing):
 ```bash
-# Start batch layer ingestion (manual trigger)
-python layers/batch_layer/master_dataset/ingestion.py
-
-# Start speed layer producer (runs continuously)
-python layers/speed_layer/kafka_producers/tmdb_stream_producer.py
-
-# Start API server
-cd layers/serving_layer/api
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Trigger Airflow DAG manually or wait for scheduled run
+# Access Airflow UI at http://localhost:8088
 ```
 
-Access API documentation at http://localhost:8000/docs
+**Speed Layer** (real-time streaming):
+```bash
+# Automatically starts with docker-compose
+# View logs: docker-compose logs -f tmdb-producer sentiment-stream
+```
+
+**Query Results**:
+```bash
+# Connect to MongoDB
+docker exec -it mongodb mongosh -u admin -p password --authenticationDatabase admin
+
+# View merged data
+use moviedb
+db.batch_views.find().limit(5)  # Historical (>48h)
+db.speed_views.find().limit(5)  # Recent (≤48h)
+```
+
+For complete instructions, see [SETUP.md](SETUP.md).
 
 ## ✅ Implementation Status
 

@@ -123,11 +123,7 @@ services:
 
   # Airflow Webserver
   airflow-webserver:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    image: custom-airflow:2.7.3-spark  # Locally built image
-    pull_policy: build  # Always build locally, never pull from registry
+    image: apache/airflow:2.7.3-python3.11
     container_name: airflow-webserver
     hostname: airflow-webserver
     depends_on:
@@ -169,11 +165,7 @@ services:
 
   # Airflow Scheduler
   airflow-scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    image: custom-airflow:2.7.3-spark  # Locally built image
-    pull_policy: build  # Always build locally, never pull from registry
+    image: apache/airflow:2.7.3-python3.11
     container_name: airflow-scheduler
     hostname: airflow-scheduler
     depends_on:

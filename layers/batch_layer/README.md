@@ -1,7 +1,7 @@
 # TMDB Batch Layer - Movie Data Pipeline
 
 > **📢 IMPORTANT**: This layer is now part of the unified setup at project root.  
-> **See [SETUP.md](../../SETUP.md) for the recommended way to run the complete Lambda Architecture.**  
+> **See the root [README.md](../../README.md) for the recommended way to run the complete Lambda Architecture.**  
 > The instructions below are for running the batch layer in isolation (development/testing only).
 
 **One-command deployment**: Fetch, transform, and analyze movie data from TMDB API using Apache Spark, MinIO, and MongoDB.
@@ -68,10 +68,10 @@ TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoD
 ### 3. Query MongoDB Results
 ```bash
 # Count genre documents (expect ~19-20)
-docker exec -it mongodb mongosh --eval "use tmdb_analytics; db.movies_by_genre.countDocuments()"
+docker exec -it serving-mongodb mongosh --eval "use tmdb_analytics; db.movies_by_genre.countDocuments()"
 
 # View Drama genre statistics
-docker exec -it mongodb mongosh --eval "
+docker exec -it serving-mongodb mongosh --eval "
   use tmdb_analytics;
   db.movies_by_genre.find(
     {genre: 'Drama'}, 

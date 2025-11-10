@@ -360,8 +360,7 @@ movie-data-analysis-pipeline/
 ## 🚀 Quick Start
 
 > **✨ NEW: Unified Setup Available!**  
-> The batch and speed layers are now combined into a single setup at the project root.  
-> See [QUICKSTART.md](QUICKSTART.md) for the fastest way to get started, or [SETUP.md](SETUP.md) for detailed instructions.
+> The batch and speed layers are now combined into a single setup at the project root with consistent naming conventions.
 
 ### Prerequisites
 
@@ -401,9 +400,9 @@ The unified setup runs both Batch Layer and Speed Layer with a single command:
    - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
    - **Schema Registry**: http://localhost:8081
 
-For detailed instructions and troubleshooting, see:
-- **Quick Reference**: [QUICKSTART.md](QUICKSTART.md)
-- **Complete Setup Guide**: [SETUP.md](SETUP.md)
+For detailed instructions and troubleshooting, see the layer-specific READMEs:
+- **Batch Layer**: See `layers/batch_layer/README.md`
+- **Speed Layer**: See `layers/speed_layer/README.md`
 
 ### Running the Pipeline
 
@@ -416,21 +415,19 @@ For detailed instructions and troubleshooting, see:
 **Speed Layer** (real-time streaming):
 ```bash
 # Automatically starts with docker-compose
-# View logs: docker-compose logs -f tmdb-producer sentiment-stream
+# View logs: docker-compose logs -f speed-tmdb-producer speed-sentiment-stream
 ```
 
 **Query Results**:
 ```bash
 # Connect to MongoDB
-docker exec -it mongodb mongosh -u admin -p password --authenticationDatabase admin
+docker exec -it serving-mongodb mongosh -u admin -p password --authenticationDatabase admin
 
 # View merged data
 use moviedb
 db.batch_views.find().limit(5)  # Historical (>48h)
 db.speed_views.find().limit(5)  # Recent (≤48h)
 ```
-
-For complete instructions, see [SETUP.md](SETUP.md).
 
 ## ✅ Implementation Status
 
@@ -440,26 +437,26 @@ For complete instructions, see [SETUP.md](SETUP.md).
 - [x] Documentation (12+ markdown files)
 - [x] Template code for all layers
 
-### Phase 2: Batch Layer - 🔲 TODO
-- [ ] Deploy HDFS cluster (3 datanodes + namenode)
-- [ ] Implement TMDB → HDFS ingestion
-- [ ] Create Airflow DAGs (batch orchestration)
-- [ ] Bronze → Silver transformations (deduplication, validation)
-- [ ] Silver → Gold aggregations (genre, trends, ratings)
-- [ ] Sentiment analysis (batch processing)
-- [ ] Export batch views to MongoDB
+### Phase 2: Batch Layer - ✅ COMPLETED
+- [x] Deploy HDFS cluster (3 datanodes + namenode)
+- [x] Implement TMDB → HDFS ingestion
+- [x] Create Airflow DAGs (batch orchestration)
+- [x] Bronze → Silver transformations (deduplication, validation)
+- [x] Silver → Gold aggregations (genre, trends, ratings)
+- [x] Sentiment analysis (batch processing)
+- [x] Export batch views to MongoDB
 
-### Phase 3: Speed Layer - 🔲 TODO
-- [ ] Deploy Kafka cluster (3 brokers + Zookeeper)
-- [ ] Deploy Schema Registry (Avro schemas)
-- [ ] Implement Kafka producers (real-time)
-- [ ] Deploy Cassandra cluster (3 nodes, 48h TTL)
-- [ ] Spark Structured Streaming jobs
-- [ ] Real-time sentiment analysis
-- [ ] Write to Cassandra speed views
+### Phase 3: Speed Layer - ✅ COMPLETED
+- [x] Deploy Kafka cluster (3 brokers + Zookeeper)
+- [x] Deploy Schema Registry (Avro schemas)
+- [x] Implement Kafka producers (real-time)
+- [x] Deploy Cassandra cluster (3 nodes, 48h TTL)
+- [x] Spark Structured Streaming jobs
+- [x] Real-time sentiment analysis
+- [x] Write to Cassandra speed views
 
 ### Phase 4: Serving Layer - 🔲 TODO
-- [ ] Deploy MongoDB (materialized views)
+- [x] Deploy MongoDB (materialized views)
 - [ ] Implement FastAPI REST API
 - [ ] View merger (batch + speed merge logic)
 - [ ] Redis caching layer

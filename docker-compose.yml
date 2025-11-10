@@ -3,46 +3,55 @@
 # =====================================================================
 # This file combines BOTH Batch Layer and Speed Layer infrastructure
 # Implements Lambda Architecture with MongoDB as the serving layer intersection
+#
+# NAMING CONVENTIONS:
+# - Service names: layer-component-purpose (e.g., batch-airflow-webserver)
+# - Container names: Same as service names for consistency
+# - Volume names: layer-component-type (e.g., batch-airflow-logs)
+# - Network: movie-pipeline (shared across all layers)
 # =====================================================================
 
 networks:
   movie-pipeline:
+    name: movie-pipeline
     driver: bridge
 
 volumes:
+  # Serving Layer Volumes (Intersection)
+  serving-mongodb-data:
+  
   # Batch Layer Volumes
-  minio-data:
-  mongodb-data:
-  postgres-data:
-  airflow-logs:
+  batch-minio-data:
+  batch-postgres-data:
+  batch-airflow-logs:
   
   # Speed Layer Volumes
-  zookeeper-data:
-  zookeeper-logs:
-  kafka-1-data:
-  kafka-2-data:
-  kafka-3-data:
-  cassandra-data:
-  speed-layer-logs:
-  spark-checkpoints:
+  speed-zookeeper-data:
+  speed-zookeeper-logs:
+  speed-kafka-broker1-data:
+  speed-kafka-broker2-data:
+  speed-kafka-broker3-data:
+  speed-cassandra-data:
+  speed-application-logs:
+  speed-spark-checkpoints:
 
 services:
   # =====================================================================
   # SERVING LAYER - MongoDB (Intersection Point)
   # =====================================================================
-  # MongoDB serves as the unified query interface
-  # - Batch Layer writes to: batch_views collection (historical data >48h)
-  # - Speed Layer syncs to: speed_views collection (recent data ≤48h)
+  # MongoDB serves as the unified query interface between layers
+  # - Batch Layer writes to: batch_views collection (data >48h old)
+  # - Speed Layer syncs to: speed_views collection (data ≤48h old)
   # =====================================================================
   
-  mongodb:
+  serving-mongodb:
     image: mongo:7.0
-    container_name: mongodb
+    container_name: serving-mongodb
     hostname: mongodb
     ports:
       - "27017:27017"
     volumes:
-      - mongodb-data:/data/db
+      - serving-mongodb-data:/data/db
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
@@ -57,19 +66,19 @@ services:
     restart: unless-stopped
 
   # =====================================================================
-  # BATCH LAYER INFRASTRUCTURE
+  # BATCH LAYER - Historical Data Processing (>48h old)
   # =====================================================================
 
   # MinIO - S3-compatible Object Storage (Bronze/Silver/Gold layers)
-  minio:
+  batch-minio:
     image: minio/minio:latest
-    container_name: minio
+    container_name: batch-minio
     hostname: minio
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio-data:/data
+      - batch-minio-data:/data
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
@@ -84,16 +93,16 @@ services:
     restart: unless-stopped
 
   # MinIO Client - Create buckets for Bronze/Silver/Gold layers
-  minio-init:
+  batch-minio-init:
     image: minio/mc:latest
-    container_name: minio-init
+    container_name: batch-minio-init
     depends_on:
-      minio:
+      batch-minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       sleep 5;
-      mc alias set myminio http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin};
+      mc alias set myminio http://batch-minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin};
       mc mb myminio/${S3_BUCKET_BRONZE:-bronze-data} || true;
       mc mb myminio/${S3_BUCKET_SILVER:-silver-data} || true;
       mc mb myminio/${S3_BUCKET_GOLD:-gold-data} || true;
@@ -104,14 +113,14 @@ services:
     restart: "no"
 
   # PostgreSQL - Airflow Metadata Database
-  postgres:
+  batch-postgres:
     image: postgres:15
-    container_name: postgres
+    container_name: batch-postgres
     hostname: postgres
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - batch-postgres-data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-airflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
@@ -126,14 +135,14 @@ services:
     restart: unless-stopped
 
   # Airflow Init - Database initialization
-  airflow-init:
+  batch-airflow-init:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
-    container_name: airflow-init
+    container_name: batch-airflow-init
     depends_on:
-      postgres:
+      batch-postgres:
         condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
@@ -156,26 +165,26 @@ services:
     restart: "no"
 
   # Airflow Webserver
-  airflow-webserver:
+  batch-airflow-webserver:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
-    container_name: airflow-webserver
+    container_name: batch-airflow-webserver
     hostname: airflow-webserver
     depends_on:
-      airflow-init:
+      batch-airflow-init:
         condition: service_completed_successfully
-      minio:
+      batch-minio:
         condition: service_healthy
-      mongodb:
+      serving-mongodb:
         condition: service_healthy
     ports:
       - "8088:8080"
     volumes:
       - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
       - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
-      - airflow-logs:/opt/airflow/logs
+      - batch-airflow-logs:/opt/airflow/logs
       - ./.env:/opt/airflow/.env
     env_file:
       - .env
@@ -198,24 +207,24 @@ services:
     restart: unless-stopped
 
   # Airflow Scheduler
-  airflow-scheduler:
+  batch-airflow-scheduler:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
-    container_name: airflow-scheduler
+    container_name: batch-airflow-scheduler
     hostname: airflow-scheduler
     depends_on:
-      airflow-init:
+      batch-airflow-init:
         condition: service_completed_successfully
-      minio:
+      batch-minio:
         condition: service_healthy
-      mongodb:
+      serving-mongodb:
         condition: service_healthy
     volumes:
       - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
       - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
-      - airflow-logs:/opt/airflow/logs
+      - batch-airflow-logs:/opt/airflow/logs
       - ./.env:/opt/airflow/.env
     env_file:
       - .env
@@ -237,14 +246,14 @@ services:
     restart: unless-stopped
 
   # PySpark Job Runner - Container for manual Spark job execution
-  pyspark-runner:
+  batch-pyspark-runner:
     image: apache/spark:3.5.4-python3
-    container_name: pyspark-runner
+    container_name: batch-pyspark-runner
     hostname: pyspark-runner
     depends_on:
-      minio:
+      batch-minio:
         condition: service_healthy
-      mongodb:
+      serving-mongodb:
         condition: service_healthy
     volumes:
       - ./layers/batch_layer/spark_jobs:/opt/spark-jobs
@@ -263,10 +272,10 @@ services:
   # =====================================================================
 
   # Zookeeper for Kafka
-  zookeeper:
+  speed-zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     hostname: zookeeper
-    container_name: zookeeper
+    container_name: speed-zookeeper
     ports:
       - "2181:2181"
     environment:
@@ -274,8 +283,8 @@ services:
       ZOOKEEPER_TICK_TIME: ${ZOOKEEPER_TICK_TIME:-2000}
       ZOOKEEPER_4LW_COMMANDS_WHITELIST: "srvr,mntr,ruok,stat"
     volumes:
-      - zookeeper-data:/var/lib/zookeeper/data
-      - zookeeper-logs:/var/lib/zookeeper/log
+      - speed-zookeeper-data:/var/lib/zookeeper/data
+      - speed-zookeeper-logs:/var/lib/zookeeper/log
     networks:
       - movie-pipeline
     healthcheck:
@@ -287,19 +296,19 @@ services:
     restart: unless-stopped
 
   # Kafka Broker 1
-  kafka-1:
+  speed-kafka-1:
     image: confluentinc/cp-kafka:7.4.0
     hostname: kafka-1
-    container_name: kafka-1
+    container_name: speed-kafka-1
     depends_on:
-      zookeeper:
+      speed-zookeeper:
         condition: service_healthy
     ports:
       - "9092:9092"
       - "9101:9101"
     environment:
       KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ZOOKEEPER_CONNECT: 'speed-zookeeper:2181'
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
@@ -315,7 +324,7 @@ services:
       KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
       KAFKA_MESSAGE_MAX_BYTES: 2097152
     volumes:
-      - kafka-1-data:/var/lib/kafka/data
+      - speed-kafka-broker1-data:/var/lib/kafka/data
     networks:
       - movie-pipeline
     healthcheck:
@@ -326,19 +335,19 @@ services:
     restart: unless-stopped
 
   # Kafka Broker 2
-  kafka-2:
+  speed-kafka-2:
     image: confluentinc/cp-kafka:7.4.0
     hostname: kafka-2
-    container_name: kafka-2
+    container_name: speed-kafka-2
     depends_on:
-      zookeeper:
+      speed-zookeeper:
         condition: service_healthy
     ports:
       - "9093:9093"
       - "9102:9102"
     environment:
       KAFKA_BROKER_ID: 2
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ZOOKEEPER_CONNECT: 'speed-zookeeper:2181'
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29092,PLAINTEXT_HOST://localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
@@ -354,7 +363,7 @@ services:
       KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
       KAFKA_MESSAGE_MAX_BYTES: 2097152
     volumes:
-      - kafka-2-data:/var/lib/kafka/data
+      - speed-kafka-broker2-data:/var/lib/kafka/data
     networks:
       - movie-pipeline
     healthcheck:
@@ -365,19 +374,19 @@ services:
     restart: unless-stopped
 
   # Kafka Broker 3
-  kafka-3:
+  speed-kafka-3:
     image: confluentinc/cp-kafka:7.4.0
     hostname: kafka-3
-    container_name: kafka-3
+    container_name: speed-kafka-3
     depends_on:
-      zookeeper:
+      speed-zookeeper:
         condition: service_healthy
     ports:
       - "9094:9094"
       - "9103:9103"
     environment:
       KAFKA_BROKER_ID: 3
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ZOOKEEPER_CONNECT: 'speed-zookeeper:2181'
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:29092,PLAINTEXT_HOST://localhost:9094
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:-3}
@@ -393,7 +402,7 @@ services:
       KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
       KAFKA_MESSAGE_MAX_BYTES: 2097152
     volumes:
-      - kafka-3-data:/var/lib/kafka/data
+      - speed-kafka-broker3-data:/var/lib/kafka/data
     networks:
       - movie-pipeline
     healthcheck:
@@ -404,16 +413,16 @@ services:
     restart: unless-stopped
 
   # Schema Registry - Avro Schema Management
-  schema-registry:
+  speed-schema-registry:
     image: confluentinc/cp-schema-registry:7.4.0
     hostname: schema-registry
-    container_name: schema-registry
+    container_name: speed-schema-registry
     depends_on:
-      kafka-1:
+      speed-kafka-1:
         condition: service_healthy
-      kafka-2:
+      speed-kafka-2:
         condition: service_healthy
-      kafka-3:
+      speed-kafka-3:
         condition: service_healthy
     ports:
       - "8081:8081"
@@ -431,10 +440,10 @@ services:
     restart: unless-stopped
 
   # Apache Cassandra - Speed Layer Storage (48h TTL)
-  cassandra:
+  speed-cassandra:
     image: cassandra:4.1
     hostname: cassandra
-    container_name: cassandra
+    container_name: speed-cassandra
     ports:
       - "9042:9042"
     environment:
@@ -448,7 +457,7 @@ services:
       HEAP_NEWSIZE: 100M
       JVM_EXTRA_OPTS: "-Dcassandra.materialized_views_enabled=true -Dcassandra.user_defined_functions_enabled=true -Dcassandra.enable_user_defined_functions=true -Dcassandra.enable_scripted_user_defined_functions=true"
     volumes:
-      - cassandra-data:/var/lib/cassandra
+      - speed-cassandra-data:/var/lib/cassandra
       - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
     networks:
       - movie-pipeline
@@ -460,11 +469,11 @@ services:
     restart: unless-stopped
 
   # Cassandra Schema Initializer
-  cassandra-init:
+  speed-cassandra-init:
     image: cassandra:4.1
-    container_name: cassandra-init
+    container_name: speed-cassandra-init
     depends_on:
-      cassandra:
+      speed-cassandra:
         condition: service_healthy
     volumes:
       - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
@@ -485,20 +494,20 @@ services:
   # =====================================================================
 
   # Kafka Topics Initialization
-  kafka-topics-init:
+  speed-kafka-topics-init:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: kafka-topics-init
+    container_name: speed-kafka-topics-init
     depends_on:
-      kafka-1:
+      speed-kafka-1:
         condition: service_healthy
-      kafka-2:
+      speed-kafka-2:
         condition: service_healthy
-      kafka-3:
+      speed-kafka-3:
         condition: service_healthy
-      schema-registry:
+      speed-schema-registry:
         condition: service_healthy
     env_file:
       - .env
@@ -512,14 +521,14 @@ services:
     restart: "no"
 
   # TMDB Stream Producer
-  tmdb-producer:
+  speed-tmdb-producer:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: tmdb-producer
+    container_name: speed-tmdb-producer
     depends_on:
-      kafka-topics-init:
+      speed-kafka-topics-init:
         condition: service_completed_successfully
     env_file:
       - .env
@@ -528,7 +537,7 @@ services:
     command: python kafka_producers/tmdb_stream_producer.py
     volumes:
       - ./layers/speed_layer:/app
-      - speed-layer-logs:/app/logs
+      - speed-application-logs:/app/logs
     networks:
       - movie-pipeline
     restart: unless-stopped
@@ -540,18 +549,18 @@ services:
       start_period: 20s
 
   # Review Sentiment Stream
-  sentiment-stream:
+  speed-sentiment-stream:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: sentiment-stream
+    container_name: speed-sentiment-stream
     depends_on:
-      kafka-topics-init:
+      speed-kafka-topics-init:
         condition: service_completed_successfully
-      cassandra:
+      speed-cassandra:
         condition: service_healthy
-      cassandra-init:
+      speed-cassandra-init:
         condition: service_completed_successfully
     env_file:
       - .env
@@ -561,8 +570,8 @@ services:
     command: python streaming_jobs/review_sentiment_stream.py
     volumes:
       - ./layers/speed_layer:/app
-      - speed-layer-logs:/app/logs
-      - spark-checkpoints:/app/checkpoints
+      - speed-application-logs:/app/logs
+      - speed-spark-checkpoints:/app/checkpoints
     networks:
       - movie-pipeline
     restart: unless-stopped
@@ -574,18 +583,18 @@ services:
       start_period: 60s
 
   # Movie Aggregation Stream
-  aggregation-stream:
+  speed-aggregation-stream:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: aggregation-stream
+    container_name: speed-aggregation-stream
     depends_on:
-      kafka-topics-init:
+      speed-kafka-topics-init:
         condition: service_completed_successfully
-      cassandra:
+      speed-cassandra:
         condition: service_healthy
-      cassandra-init:
+      speed-cassandra-init:
         condition: service_completed_successfully
     env_file:
       - .env
@@ -595,8 +604,8 @@ services:
     command: python streaming_jobs/movie_aggregation_stream.py
     volumes:
       - ./layers/speed_layer:/app
-      - speed-layer-logs:/app/logs
-      - spark-checkpoints:/app/checkpoints
+      - speed-application-logs:/app/logs
+      - speed-spark-checkpoints:/app/checkpoints
     networks:
       - movie-pipeline
     restart: unless-stopped
@@ -608,18 +617,18 @@ services:
       start_period: 60s
 
   # Trending Detection Stream
-  trending-stream:
+  speed-trending-stream:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: trending-stream
+    container_name: speed-trending-stream
     depends_on:
-      kafka-topics-init:
+      speed-kafka-topics-init:
         condition: service_completed_successfully
-      cassandra:
+      speed-cassandra:
         condition: service_healthy
-      cassandra-init:
+      speed-cassandra-init:
         condition: service_completed_successfully
     env_file:
       - .env
@@ -629,8 +638,8 @@ services:
     command: python streaming_jobs/trending_detection_stream.py
     volumes:
       - ./layers/speed_layer:/app
-      - speed-layer-logs:/app/logs
-      - spark-checkpoints:/app/checkpoints
+      - speed-application-logs:/app/logs
+      - speed-spark-checkpoints:/app/checkpoints
     networks:
       - movie-pipeline
     restart: unless-stopped
@@ -642,22 +651,22 @@ services:
       start_period: 60s
 
   # Cassandra to MongoDB Sync
-  cassandra-mongo-sync:
+  speed-cassandra-mongo-sync:
     build:
       context: ./dockerfiles
       dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
-    container_name: cassandra-mongo-sync
+    container_name: speed-cassandra-mongo-sync
     depends_on:
-      cassandra:
+      speed-cassandra:
         condition: service_healthy
-      mongodb:
+      serving-mongodb:
         condition: service_healthy
-      aggregation-stream:
+      speed-aggregation-stream:
         condition: service_healthy
-      trending-stream:
+      speed-trending-stream:
         condition: service_healthy
-      sentiment-stream:
+      speed-sentiment-stream:
         condition: service_healthy
     env_file:
       - .env
@@ -666,7 +675,7 @@ services:
     command: python connectors/cassandra_to_mongo.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
     volumes:
       - ./layers/speed_layer:/app
-      - speed-layer-logs:/app/logs
+      - speed-application-logs:/app/logs
     networks:
       - movie-pipeline
     restart: unless-stopped

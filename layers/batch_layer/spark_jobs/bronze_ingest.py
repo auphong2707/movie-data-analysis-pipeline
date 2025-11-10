@@ -107,33 +107,56 @@ class TMDBAPIClient:
                         extra={"context": {"error": str(e), "endpoint": endpoint}})
             raise
     
-    def fetch_movies(self, category: str = "popular", pages: int = 10) -> List[Dict]:
+    def fetch_movies(self, category: str = "popular", pages: int = None, max_pages: int = 500) -> List[Dict]:
         """
         Fetch movies from TMDB API.
         
         Args:
             category: Movie category (popular, top_rated, now_playing, upcoming)
-            pages: Number of pages to fetch (20 movies per page)
+            pages: Number of pages to fetch (20 movies per page). If None, fetch all available pages.
+            max_pages: Maximum pages to fetch as safety limit (default: 500)
         
         Returns:
             List of movie dictionaries
         """
-        logger.info(f"Fetching {pages} pages of {category} movies")
         movies = []
         
-        for page in range(1, pages + 1):
-            try:
-                data = self._make_request(f"movie/{category}", params={"page": page})
-                results = data.get("results", [])
-                movies.extend(results)
-                
-                logger.info(f"Fetched page {page}/{pages}: {len(results)} movies",
-                           extra={"context": {"category": category, "page": page}})
-                
-            except Exception as e:
-                logger.error(f"Failed to fetch page {page}", 
-                            extra={"context": {"error": str(e), "page": page}})
-                continue
+        # First request to get total_pages
+        try:
+            first_data = self._make_request(f"movie/{category}", params={"page": 1})
+            total_available_pages = first_data.get("total_pages", 1)
+            results = first_data.get("results", [])
+            movies.extend(results)
+            
+            # Determine how many pages to fetch
+            if pages is None:
+                # Fetch all pages, but cap at max_pages
+                pages_to_fetch = min(total_available_pages, max_pages)
+            else:
+                pages_to_fetch = min(pages, total_available_pages, max_pages)
+            
+            logger.info(f"Fetching {pages_to_fetch} pages of {category} movies (total available: {total_available_pages})")
+            logger.info(f"Fetched page 1/{pages_to_fetch}: {len(results)} movies",
+                       extra={"context": {"category": category, "page": 1}})
+            
+            # Fetch remaining pages
+            for page in range(2, pages_to_fetch + 1):
+                try:
+                    data = self._make_request(f"movie/{category}", params={"page": page})
+                    results = data.get("results", [])
+                    movies.extend(results)
+                    
+                    logger.info(f"Fetched page {page}/{pages_to_fetch}: {len(results)} movies",
+                               extra={"context": {"category": category, "page": page}})
+                    
+                except Exception as e:
+                    logger.error(f"Failed to fetch page {page}", 
+                                extra={"context": {"error": str(e), "page": page}})
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Failed to fetch movies for category {category}", 
+                        extra={"context": {"error": str(e), "category": category}})
         
         return movies
     
@@ -189,7 +212,8 @@ class BronzeIngestionJob:
         self,
         extraction_window_hours: int = 4,
         categories: List[str] = None,
-        pages_per_category: int = 10
+        pages_per_category: int = 250,
+        max_pages: int = 500
     ):
         """
         Run Bronze layer ingestion.
@@ -197,7 +221,8 @@ class BronzeIngestionJob:
         Args:
             extraction_window_hours: Hours of data to extract (for logging/tracking)
             categories: Movie categories to extract (default: ["popular", "top_rated"])
-            pages_per_category: Number of pages to fetch per category
+            pages_per_category: Number of pages to fetch per category (default: 250 = 5000 movies/category, use 500 for max)
+            max_pages: Maximum pages to fetch as safety limit (default: 500)
         """
         if categories is None:
             categories = ["popular", "top_rated"]
@@ -208,13 +233,14 @@ class BronzeIngestionJob:
                    extra={"context": {
                        "extraction_time": extraction_time.isoformat() + "Z",
                        "categories": categories,
-                       "pages_per_category": pages_per_category
+                       "pages_per_category": pages_per_category if pages_per_category else "all",
+                       "max_pages": max_pages
                    }})
         
         # Fetch movies from each category
         all_movies = []
         for category in categories:
-            movies = self.api_client.fetch_movies(category, pages_per_category)
+            movies = self.api_client.fetch_movies(category, pages_per_category, max_pages)
             all_movies.extend(movies)
             self.metrics.add_metric(f"movies_fetched_{category}", len(movies))
         
@@ -410,8 +436,10 @@ def main():
                        help="Extraction window in hours (default: 4)")
     parser.add_argument("--categories", type=str, default="popular,top_rated",
                        help="Comma-separated list of movie categories")
-    parser.add_argument("--pages-per-category", type=int, default=10,
-                       help="Number of pages to fetch per category (default: 10)")
+    parser.add_argument("--pages-per-category", type=int, default=250,
+                       help="Number of pages to fetch per category (default: 250 = 5000 movies/category, max: 500)")
+    parser.add_argument("--max-pages", type=int, default=500,
+                       help="Maximum pages to fetch as safety limit (default: 500)")
     
     args = parser.parse_args()
     
@@ -433,7 +461,8 @@ def main():
         job.run(
             extraction_window_hours=args.extraction_window,
             categories=categories,
-            pages_per_category=args.pages_per_category
+            pages_per_category=args.pages_per_category,
+            max_pages=args.max_pages
         )
         
     except Exception as e:

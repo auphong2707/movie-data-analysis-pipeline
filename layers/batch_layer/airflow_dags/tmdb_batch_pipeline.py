@@ -116,7 +116,9 @@ bronze_ingest = PythonOperator(
     python_callable=run_spark_job,
     op_kwargs={
         'job_name': 'bronze_ingest.py',
-        'args': ['--pages', '2']
+        # Default: 250 pages/category = 5000 movies/category = ~10,000 total movies
+        # To fetch maximum, add: 'args': ['--pages-per-category', '500']
+        # To fetch less for testing: 'args': ['--pages-per-category', '5']
     },
     dag=dag,
 )

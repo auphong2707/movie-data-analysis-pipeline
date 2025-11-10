@@ -1,0 +1,6 @@
+# Airflow Requirements for Spark Jobs
+pyspark==3.5.4
+pymongo==4.10.1
+requests==2.32.4
+boto3==1.37.38
+python-dotenv==1.0.0

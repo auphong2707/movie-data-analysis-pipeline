@@ -294,15 +294,6 @@ movie-data-analysis-pipeline/
 ├── requirements.txt                   # Python dependencies
 ├── docker-compose.yml                 # Local development setup
 │
-├── config/                           # Configuration files
-│   ├── __init__.py
-│   ├── config.py                     # Application configuration
-│   ├── airflow_config.py             # Airflow DAG configs
-│   ├── kafka_config.py               # Kafka settings
-│   ├── kafka_setup.py                # Kafka topic initialization
-│   ├── iceberg_config.py             # Apache Iceberg configs
-│   └── schemas.py                    # Data schemas (Avro, Parquet)
-│
 ├── layers/                           # Lambda Architecture layers
 │   ├── batch_layer/                  # Historical processing
 │   │   ├── README.md                 # Detailed batch layer docs
@@ -461,19 +452,10 @@ db.speed_views.find().limit(5)  # Recent (≤48h)
 - [x] Grafana monitoring
 - [x] API authentication & rate limiting
 
-### Phase 5: Integration & Testing - 🔲 TODO
-- [ ] End-to-end integration
-- [ ] 48-hour merge strategy implementation
-- [ ] Performance benchmarking
-- [ ] Unit & integration tests
-- [ ] Data quality validation
-
-### Phase 6: Production Deployment - 🔲 TODO
-- [ ] Kubernetes manifests (all services)
-- [ ] Persistent volumes (HDFS storage)
-- [ ] Monitoring & alerting setup
-- [ ] Security hardening
-- [ ] Deployment automation
+### Phase 5: System Refinement
+- [ ] Requirements checklist finalization
+- [ ] Data quality checks & validation
+- [ ] Performance optimizations
 
 ## 📚 Documentation
 

@@ -7,13 +7,15 @@ Consumes from movie.ratings topic and ranks top 100 movies.
 import logging
 import os
 import sys
+import requests
+import time
 from typing import Dict, Any, List
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, avg, count, sum as spark_sum,
     min as spark_min, max as spark_max, stddev, first, last, 
     lag, lead, coalesce, lit, expr, when, rank, dense_rank, desc, asc, abs as spark_abs,
-    row_number, current_timestamp
+    row_number, current_timestamp, udf
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType, 
@@ -26,6 +28,59 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from config.config_loader import load_config
 
 logger = logging.getLogger(__name__)
+
+
+class TMDBTitleFetcher:
+    """Helper class to fetch movie titles from TMDB API with caching and rate limiting."""
+    
+    def __init__(self, api_key: str = None):
+        """Initialize with TMDB API key."""
+        self.api_key = api_key or os.getenv('TMDB_API_KEY')
+        self.base_url = "https://api.themoviedb.org/3"
+        self.cache = {}  # Simple in-memory cache
+        self.last_request_time = 0
+        self.min_request_interval = 0.25  # 4 requests per second max
+        
+    def get_movie_title(self, movie_id: int) -> str:
+        """Fetch movie title from TMDB API with caching and rate limiting."""
+        if not self.api_key:
+            logger.warning("No TMDB API key provided, using fallback title")
+            return f"Movie_{movie_id}"
+            
+        # Check cache first
+        if movie_id in self.cache:
+            return self.cache[movie_id]
+        
+        try:
+            # Rate limiting
+            current_time = time.time()
+            time_since_last_request = current_time - self.last_request_time
+            if time_since_last_request < self.min_request_interval:
+                time.sleep(self.min_request_interval - time_since_last_request)
+            
+            # Make API request
+            url = f"{self.base_url}/movie/{movie_id}"
+            params = {"api_key": self.api_key}
+            
+            response = requests.get(url, params=params, timeout=5)
+            self.last_request_time = time.time()
+            
+            if response.status_code == 200:
+                data = response.json()
+                title = data.get('title', f"Movie_{movie_id}")
+                self.cache[movie_id] = title
+                return title
+            else:
+                logger.warning(f"Failed to fetch title for movie {movie_id}: {response.status_code}")
+                fallback_title = f"Movie_{movie_id}"
+                self.cache[movie_id] = fallback_title
+                return fallback_title
+                
+        except Exception as e:
+            logger.error(f"Error fetching title for movie {movie_id}: {str(e)}")
+            fallback_title = f"Movie_{movie_id}"
+            self.cache[movie_id] = fallback_title
+            return fallback_title
 
 
 class TrendingDetectionStreamProcessor:
@@ -43,6 +98,10 @@ class TrendingDetectionStreamProcessor:
         # Define rating schema
         self.rating_schema = self._get_rating_schema()
         
+        # Initialize TMDB title fetcher and UDF
+        self.title_fetcher = TMDBTitleFetcher()
+        self._setup_title_udf()
+        
         # Trending detection parameters
         self.trending_params = {
             'min_popularity_threshold': 10.0,
@@ -53,6 +112,21 @@ class TrendingDetectionStreamProcessor:
         }
         
         logger.info("Trending Detection Stream Processor initialized")
+    
+    def _setup_title_udf(self):
+        """Setup User Defined Function for fetching movie titles."""
+        def fetch_movie_title_udf(movie_id):
+            """UDF wrapper for fetching movie titles."""
+            if movie_id is None:
+                return "Unknown"
+            try:
+                return self.title_fetcher.get_movie_title(int(movie_id))
+            except Exception as e:
+                logger.error(f"Error in UDF fetching title for movie {movie_id}: {str(e)}")
+                return f"Movie_{movie_id}" if movie_id else "Unknown"
+        
+        # Register UDF with Spark
+        self.fetch_movie_title_udf = udf(fetch_movie_title_udf, StringType())
     
     def _create_spark_session(self) -> SparkSession:
         """Create Spark session with appropriate configuration."""
@@ -189,7 +263,7 @@ class TrendingDetectionStreamProcessor:
             .select(
                 col("hour"),
                 col("movie_id"),
-                lit("Unknown").alias("title"),  # Title will be enriched from metadata
+                self.fetch_movie_title_udf(col("movie_id")).alias("title"),  # Fetch real title from TMDB
                 col("trending_score"),
                 col("velocity"),  # Will be 0.0
                 col("acceleration")  # Will be 0.0
@@ -428,7 +502,7 @@ class TrendingDetectionStreamProcessor:
                     "hour", 
                     "rank", 
                     "movie_id", 
-                    lit("Unknown").alias("title"), 
+                    self.fetch_movie_title_udf(col("movie_id")).alias("title"),  # Fetch real title from TMDB
                     "trending_score", 
                     "velocity", 
                     "acceleration"

@@ -1,0 +1,61 @@
+services:
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: serving-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - movie-pipeline
+
+  # FastAPI Application
+  serving-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serving-api
+    ports:
+      - "8000:8000"
+    environment:
+      # MongoDB (sử dụng MongoDB từ root docker-compose.yml)
+      MONGODB_URI: mongodb://admin:password@serving-mongodb:27017
+      MONGODB_DATABASE: moviedb
+      
+      # Redis
+      REDIS_HOST: serving-redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      
+      # API
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      
+      # Logging
+      LOG_LEVEL: INFO
+      
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+      - ./logs:/app/logs
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  movie-pipeline:
+    external: true
+    name: movie-pipeline

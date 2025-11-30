@@ -1,0 +1,49 @@
+# Serving Layer Configuration
+
+api:
+  title: "Movie Analytics API"
+  version: "1.0.0"
+  description: "Lambda Architecture serving layer for movie analytics"
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false
+  log_level: "info"
+  
+  # CORS settings
+  cors:
+    allow_origins:
+      - "http://localhost:3000"
+      - "http://localhost:8000"
+      - "*"  # For development only
+    allow_credentials: true
+    allow_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allow_headers:
+      - "*"
+  
+  # Rate limiting
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 100
+    burst: 20
+  
+  # Authentication
+  authentication:
+    enabled: false  # Set to true in production
+    api_key_header: "X-API-Key"
+    jwt_secret: "${JWT_SECRET}"  # From environment variable
+  
+  # Cache settings
+  cache:
+    enabled: true
+    default_ttl_seconds: 300
+    trending_ttl_seconds: 300      # 5 minutes
+    movie_ttl_seconds: 300          # 5 minutes
+    sentiment_ttl_seconds: 180      # 3 minutes
+    analytics_ttl_seconds: 1800     # 30 minutes
+    search_ttl_seconds: 600         # 10 minutes

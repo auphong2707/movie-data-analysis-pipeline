@@ -49,17 +49,24 @@ class SparkSessionBuilder:
             "spark.sql.adaptive.enabled": "true",
             "spark.sql.adaptive.coalescePartitions.enabled": "true",
             "spark.sql.adaptive.skewJoin.enabled": "true",
-            "spark.sql.shuffle.partitions": "200",
+            "spark.sql.shuffle.partitions": "10",
             "spark.sql.files.maxPartitionBytes": "134217728",  # 128 MB
             
-            # Memory Configuration
-            "spark.executor.memory": os.getenv('SPARK_EXECUTOR_MEMORY', '4g'),
-            "spark.driver.memory": os.getenv('SPARK_DRIVER_MEMORY', '2g'),
-            "spark.executor.memoryOverhead": "1g",
+            # Memory Configuration (minimal for 16GB Mac with limited Docker memory)
+            "spark.executor.memory": os.getenv('SPARK_EXECUTOR_MEMORY', '1g'),
+            "spark.driver.memory": os.getenv('SPARK_DRIVER_MEMORY', '1g'),
+            "spark.executor.memoryOverhead": "512m",
+            "spark.driver.memoryOverhead": "512m",
             
             # Serialization
             "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
-            "spark.kryoserializer.buffer.max": "512m",
+            "spark.kryoserializer.buffer.max": "256m",
+            
+            # Network & Timeout Configuration (prevent Py4J timeout)
+            "spark.network.timeout": "800s",
+            "spark.executor.heartbeatInterval": "60s",
+            "spark.rpc.askTimeout": "600s",
+            "spark.rpc.lookupTimeout": "600s",
             
             # Dynamic Allocation (optional)
             "spark.dynamicAllocation.enabled": "false",

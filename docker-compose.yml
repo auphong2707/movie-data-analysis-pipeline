@@ -138,7 +138,7 @@ services:
   batch-airflow-init:
     build:
       context: ./dockerfiles
-      dockerfile: Dockerfile.airflow
+      dockerfile: Dockerfile.airflow-mac
     image: movie-pipeline-airflow:latest
     container_name: batch-airflow-init
     depends_on:
@@ -166,9 +166,6 @@ services:
 
   # Airflow Webserver
   batch-airflow-webserver:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
     container_name: batch-airflow-webserver
     hostname: airflow-webserver
@@ -180,7 +177,7 @@ services:
       serving-mongodb:
         condition: service_healthy
     ports:
-      - "8088:8080"
+      - "8080:8080"
     volumes:
       - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
       - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
@@ -208,9 +205,6 @@ services:
 
   # Airflow Scheduler
   batch-airflow-scheduler:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
     container_name: batch-airflow-scheduler
     hostname: airflow-scheduler
@@ -497,7 +491,7 @@ services:
   speed-kafka-topics-init:
     build:
       context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
+      dockerfile: Dockerfile.speed-layer-mac
     image: movie-pipeline-speed-layer:latest
     container_name: speed-kafka-topics-init
     depends_on:
@@ -522,9 +516,6 @@ services:
 
   # TMDB Stream Producer
   speed-tmdb-producer:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-tmdb-producer
     depends_on:
@@ -550,9 +541,6 @@ services:
 
   # Review Sentiment Stream
   speed-sentiment-stream:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-sentiment-stream
     depends_on:
@@ -584,9 +572,6 @@ services:
 
   # Movie Aggregation Stream
   speed-aggregation-stream:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-aggregation-stream
     depends_on:
@@ -618,9 +603,6 @@ services:
 
   # Trending Detection Stream
   speed-trending-stream:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-trending-stream
     depends_on:
@@ -652,9 +634,6 @@ services:
 
   # Cassandra to MongoDB Sync
   speed-cassandra-mongo-sync:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-cassandra-mongo-sync
     depends_on:

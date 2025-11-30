@@ -1,0 +1,47 @@
+# Redis Cache Configuration
+
+redis:
+  # Connection settings
+  host: "${REDIS_HOST:-localhost}"
+  port: ${REDIS_PORT:-6379}
+  db: ${REDIS_DB:-0}
+  password: "${REDIS_PASSWORD:-}"
+  
+  # Connection pool
+  max_connections: 50
+  socket_connect_timeout: 5
+  socket_timeout: 5
+  socket_keepalive: true
+  socket_keepalive_options: {}
+  
+  # Retry settings
+  retry_on_timeout: true
+  retry_on_error: []
+  
+  # Health check
+  health_check_interval: 30
+  
+  # Key prefixes (for namespace separation)
+  key_prefixes:
+    movie: "movie:"
+    sentiment: "sentiment:"
+    trending: "trending:"
+    analytics: "analytics:"
+    search: "search:"
+  
+  # TTL settings (seconds)
+  ttl:
+    default: 300         # 5 minutes
+    short: 180           # 3 minutes
+    medium: 600          # 10 minutes
+    long: 1800           # 30 minutes
+    very_long: 3600      # 1 hour
+  
+  # Eviction policy
+  maxmemory_policy: "allkeys-lru"  # Least recently used
+  
+  # Persistence (for production)
+  persistence:
+    enabled: false
+    save_interval: 900  # 15 minutes
+    aof_enabled: false

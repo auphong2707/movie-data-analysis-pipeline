@@ -1,0 +1,39 @@
+# MongoDB Configuration
+
+mongodb:
+  # Connection settings
+  uri: "${MONGODB_URI:-mongodb://admin:password@localhost:27017}"
+  database: "${MONGODB_DATABASE:-moviedb}"
+  
+  # Collection names
+  collections:
+    batch_views: "batch_views"
+    speed_views: "speed_views"
+    cache_metadata: "cache_metadata"
+  
+  # Connection pool settings
+  connection_pool:
+    max_pool_size: 100
+    min_pool_size: 10
+    max_idle_time_ms: 60000
+    server_selection_timeout_ms: 5000
+    connect_timeout_ms: 10000
+    socket_timeout_ms: 20000
+  
+  # Read/Write preferences
+  read_preference: "secondaryPreferred"  # Distribute read load
+  write_concern:
+    w: "majority"  # Wait for majority acknowledgment
+    j: true        # Wait for journal
+    wtimeout: 5000 # Timeout in milliseconds
+  
+  # Retry settings
+  retry_writes: true
+  retry_reads: true
+  
+  # TLS/SSL (for production)
+  tls:
+    enabled: false
+    ca_file: ""
+    cert_file: ""
+    key_file: ""

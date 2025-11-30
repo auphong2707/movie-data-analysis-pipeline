@@ -1,0 +1,882 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 10,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Genre analytics statistics",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_rating"
+            },
+            "properties": [
+              {
+                "id": "max",
+                "value": 10
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 5
+                    },
+                    {
+                      "color": "green",
+                      "value": 7
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "total_movies",
+              "text": "Total Movies",
+              "type": "number"
+            },
+            {
+              "selector": "avg_rating",
+              "text": "Avg Rating",
+              "type": "number"
+            },
+            {
+              "selector": "avg_sentiment",
+              "text": "Avg Sentiment",
+              "type": "number"
+            },
+            {
+              "selector": "avg_popularity",
+              "text": "Avg Popularity",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "statistics",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "${genre} Genre Statistics",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Top performing movies in ${genre}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_average"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 6
+                    },
+                    {
+                      "color": "green",
+                      "value": 7.5
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "vote_average"
+          }
+        ]
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "title",
+              "text": "Title",
+              "type": "string"
+            },
+            {
+              "selector": "vote_average",
+              "text": "Rating",
+              "type": "number"
+            },
+            {
+              "selector": "popularity",
+              "text": "Popularity",
+              "type": "number"
+            },
+            {
+              "selector": "trending_score",
+              "text": "Trending_score",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "trending_movies",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/trending/movies",
+          "url_options": {
+            "data": "",
+            "method": "GET",
+            "params": [
+              {
+                "key": "genre",
+                "value": "${genre}"
+              },
+              {
+                "key": "limit",
+                "value": "20"
+              },
+              {
+                "key": "window",
+                "value": "48"
+              }
+            ]
+          }
+        }
+      ],
+      "title": "Top Movies in ${genre}",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Average rating by genre",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 52,
+            "gradientMode": "hue",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "mappings": [],
+          "max": 10,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 3,
+      "options": {
+        "bucketOffset": 0,
+        "bucketSize": 0.25,
+        "combine": false,
+        "legend": {
+          "calcs": [
+            "count",
+            "median",
+            "mean",
+            "variance"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "title",
+              "text": "Movie",
+              "type": "string"
+            },
+            {
+              "selector": "vote_average",
+              "text": "Rating",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "top_movies",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url_options": {
+            "data": "",
+            "method": "GET",
+            "params": []
+          }
+        }
+      ],
+      "title": "Rating Distribution - ${genre}",
+      "transparent": true,
+      "type": "histogram"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Popularity trends in ${genre}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisGridShow": true,
+            "axisLabel": "",
+            "axisPlacement": "left",
+            "fillOpacity": 85,
+            "gradientMode": "hue",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "log": 2,
+              "type": "log"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 4,
+      "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.4,
+        "fullHighlight": true,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "vertical",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "asc"
+        },
+        "xField": "Movie",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "title",
+              "text": "Movie",
+              "type": "string"
+            },
+            {
+              "selector": "popularity",
+              "text": "Popularity",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "top_movies",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Popularity Trends - ${genre}",
+      "transparent": true,
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Trend indicators for rating, sentiment, and popularity",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center",
+            "cellOptions": {
+              "type": "color-background"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "decreasing": {
+                  "color": "red",
+                  "index": 2,
+                  "text": "↓ Decreasing"
+                },
+                "increasing": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "↑ Increasing"
+                },
+                "stable": {
+                  "color": "blue",
+                  "index": 1,
+                  "text": "→ Stable"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 5,
+      "options": {
+        "cellHeight": "md",
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Rating Trend"
+          }
+        ]
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rating_trend",
+              "text": "Rating Trend",
+              "type": "string"
+            },
+            {
+              "selector": "sentiment_trend",
+              "text": "Sentiment Trend",
+              "type": "string"
+            },
+            {
+              "selector": "popularity_trend",
+              "text": "Popularity Trend",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "trends",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Trend Indicators - ${genre}",
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "5m",
+  "schemaVersion": 42,
+  "tags": [
+    "analytics",
+    "genre",
+    "batch-layer"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Action",
+          "value": "Action"
+        },
+        "description": "Select genre to analyze",
+        "includeAll": false,
+        "label": "Genre",
+        "name": "genre",
+        "options": [
+          {
+            "selected": true,
+            "text": "Action",
+            "value": "Action"
+          },
+          {
+            "selected": false,
+            "text": "Adventure",
+            "value": "Adventure"
+          },
+          {
+            "selected": false,
+            "text": "Animation",
+            "value": "Animation"
+          },
+          {
+            "selected": false,
+            "text": "Comedy",
+            "value": "Comedy"
+          },
+          {
+            "selected": false,
+            "text": "Crime",
+            "value": "Crime"
+          },
+          {
+            "selected": false,
+            "text": "Documentary",
+            "value": "Documentary"
+          },
+          {
+            "selected": false,
+            "text": "Drama",
+            "value": "Drama"
+          },
+          {
+            "selected": false,
+            "text": "Family",
+            "value": "Family"
+          },
+          {
+            "selected": false,
+            "text": "Fantasy",
+            "value": "Fantasy"
+          },
+          {
+            "selected": false,
+            "text": "Horror",
+            "value": "Horror"
+          },
+          {
+            "selected": false,
+            "text": "Romance",
+            "value": "Romance"
+          },
+          {
+            "selected": false,
+            "text": "Sci-Fi",
+            "value": "Sci-Fi"
+          },
+          {
+            "selected": false,
+            "text": "Thriller",
+            "value": "Thriller"
+          }
+        ],
+        "query": "Action,Adventure,Animation,Comedy,Crime,Documentary,Drama,Family,Fantasy,Horror,Romance,Sci-Fi,Thriller",
+        "type": "custom"
+      },
+      {
+        "allowCustomValue": true,
+        "current": {
+          "text": "2015",
+          "value": "2015"
+        },
+        "description": "year fillter",
+        "label": "Year",
+        "name": "year",
+        "options": [
+          {
+            "selected": true,
+            "text": "2015",
+            "value": "2015"
+          },
+          {
+            "selected": false,
+            "text": "2016",
+            "value": "2016"
+          },
+          {
+            "selected": false,
+            "text": "2017",
+            "value": "2017"
+          },
+          {
+            "selected": false,
+            "text": "2018",
+            "value": "2018"
+          },
+          {
+            "selected": false,
+            "text": "2019",
+            "value": "2019"
+          },
+          {
+            "selected": false,
+            "text": "2020",
+            "value": "2020"
+          },
+          {
+            "selected": false,
+            "text": "2021",
+            "value": "2021"
+          },
+          {
+            "selected": false,
+            "text": "2022",
+            "value": "2022"
+          },
+          {
+            "selected": false,
+            "text": "2023",
+            "value": "2023"
+          },
+          {
+            "selected": false,
+            "text": "2024",
+            "value": "2024"
+          },
+          {
+            "selected": false,
+            "text": "2025",
+            "value": "2025"
+          },
+          {
+            "selected": false,
+            "text": "2026",
+            "value": "2026"
+          },
+          {
+            "selected": false,
+            "text": "2027",
+            "value": "2027"
+          }
+        ],
+        "query": "2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026,2027",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "1",
+          "value": "1"
+        },
+        "description": "month fillter",
+        "label": "Month",
+        "name": "month",
+        "options": [
+          {
+            "selected": true,
+            "text": "1",
+            "value": "1"
+          },
+          {
+            "selected": false,
+            "text": "2",
+            "value": "2"
+          },
+          {
+            "selected": false,
+            "text": "3",
+            "value": "3"
+          },
+          {
+            "selected": false,
+            "text": "4",
+            "value": "4"
+          },
+          {
+            "selected": false,
+            "text": "5",
+            "value": "5"
+          },
+          {
+            "selected": false,
+            "text": "6",
+            "value": "6"
+          },
+          {
+            "selected": false,
+            "text": "7",
+            "value": "7"
+          },
+          {
+            "selected": false,
+            "text": "8",
+            "value": "8"
+          },
+          {
+            "selected": false,
+            "text": "9",
+            "value": "9"
+          },
+          {
+            "selected": false,
+            "text": "10",
+            "value": "10"
+          },
+          {
+            "selected": false,
+            "text": "11",
+            "value": "11"
+          },
+          {
+            "selected": false,
+            "text": "12",
+            "value": "12"
+          }
+        ],
+        "query": "1,2,3,4,5,6,7,8,9,10,11,12",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Genre Analytics Dashboard 1",
+  "uid": "genre-analytics-1",
+  "version": 0
+}

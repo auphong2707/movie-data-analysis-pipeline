@@ -57,15 +57,26 @@ class MongoDBExporter:
             logger.info("Closed MongoDB connection")
     
     def create_indexes(self):
-        """Create indexes on batch_views collection."""
+        """Create indexes on batch_views collection per SCHEMA_REQUIREMENTS."""
         collection = self.db.batch_views
         
         indexes = [
-            # Compound index for view_type and filtering
-            ([("view_type", ASCENDING), ("genre", ASCENDING), ("year", DESCENDING)], {}),
-            ([("view_type", ASCENDING), ("movie_id", ASCENDING)], {}),
+            # Primary indexes per SCHEMA_REQUIREMENTS
+            ([("movie_id", ASCENDING), ("view_type", ASCENDING)], {}),
+            ([("view_type", ASCENDING), ("computed_at", DESCENDING)], {}),
             ([("computed_at", DESCENDING)], {}),
-            ([("view_type", ASCENDING), ("window", ASCENDING)], {}),
+            
+            # Genre analytics indexes
+            ([("view_type", ASCENDING), ("genre", ASCENDING), ("year", ASCENDING)], {}),
+            
+            # Temporal trends indexes (base)
+            ([("view_type", ASCENDING), ("data.metric", ASCENDING), ("computed_at", ASCENDING)], {}),
+            
+            # Temporal trends - genre filtering (for genre-specific trends)
+            ([("view_type", ASCENDING), ("data.metric", ASCENDING), ("data.genre", ASCENDING), ("data.date", ASCENDING)], {}),
+            
+            # Temporal trends - movie filtering (for movie-specific trends)
+            ([("view_type", ASCENDING), ("data.metric", ASCENDING), ("data.movie_id", ASCENDING), ("data.date", ASCENDING)], {}),
         ]
         
         for keys, options in indexes:
@@ -76,6 +87,29 @@ class MongoDBExporter:
                 logger.warning(f"Failed to create index {keys}: {str(e)}")
         
         self.metrics.add_metric("indexes_created", len(indexes))
+    
+    def _row_to_dict(self, row):
+        """
+        Recursively convert Row to dictionary, preserving nested structures.
+        """
+        if row is None:
+            return None
+        
+        result = {}
+        for key in row.__fields__:
+            value = getattr(row, key)
+            
+            # Handle nested Row (struct)
+            if hasattr(value, '__fields__'):
+                result[key] = self._row_to_dict(value)
+            # Handle list of Rows
+            elif isinstance(value, list) and len(value) > 0 and hasattr(value[0], '__fields__'):
+                result[key] = [self._row_to_dict(item) for item in value]
+            # Handle regular values
+            else:
+                result[key] = value
+        
+        return result
     
     def export_from_dataframe(
         self,
@@ -96,15 +130,14 @@ class MongoDBExporter:
         """
         logger.info(f"Exporting {view_type} to MongoDB")
         
-        # Convert DataFrame to list of dictionaries
+        # Convert DataFrame to list of dictionaries (preserving nested structures)
         records = df.collect()
-        documents = [row.asDict() for row in records]
+        documents = [self._row_to_dict(row) for row in records]
         
         # Add view_type to each document
         for doc in documents:
             doc['view_type'] = view_type
-            # Convert any None values to null for MongoDB
-            doc = {k: v for k, v in doc.items() if v is not None}
+            # Note: Keep None values as they're needed in nested structures
         
         total_count = len(documents)
         logger.info(f"Prepared {total_count} documents for export")
@@ -120,23 +153,33 @@ class MongoDBExporter:
             operations = []
             for doc in batch:
                 # Define unique filter based on view_type
-                if view_type == "genre_analytics":
+                if view_type == "movie_details":
+                    filter_doc = {
+                        "view_type": view_type,
+                        "movie_id": doc.get("movie_id")
+                    }
+                elif view_type == "sentiment":
+                    filter_doc = {
+                        "view_type": view_type,
+                        "movie_id": doc.get("movie_id")
+                    }
+                elif view_type == "genre_analytics":
                     filter_doc = {
                         "view_type": view_type,
                         "genre": doc.get("genre"),
                         "year": doc.get("year"),
                         "month": doc.get("month")
                     }
-                elif view_type == "trending_scores":
+                elif view_type == "temporal_trends":
+                    # Use metric, date, genre, movie_id for unique identification
+                    # (genre and movie_id can be null for overall trends)
+                    data = doc.get("data", {})
                     filter_doc = {
                         "view_type": view_type,
-                        "movie_id": doc.get("movie_id"),
-                        "window": doc.get("window")
-                    }
-                elif view_type == "temporal_analysis":
-                    filter_doc = {
-                        "view_type": view_type,
-                        "year": doc.get("year")
+                        "data.metric": data.get("metric"),
+                        "data.date": data.get("date"),
+                        "data.genre": data.get("genre"),  # Can be None
+                        "data.movie_id": data.get("movie_id")  # Can be None
                     }
                 else:
                     # Generic filter
@@ -188,10 +231,10 @@ class MongoExportJob:
         
         Args:
             collections: List of Gold collections to export
-                       (default: all - genre_analytics, trending_scores, temporal_analysis)
+                       (default: all - movie_details, sentiment, genre_analytics, temporal_trends)
         """
         if collections is None:
-            collections = ["genre_analytics", "trending_scores", "temporal_analysis"]
+            collections = ["movie_details", "sentiment", "genre_analytics", "temporal_trends"]
         
         logger.info(f"Starting MongoDB export for collections: {collections}")
         
@@ -248,7 +291,7 @@ def main():
     """Main entry point for MongoDB export job."""
     parser = argparse.ArgumentParser(description="Export Gold Layer to MongoDB")
     parser.add_argument("--collections", type=str, 
-                       default="genre_analytics,trending_scores,temporal_analysis",
+                       default="movie_details,sentiment,genre_analytics,temporal_trends",
                        help="Comma-separated list of collections to export")
     parser.add_argument("--mongo-uri", type=str,
                        default=None,

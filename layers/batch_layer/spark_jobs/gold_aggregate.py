@@ -62,20 +62,26 @@ class GoldAggregationJob:
             logger.warning("No movies data found in Silver layer")
             return
         
+        # Compute movie_details view (required by SCHEMA_REQUIREMENTS)
+        movie_details_df = self._compute_movie_details(movies_df)
+        if movie_details_df:
+            self._write_to_gold(movie_details_df, "movie_details")
+        
+        # Compute sentiment view (required by SCHEMA_REQUIREMENTS)
+        if reviews_df is not None:
+            sentiment_df = self._compute_sentiment_view(reviews_df)
+            if sentiment_df:
+                self._write_to_gold(sentiment_df, "sentiment")
+        
         # Compute genre analytics
         genre_analytics_df = self._compute_genre_analytics(movies_df, reviews_df)
         if genre_analytics_df:
             self._write_to_gold(genre_analytics_df, "genre_analytics")
         
-        # Compute trending scores
-        trending_df = self._compute_trending_scores(movies_df)
-        if trending_df:
-            self._write_to_gold(trending_df, "trending_scores")
-        
-        # Compute temporal analysis
-        temporal_df = self._compute_temporal_analysis(movies_df)
-        if temporal_df:
-            self._write_to_gold(temporal_df, "temporal_analysis")
+        # Compute temporal trends (updated format)
+        temporal_trends_df = self._compute_temporal_trends(movies_df, reviews_df)
+        if temporal_trends_df:
+            self._write_to_gold(temporal_trends_df, "temporal_trends")
         
         # Log metrics
         self.metrics.log(logger)
@@ -123,6 +129,109 @@ class GoldAggregationJob:
             
         except Exception as e:
             logger.error(f"Failed to load Silver reviews: {str(e)}", exc_info=True)
+            return None
+    
+    def _compute_movie_details(self, movies_df: DataFrame) -> Optional[DataFrame]:
+        """
+        Compute movie_details view per SCHEMA_REQUIREMENTS.
+        
+        Required fields:
+        - movie_id, title, release_date, genres, vote_average, 
+          vote_count, popularity, runtime, budget, revenue, overview, original_language
+        """
+        logger.info("Computing movie_details view")
+        
+        try:
+            # Select and transform fields according to schema requirements
+            movie_details = movies_df.select(
+                F.col("movie_id"),
+                F.struct(
+                    F.col("title").alias("title"),
+                    F.col("release_date").cast("string").alias("release_date"),
+                    F.col("genres").alias("genres"),
+                    F.col("vote_average").cast("double").alias("vote_average"),
+                    F.col("vote_count").cast("int").alias("vote_count"),
+                    F.col("popularity").cast("double").alias("popularity"),
+                    F.lit(None).cast("int").alias("runtime"),  # May not have in source
+                    F.lit(None).cast("bigint").alias("budget"),
+                    F.lit(None).cast("bigint").alias("revenue"),
+                    F.col("overview").alias("overview"),
+                    F.col("original_language").alias("original_language")
+                ).alias("data")
+            )
+            
+            # Add computed_at timestamp
+            movie_details = movie_details.withColumn(
+                "computed_at",
+                F.lit(datetime.utcnow().isoformat() + "Z")
+            )
+            
+            # Add partition columns
+            current_date = datetime.utcnow()
+            movie_details = movie_details.withColumn("partition_year", F.lit(current_date.year))
+            movie_details = movie_details.withColumn("partition_month", F.lit(current_date.month))
+            
+            count = movie_details.count()
+            logger.info(f"Computed {count} movie_details records")
+            self.metrics.add_metric("movie_details_computed", count)
+            
+            return movie_details
+            
+        except Exception as e:
+            logger.error(f"Failed to compute movie_details: {str(e)}", exc_info=True)
+            return None
+    
+    def _compute_sentiment_view(self, reviews_df: DataFrame) -> Optional[DataFrame]:
+        """
+        Compute sentiment view per SCHEMA_REQUIREMENTS.
+        
+        Required fields:
+        - movie_id, avg_sentiment, review_count, positive_count, 
+          negative_count, neutral_count
+        """
+        logger.info("Computing sentiment view")
+        
+        try:
+            # Aggregate sentiment by movie
+            sentiment_agg = reviews_df.groupBy("movie_id").agg(
+                F.avg("sentiment_score").alias("avg_sentiment"),
+                F.count("review_id").alias("review_count"),
+                F.sum(F.when(F.col("sentiment_label") == "positive", 1).otherwise(0)).alias("positive_count"),
+                F.sum(F.when(F.col("sentiment_label") == "negative", 1).otherwise(0)).alias("negative_count"),
+                F.sum(F.when(F.col("sentiment_label") == "neutral", 1).otherwise(0)).alias("neutral_count")
+            )
+            
+            # Structure according to schema: wrap aggregates in 'data' field
+            sentiment_view = sentiment_agg.select(
+                F.col("movie_id"),
+                F.struct(
+                    F.col("avg_sentiment").cast("double").alias("avg_sentiment"),
+                    F.col("review_count").cast("int").alias("review_count"),
+                    F.col("positive_count").cast("int").alias("positive_count"),
+                    F.col("negative_count").cast("int").alias("negative_count"),
+                    F.col("neutral_count").cast("int").alias("neutral_count")
+                ).alias("data")
+            )
+            
+            # Add computed_at timestamp
+            sentiment_view = sentiment_view.withColumn(
+                "computed_at",
+                F.lit(datetime.utcnow().isoformat() + "Z")
+            )
+            
+            # Add partition columns
+            current_date = datetime.utcnow()
+            sentiment_view = sentiment_view.withColumn("partition_year", F.lit(current_date.year))
+            sentiment_view = sentiment_view.withColumn("partition_month", F.lit(current_date.month))
+            
+            count = sentiment_view.count()
+            logger.info(f"Computed {count} sentiment records")
+            self.metrics.add_metric("sentiment_computed", count)
+            
+            return sentiment_view
+            
+        except Exception as e:
+            logger.error(f"Failed to compute sentiment view: {str(e)}", exc_info=True)
             return None
     
     def _compute_genre_analytics(
@@ -304,60 +413,177 @@ class GoldAggregationJob:
             logger.error(f"Failed to compute trending scores: {str(e)}", exc_info=True)
             return None
     
-    def _compute_temporal_analysis(self, movies_df: DataFrame) -> Optional[DataFrame]:
+    def _compute_temporal_trends(
+        self, 
+        movies_df: DataFrame, 
+        reviews_df: Optional[DataFrame]
+    ) -> Optional[DataFrame]:
         """
-        Compute temporal analysis (year-over-year trends).
+        Compute temporal_trends view per SCHEMA_REQUIREMENTS.
+        
+        Required fields in data:
+        - metric (rating/sentiment/popularity)
+        - value (float)
+        - count (integer) 
+        - date (string ISO date)
+        
+        Optional fields (for filtering):
+        - genre (string)
+        - movie_id (int)
+        
+        Creates 3 types of trends:
+        1. Overall trends (all movies) - no genre/movie_id
+        2. Genre-specific trends - with genre field
+        3. Movie-specific trends - with movie_id field
         """
-        logger.info("Computing temporal analysis")
+        logger.info("Computing temporal_trends view")
         
         try:
-            # Add year column
-            df = movies_df.withColumn("year", F.year("release_date"))
+            all_trends_list = []
             
-            # Aggregate by year
-            temporal_agg = df.groupBy("year").agg(
-                F.count("movie_id").alias("total_movies"),
-                F.avg("vote_average").alias("avg_rating"),
-                F.avg("popularity").alias("avg_popularity"),
-                F.sum("vote_count").alias("total_votes")
+            # ===== 1. OVERALL TRENDS (aggregate across all movies) =====
+            df = movies_df.withColumn("date", F.to_date("release_date"))
+            
+            # Overall rating trends by date
+            rating_trends = df.groupBy("date").agg(
+                F.avg("vote_average").alias("value"),
+                F.count("movie_id").alias("count")
+            ).withColumn("metric", F.lit("rating")) \
+             .withColumn("genre", F.lit(None).cast(StringType())) \
+             .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+            
+            # Overall popularity trends by date
+            popularity_trends = df.groupBy("date").agg(
+                F.avg("popularity").alias("value"),
+                F.count("movie_id").alias("count")
+            ).withColumn("metric", F.lit("popularity")) \
+             .withColumn("genre", F.lit(None).cast(StringType())) \
+             .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+            
+            all_trends_list.extend([rating_trends, popularity_trends])
+            
+            # Overall sentiment trends if reviews available
+            if reviews_df is not None:
+                sentiment_trends = reviews_df.withColumn("date", F.to_date("review_date")) \
+                    .groupBy("date").agg(
+                        F.avg("sentiment_score").alias("value"),
+                        F.count("review_id").alias("count")
+                    ).withColumn("metric", F.lit("sentiment")) \
+                     .withColumn("genre", F.lit(None).cast(StringType())) \
+                     .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+                
+                all_trends_list.append(sentiment_trends)
+            
+            # ===== 2. GENRE-SPECIFIC TRENDS =====
+            # Explode genres and compute trends per genre
+            df_with_genre = movies_df.select(
+                "movie_id",
+                "release_date",
+                "vote_average",
+                "popularity",
+                F.explode("genres").alias("genre")
+            ).withColumn("date", F.to_date("release_date"))
+            
+            # Genre rating trends
+            genre_rating_trends = df_with_genre.groupBy("date", "genre").agg(
+                F.avg("vote_average").alias("value"),
+                F.count("movie_id").alias("count")
+            ).withColumn("metric", F.lit("rating")) \
+             .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+            
+            # Genre popularity trends
+            genre_popularity_trends = df_with_genre.groupBy("date", "genre").agg(
+                F.avg("popularity").alias("value"),
+                F.count("movie_id").alias("count")
+            ).withColumn("metric", F.lit("popularity")) \
+             .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+            
+            all_trends_list.extend([genre_rating_trends, genre_popularity_trends])
+            
+            # Genre sentiment trends if reviews available
+            if reviews_df is not None:
+                # Join reviews with movies to get genres
+                reviews_with_genre = reviews_df.join(
+                    movies_df.select("movie_id", F.explode("genres").alias("genre")),
+                    "movie_id",
+                    "left"
+                ).withColumn("date", F.to_date("review_date"))
+                
+                genre_sentiment_trends = reviews_with_genre.groupBy("date", "genre").agg(
+                    F.avg("sentiment_score").alias("value"),
+                    F.count("review_id").alias("count")
+                ).withColumn("metric", F.lit("sentiment")) \
+                 .withColumn("movie_id", F.lit(None).cast(IntegerType()))
+                
+                all_trends_list.append(genre_sentiment_trends)
+            
+            # ===== 3. MOVIE-SPECIFIC TRENDS =====
+            # Individual movie rating trends (time series per movie)
+            movie_rating_trends = movies_df.select(
+                "movie_id",
+                F.to_date("release_date").alias("date"),
+                F.col("vote_average").alias("value")
+            ).withColumn("count", F.lit(1)) \
+             .withColumn("metric", F.lit("rating")) \
+             .withColumn("genre", F.lit(None).cast(StringType()))
+            
+            # Individual movie popularity trends
+            movie_popularity_trends = movies_df.select(
+                "movie_id",
+                F.to_date("release_date").alias("date"),
+                F.col("popularity").alias("value")
+            ).withColumn("count", F.lit(1)) \
+             .withColumn("metric", F.lit("popularity")) \
+             .withColumn("genre", F.lit(None).cast(StringType()))
+            
+            all_trends_list.extend([movie_rating_trends, movie_popularity_trends])
+            
+            # Individual movie sentiment trends if reviews available
+            if reviews_df is not None:
+                movie_sentiment_trends = reviews_df.groupBy("movie_id", F.to_date("review_date").alias("date")).agg(
+                    F.avg("sentiment_score").alias("value"),
+                    F.count("review_id").alias("count")
+                ).withColumn("metric", F.lit("sentiment")) \
+                 .withColumn("genre", F.lit(None).cast(StringType()))
+                
+                all_trends_list.append(movie_sentiment_trends)
+            
+            # ===== UNION ALL TRENDS =====
+            all_trends = all_trends_list[0]
+            for trend_df in all_trends_list[1:]:
+                all_trends = all_trends.union(trend_df)
+            
+            # Structure according to schema: wrap in 'data' field with optional fields
+            temporal_trends = all_trends.select(
+                F.struct(
+                    F.col("metric").alias("metric"),
+                    F.col("value").cast("double").alias("value"),
+                    F.col("count").cast("int").alias("count"),
+                    F.col("date").cast("string").alias("date"),
+                    F.col("genre").alias("genre"),  # OPTIONAL - null for overall/movie trends
+                    F.col("movie_id").alias("movie_id")  # OPTIONAL - null for overall/genre trends
+                ).alias("data")
             )
-            
-            # Compute year-over-year change
-            window_spec = Window.orderBy("year")
-            
-            temporal_agg = temporal_agg.withColumn(
-                "prev_year_movies",
-                F.lag("total_movies", 1).over(window_spec)
-            )
-            
-            temporal_agg = temporal_agg.withColumn(
-                "yoy_change",
-                F.when(
-                    F.col("prev_year_movies").isNotNull(),
-                    ((F.col("total_movies") - F.col("prev_year_movies")) / F.col("prev_year_movies")) * 100
-                ).otherwise(None)
-            )
-            
-            temporal_agg = temporal_agg.drop("prev_year_movies")
             
             # Add computed_at timestamp
-            temporal_agg = temporal_agg.withColumn(
+            temporal_trends = temporal_trends.withColumn(
                 "computed_at",
                 F.lit(datetime.utcnow().isoformat() + "Z")
             )
             
             # Add partition columns
-            temporal_agg = temporal_agg.withColumn("partition_year", F.col("year"))
-            temporal_agg = temporal_agg.withColumn("partition_month", F.lit(datetime.utcnow().month))
+            current_date = datetime.utcnow()
+            temporal_trends = temporal_trends.withColumn("partition_year", F.lit(current_date.year))
+            temporal_trends = temporal_trends.withColumn("partition_month", F.lit(current_date.month))
             
-            count = temporal_agg.count()
-            logger.info(f"Computed {count} temporal analysis records")
-            self.metrics.add_metric("temporal_analysis_computed", count)
+            count = temporal_trends.count()
+            logger.info(f"Computed {count} temporal_trends records (overall + genre + movie)")
+            self.metrics.add_metric("temporal_trends_computed", count)
             
-            return temporal_agg
+            return temporal_trends
             
         except Exception as e:
-            logger.error(f"Failed to compute temporal analysis: {str(e)}", exc_info=True)
+            logger.error(f"Failed to compute temporal_trends: {str(e)}", exc_info=True)
             return None
     
     def _write_to_gold(self, df: DataFrame, metric_type: str):

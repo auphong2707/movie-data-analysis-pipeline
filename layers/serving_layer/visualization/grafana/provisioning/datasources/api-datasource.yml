@@ -1,0 +1,12 @@
+apiVersion: 1
+
+datasources:
+  - name: Movie Analytics API
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    url: http://host.docker.internal:8000
+    isDefault: true
+    jsonData:
+      tlsSkipVerify: true
+      timeout: 60
+    editable: true

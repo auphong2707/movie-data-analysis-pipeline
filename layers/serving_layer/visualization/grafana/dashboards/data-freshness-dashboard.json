@@ -1,0 +1,624 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 9,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Time since batch layer last updated",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 3600000
+              },
+              {
+                "color": "red",
+                "value": 86400000
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "last_update",
+              "text": "Last Update",
+              "type": "timestamp"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "services.batch_layer",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Batch Layer Last Update",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Time since speed layer last updated",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 300000
+              },
+              {
+                "color": "red",
+                "value": 600000
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "last_update",
+              "text": "Last Update",
+              "type": "timestamp"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "format": "table",
+          "refId": "A",
+          "root_selector": "services.speed_layer",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Speed Layer Last Update",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "48-hour cutoff configuration",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "h"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "cutoff_hours",
+              "text": "Cutoff Hours",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "format": "table",
+          "refId": "A",
+          "root_selector": "data_freshness",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Cutoff Window",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Current cutoff timestamp",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "cutoff_time",
+              "text": "Cutoff Time",
+              "type": "timestamp"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "data_freshness",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Current Cutoff Time",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Batch layer status and document count",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "down": {
+                  "color": "red",
+                  "index": 1
+                },
+                "no_data": {
+                  "color": "orange",
+                  "index": 2
+                },
+                "up": {
+                  "color": "green",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 5,
+      "options": {
+        "cellHeight": "md",
+        "showHeader": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "status",
+              "text": "Status",
+              "type": "string"
+            },
+            {
+              "selector": "last_update",
+              "text": "Last Update",
+              "type": "timestamp"
+            },
+            {
+              "selector": "document_count",
+              "text": "Documents",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "format": "table",
+          "refId": "A",
+          "root_selector": "services.batch_layer",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Batch Layer Status",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "description": "Speed layer status and document count",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "down": {
+                  "color": "red",
+                  "index": 1
+                },
+                "no_data": {
+                  "color": "orange",
+                  "index": 2
+                },
+                "up": {
+                  "color": "green",
+                  "index": 0
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "md",
+        "showHeader": true
+      },
+      "pluginVersion": "12.2.1",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "status",
+              "text": "Status",
+              "type": "string"
+            },
+            {
+              "selector": "last_update",
+              "text": "Last Update",
+              "type": "timestamp"
+            },
+            {
+              "selector": "document_count",
+              "text": "Total Documents",
+              "type": "number"
+            },
+            {
+              "selector": "recent_documents",
+              "text": "Recent Docs",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "format": "table",
+          "refId": "A",
+          "root_selector": "services.speed_layer",
+          "source": "url",
+          "type": "json",
+          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Speed Layer Status",
+      "type": "table"
+    },
+    {
+      "description": "Data routing visualization",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 7,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "# Data Routing Strategy\n\n## 48-Hour Cutoff Rule\n\n```\nCurrent Time: ${__from}\nCutoff Time: ${__from:date:subtract:48:hours}\n\n┌────────────────────────────────────────────────┐\n│           DATA ROUTING DIAGRAM                  │\n├────────────────────────────────────────────────┤\n│                                                │\n│  ┌──────────────┐        ┌──────────────┐    │\n│  │ Batch Layer  │        │ Speed Layer  │    │\n│  │  (> 48h)     │        │  (<= 48h)    │    │\n│  └──────┬───────┘        └──────┬───────┘    │\n│         │                       │             │\n│         └───────────┬───────────┘             │\n│                     ↓                         │\n│            ┌─────────────────┐                │\n│            │  Query Router   │                │\n│            │   & Merger      │                │\n│            └────────┬────────┘                │\n│                     ↓                         │\n│            ┌─────────────────┐                │\n│            │   Unified API   │                │\n│            └─────────────────┘                │\n│                                                │\n└────────────────────────────────────────────────┘\n\nQueries for data OLDER than cutoff → Batch Layer\nQueries for data NEWER than cutoff → Speed Layer\nOverlapping data → Speed Layer takes precedence\n```\n\n## Current Status\n- **Batch Layer**: Historical data (accurate, updated daily)\n- **Speed Layer**: Real-time data (fresh, updated every 5 minutes)\n- **Merge Point**: 48 hours before current time",
+        "mode": "markdown"
+      },
+      "pluginVersion": "12.2.1",
+      "title": "Data Routing Visualization",
+      "type": "text"
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": [
+    "data-freshness",
+    "monitoring",
+    "layers"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Data Freshness Dashboard 1",
+  "uid": "data-freshness-1",
+  "version": 0
+}

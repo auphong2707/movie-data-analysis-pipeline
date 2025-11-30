@@ -61,19 +61,20 @@ class CassandraToMongoSync:
         self.error_count = 0
     
     def _create_indexes(self):
-        """Create MongoDB indexes for efficient queries."""
+        """Create MongoDB indexes per SCHEMA_REQUIREMENTS."""
         try:
-            # Index on movie_id for fast lookups
-            self.mongo_collection.create_index("movie_id")
+            # Primary indexes
+            self.mongo_collection.create_index([("movie_id", 1), ("data_type", 1), ("hour", -1)])
+            self.mongo_collection.create_index([("data_type", 1), ("hour", -1)])
             
-            # Index on window_start for time-based queries
-            self.mongo_collection.create_index("window_start")
+            # TTL index (auto-delete after 48 hours)
+            self.mongo_collection.create_index(
+                [("ttl_expires_at", 1)],
+                expireAfterSeconds=0
+            )
             
-            # Compound index for movie + time range queries
-            self.mongo_collection.create_index([("movie_id", 1), ("window_start", -1)])
-            
-            # Index on updated_at for tracking freshness
-            self.mongo_collection.create_index("updated_at")
+            # Trending queries (if stats.trending_score exists)
+            self.mongo_collection.create_index([("data_type", 1), ("stats.trending_score", -1)])
             
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
@@ -130,7 +131,7 @@ class CassandraToMongoSync:
         return stats
     
     def _sync_review_sentiments(self) -> int:
-        """Sync review sentiment data."""
+        """Sync review sentiment data per SCHEMA_REQUIREMENTS."""
         query = """
         SELECT movie_id, hour, window_start, window_end, review_count, 
                avg_sentiment, positive_count, negative_count, neutral_count,
@@ -142,21 +143,24 @@ class CassandraToMongoSync:
         bulk_ops = []
         
         for row in rows:
+            # Calculate TTL expiration (48 hours from hour)
+            ttl_expires_at = row.hour + timedelta(hours=48)
+            
+            # Structure per SCHEMA_REQUIREMENTS
             doc = {
                 'movie_id': row.movie_id,
-                'hour': row.hour,
-                'window_start': row.window_start,
-                'window_end': row.window_end,
                 'data_type': 'sentiment',
-                'sentiment': {
-                    'review_count': row.review_count,
-                    'avg_sentiment': row.avg_sentiment,
-                    'positive_count': row.positive_count,
-                    'negative_count': row.negative_count,
-                    'neutral_count': row.neutral_count,
-                    'sentiment_velocity': row.sentiment_velocity
+                'hour': row.hour,
+                'data': {
+                    'avg_sentiment': float(row.avg_sentiment) if row.avg_sentiment else 0.0,
+                    'review_count': int(row.review_count) if row.review_count else 0,
+                    'positive_count': int(row.positive_count) if row.positive_count else 0,
+                    'negative_count': int(row.negative_count) if row.negative_count else 0,
+                    'neutral_count': int(row.neutral_count) if row.neutral_count else 0,
+                    'sentiment_velocity': float(row.sentiment_velocity) if row.sentiment_velocity else 0.0
                 },
-                'updated_at': datetime.utcnow()
+                'synced_at': datetime.utcnow(),
+                'ttl_expires_at': ttl_expires_at
             }
             
             # Use upsert to avoid duplicates
@@ -164,9 +168,8 @@ class CassandraToMongoSync:
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
-                        'hour': row.hour,
-                        'window_start': row.window_start,
-                        'data_type': 'sentiment'
+                        'data_type': 'sentiment',
+                        'hour': row.hour
                     },
                     {'$set': doc},
                     upsert=True
@@ -182,7 +185,7 @@ class CassandraToMongoSync:
         return 0
     
     def _sync_movie_stats(self) -> int:
-        """Sync movie statistics data."""
+        """Sync movie statistics data per SCHEMA_REQUIREMENTS."""
         query = """
         SELECT movie_id, hour, vote_average, vote_count,
                popularity, rating_velocity, last_updated
@@ -193,26 +196,33 @@ class CassandraToMongoSync:
         bulk_ops = []
         
         for row in rows:
+            # Calculate TTL expiration (48 hours from hour)
+            ttl_expires_at = row.hour + timedelta(hours=48)
+            
+            # Structure per SCHEMA_REQUIREMENTS
             doc = {
                 'movie_id': row.movie_id,
-                'hour': row.hour,
                 'data_type': 'stats',
+                'hour': row.hour,
                 'stats': {
-                    'vote_average': row.vote_average,
-                    'vote_count': row.vote_count,
-                    'popularity': row.popularity,
-                    'rating_velocity': row.rating_velocity
+                    'vote_average': float(row.vote_average) if row.vote_average else 0.0,
+                    'vote_count': int(row.vote_count) if row.vote_count else 0,
+                    'popularity': float(row.popularity) if row.popularity else 0.0,
+                    'rating_velocity': float(row.rating_velocity) if row.rating_velocity else 0.0,
+                    # Add optional fields if available
+                    'popularity_velocity': 0.0,  # Compute if historical data available
+                    'vote_velocity': 0,  # Compute if historical data available
                 },
-                'last_updated': row.last_updated,
-                'updated_at': datetime.utcnow()
+                'synced_at': datetime.utcnow(),
+                'ttl_expires_at': ttl_expires_at
             }
             
             bulk_ops.append(
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
-                        'hour': row.hour,
-                        'data_type': 'stats'
+                        'data_type': 'stats',
+                        'hour': row.hour
                     },
                     {'$set': doc},
                     upsert=True
@@ -228,7 +238,10 @@ class CassandraToMongoSync:
         return 0
     
     def _sync_trending_movies(self) -> int:
-        """Sync trending movies data."""
+        """
+        Sync trending movies data.
+        Note: This can be merged into stats data_type with trending_score field.
+        """
         query = """
         SELECT hour, rank, movie_id, title,
                trending_score, velocity, acceleration
@@ -239,28 +252,33 @@ class CassandraToMongoSync:
         bulk_ops = []
         
         for row in rows:
+            # Calculate TTL expiration (48 hours from hour)
+            ttl_expires_at = row.hour + timedelta(hours=48)
+            
+            # Update or create stats document with trending_score
             doc = {
                 'movie_id': row.movie_id,
+                'data_type': 'stats',
                 'hour': row.hour,
-                'data_type': 'trending',
-                'title': row.title,
-                'trending': {
-                    'rank': row.rank,
-                    'trending_score': row.trending_score,
-                    'velocity': row.velocity,
-                    'acceleration': row.acceleration
-                },
-                'updated_at': datetime.utcnow()
+                'synced_at': datetime.utcnow(),
+                'ttl_expires_at': ttl_expires_at
             }
             
+            # Add trending score to stats
             bulk_ops.append(
                 UpdateOne(
                     {
                         'movie_id': row.movie_id,
-                        'hour': row.hour,
-                        'data_type': 'trending'
+                        'data_type': 'stats',
+                        'hour': row.hour
                     },
-                    {'$set': doc},
+                    {
+                        '$set': {
+                            'stats.trending_score': float(row.trending_score) if row.trending_score else 0.0,
+                            'synced_at': doc['synced_at'],
+                            'ttl_expires_at': doc['ttl_expires_at']
+                        }
+                    },
                     upsert=True
                 )
             )
@@ -321,6 +339,8 @@ class CassandraToMongoSync:
     def cleanup_expired_data(self, ttl_hours: int = 48):
         """
         Remove expired data from MongoDB (older than TTL).
+        Note: With TTL index on ttl_expires_at, MongoDB will auto-delete.
+        This is a manual fallback cleanup.
         
         Args:
             ttl_hours: Time-to-live in hours (default: 48)
@@ -328,7 +348,7 @@ class CassandraToMongoSync:
         cutoff_time = datetime.utcnow() - timedelta(hours=ttl_hours)
         
         result = self.mongo_collection.delete_many({
-            'window_start': {'$lt': cutoff_time}
+            'hour': {'$lt': cutoff_time}
         })
         
         logger.info(f"Cleaned up {result.deleted_count} expired documents")

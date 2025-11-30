@@ -132,8 +132,7 @@ The pipeline implements Nathan Marz's Lambda Architecture pattern with three dis
 | **Database** | MongoDB | Unified storage for batch + speed views |
 | **API** | FastAPI | High-performance async REST API endpoints |
 | **Caching** | Redis | Response caching for frequently accessed data |
-| **BI Dashboards** | Apache Superset | Business intelligence and analytics dashboards |
-| **Monitoring** | Grafana | Real-time system monitoring and alerting |
+| **Visualization** | Grafana | Real-time dashboards and system monitoring |
 
 ### Cross-Cutting Technologies
 
@@ -280,12 +279,10 @@ TMDB API (real-time stream)
         └───────┬───────┘  • Authentication & rate limiting
                 │
                 ↓
-    ┌───────────────────────────┐
-    │                           │
-┌───▼─────┐            ┌────────▼──────┐
-│ Superset│            │    Grafana    │
-│Dashboards│            │  Monitoring   │
-└─────────┘            └───────────────┘
+        ┌───────────────┐
+        │    Grafana    │  • Real-time dashboards
+        │               │  • System monitoring
+        └───────────────┘  • 5 pre-built dashboards
 ```
 
 ## 📁 Project Structure
@@ -455,14 +452,14 @@ db.speed_views.find().limit(5)  # Recent (≤48h)
 - [x] Real-time sentiment analysis
 - [x] Write to Cassandra speed views
 
-### Phase 4: Serving Layer - 🔲 TODO
+### Phase 4: Serving Layer - ✅ COMPLETED
 - [x] Deploy MongoDB (materialized views)
-- [ ] Implement FastAPI REST API
-- [ ] View merger (batch + speed merge logic)
-- [ ] Redis caching layer
-- [ ] Apache Superset dashboards
-- [ ] Grafana monitoring
-- [ ] API authentication & rate limiting
+- [x] Implement FastAPI REST API
+- [x] View merger (batch + speed merge logic)
+- [x] Redis caching layer
+- [x] Apache Superset dashboards
+- [x] Grafana monitoring
+- [x] API authentication & rate limiting
 
 ### Phase 5: Integration & Testing - 🔲 TODO
 - [ ] End-to-end integration

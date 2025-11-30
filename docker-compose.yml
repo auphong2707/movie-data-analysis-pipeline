@@ -19,6 +19,7 @@ networks:
 volumes:
   # Serving Layer Volumes (Intersection)
   serving-mongodb-data:
+  serving-redis-data:
   
   # Batch Layer Volumes
   batch-minio-data:
@@ -63,6 +64,69 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+
+  # Redis Cache - Caching Layer for API
+  serving-redis:
+    image: redis:7-alpine
+    container_name: serving-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - serving-redis-data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # FastAPI Application - Query Interface
+  serving-api:
+    build:
+      context: ./layers/serving_layer
+      dockerfile: Dockerfile
+    image: movie-pipeline-serving-api:latest
+    container_name: serving-api
+    hostname: serving-api
+    depends_on:
+      serving-mongodb:
+        condition: service_healthy
+      serving-redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./layers/serving_layer:/app
+      - ./layers/serving_layer/logs:/app/logs
+    environment:
+      # MongoDB
+      MONGODB_URI: mongodb://${MONGODB_USERNAME:-admin}:${MONGODB_PASSWORD:-password}@mongodb:27017
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-moviedb}
+      
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      
+      # API
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      
+      # Logging
+      LOG_LEVEL: INFO
+    networks:
+      - movie-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   # =====================================================================
@@ -138,7 +202,7 @@ services:
   batch-airflow-init:
     build:
       context: ./dockerfiles
-      dockerfile: Dockerfile.airflow-mac
+      dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
     container_name: batch-airflow-init
     depends_on:
@@ -491,7 +555,7 @@ services:
   speed-kafka-topics-init:
     build:
       context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer-mac
+      dockerfile: Dockerfile.speed-layer
     image: movie-pipeline-speed-layer:latest
     container_name: speed-kafka-topics-init
     depends_on:

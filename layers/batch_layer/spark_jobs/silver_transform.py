@@ -1,11 +1,11 @@
 """
-Silver Layer Transformation - Clean, Deduplicate, and Enrich
+Silver Layer - Baseline Calculation
 
-Reads Bronze layer Parquet, performs cleaning, deduplication, enrichment,
-and sentiment analysis, then writes to Silver layer.
+Calculates historical baselines from TMDB data for comparison with Reddit real-time data.
+Computes genre-level sentiment baselines, vote thresholds, and popularity metrics.
 
 Usage:
-    spark-submit silver_transform.py --lookback-hours 4
+    spark-submit silver_transform.py
 """
 
 import argparse
@@ -102,354 +102,275 @@ def sentiment_label_udf(text):
     return result['label']
 
 
-class SilverTransformationJob:
+class BaselineCalculationJob:
     """
-    Silver Layer transformation job.
+    Baseline Calculation Job for Silver Layer.
     
-    Processes:
-    1. Read Bronze layer data
-    2. Deduplicate by movie_id
-    3. Clean and validate data
-    4. Enrich with genre names, cast info
-    5. Compute sentiment scores
-    6. Write to Silver layer
+    Calculates historical baselines from TMDB data:
+    1. Load TMDB movies and reviews from Bronze
+    2. Join movies with genres
+    3. Calculate sentiment baselines per genre
+    4. Calculate viral thresholds (75th percentile vote_count)
+    5. Write baselines to Silver layer
     """
     
     def __init__(self, spark):
         self.spark = spark
-        self.metrics = JobMetrics("silver_transform")
+        self.metrics = JobMetrics("baseline_calculation")
         
         # Register UDFs
         self.spark.udf.register("sentiment_score", sentiment_score_udf, DoubleType())
         self.spark.udf.register("sentiment_label", sentiment_label_udf, StringType())
     
-    @log_execution(logger, "silver_transform")
-    def run(self, lookback_hours: int = 4):
+    @log_execution(logger, "baseline_calculation")
+    def run(self):
         """
-        Run Silver layer transformation.
+        Run baseline calculation.
         
-        Args:
-            lookback_hours: Hours of Bronze data to process
+        Computes:
+        - avg_sentiment per genre (from TMDB reviews)
+        - sentiment_stddev per genre
+        - viral_threshold per genre (75th percentile vote_count)
         """
-        logger.info("Starting Silver layer transformation",
-                   extra={"context": {"lookback_hours": lookback_hours}})
+        logger.info("Starting baseline calculation from TMDB data")
         
-        # Process movies
-        movies_df = self._process_movies(lookback_hours)
-        if movies_df:
-            self._write_to_silver(movies_df, "movies")
+        # Load Bronze data
+        movies_df = self._load_bronze_movies()
+        reviews_df = self._load_bronze_reviews()
+        genres_df = self._load_bronze_genres()
         
-        # Process reviews with sentiment
-        reviews_df = self._process_reviews(lookback_hours)
-        if reviews_df:
-            self._write_to_silver(reviews_df, "reviews")
+        if movies_df is None or genres_df is None:
+            logger.error("Cannot calculate baselines without movies and genres")
+            return
         
-        # Process credits
-        credits_df = self._process_credits(lookback_hours)
-        if credits_df:
-            self._write_to_silver(credits_df, "credits")
+        # Calculate baselines
+        baselines_df = self._calculate_genre_baselines(movies_df, reviews_df, genres_df)
+        
+        if baselines_df:
+            self._write_baselines_to_silver(baselines_df)
         
         # Log metrics
         self.metrics.log(logger)
-        logger.info("Silver layer transformation completed successfully")
+        logger.info("Baseline calculation completed successfully")
     
-    def _process_movies(self, lookback_hours: int) -> Optional[DataFrame]:
-        """
-        Process movies from Bronze to Silver.
-        
-        Steps:
-        1. Read Bronze movies
-        2. Deduplicate by movie_id
-        3. Extract and clean fields
-        4. Enrich with genre names
-        5. Validate data quality
-        """
-        logger.info("Processing movies from Bronze")
-        
+    def _load_bronze_movies(self) -> Optional[DataFrame]:
+        """Load movies from Bronze layer."""
         try:
-            # Read Bronze movies (last N hours)
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("movies", None).rstrip('/')
+            bronze_path = get_bronze_path("tmdb_movies", None).rstrip('/')
+            logger.info(f"Loading movies from Bronze: {bronze_path}")
             
             df = self.spark.read.parquet(bronze_path)
+            count = df.count()
             
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
-            )
+            logger.info(f"Loaded {count} movies from Bronze")
+            self.metrics.add_metric("bronze_movies_loaded", count)
             
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} movies from Bronze")
-            self.metrics.add_metric("bronze_movies_read", bronze_count)
+            return df if count > 0 else None
             
-            if bronze_count == 0:
-                logger.warning("No movies found in Bronze layer")
-                return None
+        except Exception as e:
+            logger.error(f"Failed to load Bronze movies: {str(e)}", exc_info=True)
+            return None
+    
+    def _load_bronze_reviews(self) -> Optional[DataFrame]:
+        """Load reviews from Bronze layer."""
+        try:
+            bronze_path = get_bronze_path("tmdb_reviews", None).rstrip('/')
+            logger.info(f"Loading reviews from Bronze: {bronze_path}")
             
-            # Deduplicate by movie_id (keep latest)
-            window_spec = Window.partitionBy("id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
+            df = self.spark.read.parquet(bronze_path)
+            count = df.count()
             
-            deduplicated_count = df.count()
-            logger.info(f"After deduplication: {deduplicated_count} unique movies")
-            self.metrics.add_metric("movies_deduplicated", deduplicated_count)
+            logger.info(f"Loaded {count} reviews from Bronze")
+            self.metrics.add_metric("bronze_reviews_loaded", count)
             
-            # Extract and clean fields
-            df = df.select(
+            return df if count > 0 else None
+            
+        except Exception as e:
+            logger.warning(f"No reviews found in Bronze (optional for baselines): {str(e)}")
+            return None
+    
+    def _load_bronze_genres(self) -> Optional[DataFrame]:
+        """Load genres from Bronze layer."""
+        try:
+            bronze_path = get_bronze_path("tmdb_genres", None).rstrip('/')
+            logger.info(f"Loading genres from Bronze: {bronze_path}")
+            
+            df = self.spark.read.parquet(bronze_path)
+            count = df.count()
+            
+            logger.info(f"Loaded {count} genres from Bronze")
+            self.metrics.add_metric("bronze_genres_loaded", count)
+            
+            return df if count > 0 else None
+            
+        except Exception as e:
+            logger.error(f"Failed to load Bronze genres: {str(e)}", exc_info=True)
+            return None
+    
+    def _calculate_genre_baselines(
+        self,
+        movies_df: DataFrame,
+        reviews_df: Optional[DataFrame],
+        genres_df: DataFrame
+    ) -> Optional[DataFrame]:
+        """
+        Calculate baseline metrics per genre.
+        
+        Computes:
+        - avg_sentiment: Average sentiment score from TMDB reviews
+        - sentiment_stddev: Standard deviation of sentiment
+        - viral_threshold: 75th percentile of vote_count (upvote proxy)
+        """
+        logger.info("Calculating genre baselines")
+        
+        try:
+            # Explode genres array to one row per (movie, genre)
+            movies_exploded = movies_df.select(
                 F.col("id").alias("movie_id"),
                 F.col("title"),
-                F.col("original_title"),
-                F.col("overview"),
-                F.to_date(F.col("release_date")).alias("release_date"),
-                F.col("adult").cast("boolean"),
-                F.col("popularity").cast("double"),
-                F.col("vote_average").cast("double"),
-                F.col("vote_count").cast("int"),
-                F.col("poster_path"),
-                F.col("backdrop_path"),
-                F.col("original_language"),
-                F.col("genre_ids"),  # Will convert to genre names
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
+                F.col("vote_average"),
+                F.col("vote_count"),
+                F.col("popularity"),
+                F.explode(F.col("genre_ids")).alias("genre_id")
             )
             
-            # Convert genre IDs to genre names
-            genre_map = {
-                28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
-                80: "Crime", 99: "Documentary", 18: "Drama", 10751: "Family",
-                14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
-                9648: "Mystery", 10749: "Romance", 878: "Science Fiction",
-                10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western"
-            }
-            
-            # Create genre names array
-            def map_genres(genre_ids):
-                if not genre_ids:
-                    return []
-                return [genre_map.get(gid, "Unknown") for gid in genre_ids]
-            
-            map_genres_udf = F.udf(map_genres, ArrayType(StringType()))
-            df = df.withColumn("genres", map_genres_udf(F.col("genre_ids")))
-            df = df.drop("genre_ids")
-            
-            # Add data quality flag
-            df = df.withColumn(
-                "quality_flag",
-                F.when(
-                    (F.col("title").isNull()) | (F.col("release_date").isNull()),
-                    "WARNING"
-                ).otherwise("OK")
+            # Join with genre names
+            movies_with_genres = movies_exploded.join(
+                genres_df.select(
+                    F.col("id").alias("genre_id"),
+                    F.col("name").alias("genre_name")
+                ),
+                on="genre_id",
+                how="inner"
             )
             
-            # Add partition columns
-            df = df.withColumn("partition_year", F.year(F.col("release_date")))
-            df = df.withColumn("partition_month", F.month(F.col("release_date")))
-            
-            # For movies without release_date, use extraction time
-            df = df.withColumn(
-                "partition_year",
-                F.when(F.col("partition_year").isNull(), 
-                       F.year(F.col("processed_timestamp"))).otherwise(F.col("partition_year"))
-            )
-            df = df.withColumn(
-                "partition_month",
-                F.when(F.col("partition_month").isNull(), 
-                       F.month(F.col("processed_timestamp"))).otherwise(F.col("partition_month"))
+            # Calculate vote_count-based viral threshold by genre
+            genre_stats = movies_with_genres.groupBy("genre_name").agg(
+                F.expr("percentile_approx(vote_count, 0.75)").alias("viral_threshold"),
+                F.avg("vote_average").alias("avg_rating"),
+                F.avg("popularity").alias("avg_popularity"),
+                F.count("*").alias("movie_count")
             )
             
-            # Add primary genre for partitioning (first genre in list)
-            df = df.withColumn(
-                "partition_genre",
-                F.when(F.size(F.col("genres")) > 0, F.col("genres")[0]).otherwise("Unknown")
-            )
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} movies for Silver layer")
-            self.metrics.add_metric("movies_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process movies: {str(e)}", exc_info=True)
-            return None
-    
-    def _process_reviews(self, lookback_hours: int) -> Optional[DataFrame]:
-        """
-        Process reviews from Bronze to Silver with sentiment analysis.
-        """
-        logger.info("Processing reviews from Bronze")
-        
-        try:
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("reviews", None).rstrip('/')
-            
-            df = self.spark.read.parquet(bronze_path)
-            
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
-            )
-            
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} reviews from Bronze")
-            self.metrics.add_metric("bronze_reviews_read", bronze_count)
-            
-            if bronze_count == 0:
-                logger.warning("No reviews found in Bronze layer")
-                return None
-            
-            # Deduplicate by review ID
-            window_spec = Window.partitionBy("id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
-            
-            # Extract fields and compute sentiment
-            df = df.select(
-                F.col("id").alias("review_id"),
-                F.col("movie_id"),
-                F.col("author"),
-                F.col("content"),
-                F.to_date(F.col("created_at")).alias("review_date"),
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
-            )
-            
-            # Compute sentiment scores
-            df = df.withColumn("sentiment_score", 
-                             F.expr("sentiment_score(content)"))
-            df = df.withColumn("sentiment_label", 
-                             F.expr("sentiment_label(content)"))
-            
-            # Add partition columns
-            df = df.withColumn("partition_year", F.year(F.col("review_date")))
-            df = df.withColumn("partition_month", F.month(F.col("review_date")))
-            
-            # Handle nulls
-            df = df.withColumn(
-                "partition_year",
-                F.when(F.col("partition_year").isNull(), 
-                       F.year(F.col("processed_timestamp"))).otherwise(F.col("partition_year"))
-            )
-            df = df.withColumn(
-                "partition_month",
-                F.when(F.col("partition_month").isNull(), 
-                       F.month(F.col("processed_timestamp"))).otherwise(F.col("partition_month"))
-            )
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} reviews for Silver layer")
-            self.metrics.add_metric("reviews_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process reviews: {str(e)}", exc_info=True)
-            return None
-    
-    def _process_credits(self, lookback_hours: int) -> Optional[DataFrame]:
-        """Process credits from Bronze to Silver."""
-        logger.info("Processing credits from Bronze")
-        
-        try:
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("credits", None).rstrip('/')
-            
-            df = self.spark.read.parquet(bronze_path)
-            
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
-            )
-            
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} credits from Bronze")
-            self.metrics.add_metric("bronze_credits_read", bronze_count)
-            
-            if bronze_count == 0:
-                logger.warning("No credits found in Bronze layer")
-                return None
-            
-            # Deduplicate by movie_id
-            window_spec = Window.partitionBy("movie_id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
-            
-            # Extract fields
-            df = df.select(
-                F.col("movie_id"),
-                F.col("cast"),
-                F.col("crew"),
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
-            )
-            
-            # Add partition columns (use extraction time)
-            df = df.withColumn("partition_year", F.year(F.col("processed_timestamp")))
-            df = df.withColumn("partition_month", F.month(F.col("processed_timestamp")))
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} credits for Silver layer")
-            self.metrics.add_metric("credits_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process credits: {str(e)}", exc_info=True)
-            return None
-    
-    def _write_to_silver(self, df: DataFrame, data_type: str):
-        """Write DataFrame to Silver layer."""
-        try:
-            output_path = get_silver_path(data_type, None).rstrip('/')
-            
-            logger.info(f"Writing {data_type} to Silver layer: {output_path}")
-            
-            # Partition by year, month, and genre (if applicable)
-            if data_type == "movies":
-                partition_cols = ["partition_year", "partition_month", "partition_genre"]
+            # If reviews exist, calculate sentiment baselines
+            if reviews_df is not None:
+                logger.info("Calculating sentiment baselines from TMDB reviews")
+                
+                # Apply sentiment analysis to reviews
+                reviews_with_sentiment = reviews_df.select(
+                    F.col("movie_id"),
+                    F.col("content"),
+                    F.expr("sentiment_score(content)").alias("sentiment_score")
+                )
+                
+                # Join reviews with movie genres
+                reviews_with_genres = reviews_with_sentiment.join(
+                    movies_with_genres.select("movie_id", "genre_name").distinct(),
+                    on="movie_id",
+                    how="inner"
+                )
+                
+                # Calculate sentiment stats by genre
+                sentiment_stats = reviews_with_genres.groupBy("genre_name").agg(
+                    F.avg("sentiment_score").alias("avg_sentiment"),
+                    F.stddev("sentiment_score").alias("sentiment_stddev"),
+                    F.count("*").alias("review_count")
+                )
+                
+                # Join genre stats with sentiment stats
+                baselines = genre_stats.join(
+                    sentiment_stats,
+                    on="genre_name",
+                    how="left"
+                )
             else:
-                partition_cols = ["partition_year", "partition_month"]
+                logger.warning("No reviews available - using rating as sentiment proxy")
+                
+                # Use vote_average as sentiment proxy (normalized to -1 to 1 scale)
+                # TMDB: 0-10 scale, transform to -1 to 1: (vote_average - 5) / 5
+                movies_with_sentiment_proxy = movies_with_genres.withColumn(
+                    "sentiment_proxy",
+                    (F.col("vote_average") - 5) / 5
+                )
+                
+                sentiment_proxy_stats = movies_with_sentiment_proxy.groupBy("genre_name").agg(
+                    F.avg("sentiment_proxy").alias("avg_sentiment"),
+                    F.stddev("sentiment_proxy").alias("sentiment_stddev"),
+                    F.lit(0).alias("review_count")
+                )
+                
+                baselines = genre_stats.join(
+                    sentiment_proxy_stats,
+                    on="genre_name",
+                    how="left"
+                )
             
-            df.write \
-                .mode("append") \
-                .partitionBy(*partition_cols) \
+            # Add metadata
+            baselines = baselines.withColumn("type", F.lit("baseline"))
+            baselines = baselines.withColumn("updated_at", F.current_timestamp())
+            baselines = baselines.withColumn("source", F.lit("tmdb_batch"))
+            
+            # Rename genre_name to genre for consistency
+            baselines = baselines.withColumnRenamed("genre_name", "genre")
+            
+            # Fill nulls
+            baselines = baselines.fillna({
+                "avg_sentiment": 0.0,
+                "sentiment_stddev": 0.1,
+                "review_count": 0
+            })
+            
+            count = baselines.count()
+            logger.info(f"Calculated baselines for {count} genres")
+            self.metrics.add_metric("baselines_calculated", count)
+            
+            # Log sample
+            logger.info("Sample baselines:")
+            baselines.show(5, truncate=False)
+            
+            return baselines
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate baselines: {str(e)}", exc_info=True)
+            return None
+    
+    def _write_baselines_to_silver(self, baselines_df: DataFrame):
+        """Write baselines to Silver layer."""
+        try:
+            output_path = get_silver_path("baselines", None).rstrip('/')
+            
+            logger.info(f"Writing baselines to Silver layer: {output_path}")
+            
+            baselines_df.write \
+                .mode("overwrite") \
                 .parquet(output_path)
             
-            count = df.count()
-            logger.info(f"Successfully wrote {count} {data_type} to Silver layer")
-            self.metrics.add_metric(f"{data_type}_written_to_silver", count)
+            count = baselines_df.count()
+            logger.info(f"Successfully wrote {count} genre baselines to Silver layer")
+            self.metrics.add_metric("baselines_written", count)
             
         except Exception as e:
-            logger.error(f"Failed to write {data_type} to Silver: {str(e)}", exc_info=True)
+            logger.error(f"Failed to write baselines to Silver: {str(e)}", exc_info=True)
             raise
 
 
 def main():
-    """Main entry point for Silver transformation job."""
-    parser = argparse.ArgumentParser(description="Silver Layer Transformation")
-    parser.add_argument("--lookback-hours", type=int, default=4,
-                       help="Hours of Bronze data to process (default: 4)")
+    """Main entry point for baseline calculation job."""
+    parser = argparse.ArgumentParser(description="Silver Layer Baseline Calculation")
     
     args = parser.parse_args()
     
     spark = None
     try:
         # Create Spark session
-        spark = get_spark_session("silver_transform")
+        spark = get_spark_session("baseline_calculation")
         
-        # Run transformation
-        job = SilverTransformationJob(spark)
-        job.run(lookback_hours=args.lookback_hours)
+        # Run baseline calculation
+        job = BaselineCalculationJob(spark)
+        job.run()
         
     except Exception as e:
-        logger.error(f"Silver transformation failed: {str(e)}", exc_info=True)
+        logger.error(f"Baseline calculation failed: {str(e)}", exc_info=True)
         sys.exit(1)
     
     finally:

@@ -1,11 +1,11 @@
 """
-TMDB Batch Processing Pipeline - Airflow DAG
+TMDB Baseline Calculation Pipeline - Airflow DAG
 
-Orchestrates the complete batch layer pipeline:
-Bronze → Silver → Gold → MongoDB Export
+Calculates historical baselines from TMDB data for comparison with real-time Reddit data.
+Bronze (metadata) → Silver (baseline calculation) → Gold (baseline export) → MongoDB
 
-Schedule: Every 4 hours (0 */4 * * *)
-SLA: < 2 hours per run
+Schedule: Daily at 2 AM (0 2 * * *)
+SLA: < 1 hour per run
 """
 
 from datetime import datetime, timedelta
@@ -34,13 +34,13 @@ default_args = {
 
 # DAG definition
 dag = DAG(
-    'tmdb_batch_pipeline',
+    'tmdb_baseline_pipeline',
     default_args=default_args,
-    description='TMDB Batch Layer Pipeline - Bronze → Silver → Gold → MongoDB',
-    schedule_interval='0 */4 * * *',  # Every 4 hours
+    description='TMDB Baseline Calculation - Provides historical baselines for Reddit comparison',
+    schedule_interval='0 2 * * *',  # Daily at 2 AM
     catchup=False,
     max_active_runs=1,
-    tags=['batch', 'tmdb', 'etl', 'production'],
+    tags=['batch', 'tmdb', 'baseline', 'production'],
 )
 
 def log_task_start(task_name, **context):
@@ -103,43 +103,42 @@ def run_spark_job(job_name, args=None, **context):
         raise Exception(f"Job {job_name} failed: {e.stderr}")
 
 
-# Task 1: Bronze Ingestion
-bronze_start = PythonOperator(
-    task_id='bronze_start_log',
+# Task 1: Fetch TMDB Metadata
+metadata_start = PythonOperator(
+    task_id='metadata_start_log',
     python_callable=log_task_start,
-    op_kwargs={'task_name': 'bronze_ingest'},
+    op_kwargs={'task_name': 'fetch_tmdb_metadata'},
     dag=dag,
 )
 
-bronze_ingest = PythonOperator(
-    task_id='bronze_ingest',
+fetch_tmdb_metadata = PythonOperator(
+    task_id='fetch_tmdb_metadata',
     python_callable=run_spark_job,
     op_kwargs={
         'job_name': 'bronze_ingest.py',
-        # Default: 250 pages/category = 5000 movies/category = ~10,000 total movies
-        # To fetch maximum, add: 'args': ['--pages-per-category', '500']
-        # To fetch less for testing: 'args': ['--pages-per-category', '5']
+        # Fetch metadata for baseline calculation
+        # Default: 100 pages = ~2000 movies for baseline dataset
     },
     dag=dag,
 )
 
-bronze_end = PythonOperator(
-    task_id='bronze_end_log',
+metadata_end = PythonOperator(
+    task_id='metadata_end_log',
     python_callable=log_task_end,
-    op_kwargs={'task_name': 'bronze_ingest'},
+    op_kwargs={'task_name': 'fetch_tmdb_metadata'},
     dag=dag,
 )
 
-# Task 2: Silver Transformation
-silver_start = PythonOperator(
-    task_id='silver_start_log',
+# Task 2: Calculate Baselines
+baseline_start = PythonOperator(
+    task_id='baseline_start_log',
     python_callable=log_task_start,
-    op_kwargs={'task_name': 'silver_transform'},
+    op_kwargs={'task_name': 'calculate_baselines'},
     dag=dag,
 )
 
-silver_transform = PythonOperator(
-    task_id='silver_transform',
+calculate_baselines = PythonOperator(
+    task_id='calculate_baselines',
     python_callable=run_spark_job,
     op_kwargs={
         'job_name': 'silver_transform.py',
@@ -147,23 +146,23 @@ silver_transform = PythonOperator(
     dag=dag,
 )
 
-silver_end = PythonOperator(
-    task_id='silver_end_log',
+baseline_end = PythonOperator(
+    task_id='baseline_end_log',
     python_callable=log_task_end,
-    op_kwargs={'task_name': 'silver_transform'},
+    op_kwargs={'task_name': 'calculate_baselines'},
     dag=dag,
 )
 
-# Task 3: Gold Aggregation
-gold_start = PythonOperator(
-    task_id='gold_start_log',
+# Task 3: Export Baselines
+export_start = PythonOperator(
+    task_id='export_start_log',
     python_callable=log_task_start,
-    op_kwargs={'task_name': 'gold_aggregate'},
+    op_kwargs={'task_name': 'export_baselines'},
     dag=dag,
 )
 
-gold_aggregate = PythonOperator(
-    task_id='gold_aggregate',
+export_baselines = PythonOperator(
+    task_id='export_baselines',
     python_callable=run_spark_job,
     op_kwargs={
         'job_name': 'gold_aggregate.py',
@@ -171,10 +170,10 @@ gold_aggregate = PythonOperator(
     dag=dag,
 )
 
-gold_end = PythonOperator(
-    task_id='gold_end_log',
+export_end = PythonOperator(
+    task_id='export_end_log',
     python_callable=log_task_end,
-    op_kwargs={'task_name': 'gold_aggregate'},
+    op_kwargs={'task_name': 'export_baselines'},
     dag=dag,
 )
 
@@ -236,8 +235,8 @@ success_notification = PythonOperator(
 )
 
 # Define task dependencies
-bronze_start >> bronze_ingest >> bronze_end
-bronze_end >> silver_start >> silver_transform >> silver_end
-silver_end >> gold_start >> gold_aggregate >> gold_end
-gold_end >> mongo_start >> export_to_mongo >> mongo_end
+metadata_start >> fetch_tmdb_metadata >> metadata_end
+metadata_end >> baseline_start >> calculate_baselines >> baseline_end
+baseline_end >> export_start >> export_baselines >> export_end
+export_end >> mongo_start >> export_to_mongo >> mongo_end
 mongo_end >> validate >> success_notification

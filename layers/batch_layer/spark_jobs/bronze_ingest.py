@@ -1,11 +1,11 @@
 """
-Bronze Layer Ingestion - TMDB API to MinIO/S3A
+Bronze Layer - TMDB Metadata Ingestion for Baseline Calculation
 
-Fetches data from TMDB API and writes raw data as Parquet to Bronze layer.
-Implements rate limiting (4 req/s), retry logic, and partitioned storage.
+Fetches TMDB movie metadata and genres for baseline calculation.
+Simplified version - no reviews, no credits (baselines only need metadata).
 
 Usage:
-    spark-submit bronze_ingest.py --extraction-window 4 --categories popular,top_rated
+    spark-submit bronze_ingest.py --pages 100
 """
 
 import argparse
@@ -107,6 +107,23 @@ class TMDBAPIClient:
                         extra={"context": {"error": str(e), "endpoint": endpoint}})
             raise
     
+    def fetch_genres(self) -> List[Dict]:
+        """
+        Fetch list of movie genres from TMDB.
+        
+        Returns:
+            List of genre dictionaries with id and name
+        """
+        try:
+            data = self._make_request("genre/movie/list")
+            genres = data.get("genres", [])
+            logger.info(f"Fetched {len(genres)} genres")
+            return genres
+        except Exception as e:
+            logger.error(f"Failed to fetch genres", 
+                        extra={"context": {"error": str(e)}})
+            return []
+    
     def fetch_movies(self, category: str = "popular", pages: int = None, max_pages: int = 500) -> List[Dict]:
         """
         Fetch movies from TMDB API.
@@ -197,9 +214,9 @@ class TMDBAPIClient:
 
 class BronzeIngestionJob:
     """
-    Bronze Layer ingestion job.
+    Bronze Layer metadata ingestion job for baseline calculation.
     
-    Extracts data from TMDB API and writes to MinIO/S3A as Parquet.
+    Fetches TMDB movie metadata and genres only (no reviews, no credits).
     """
     
     def __init__(self, spark, api_key: str):
@@ -210,18 +227,16 @@ class BronzeIngestionJob:
     @log_execution(logger, "bronze_ingest")
     def run(
         self,
-        extraction_window_hours: int = 4,
         categories: List[str] = None,
-        pages_per_category: int = 250,
+        pages_per_category: int = 100,
         max_pages: int = 500
     ):
         """
-        Run Bronze layer ingestion.
+        Run Bronze layer metadata ingestion.
         
         Args:
-            extraction_window_hours: Hours of data to extract (for logging/tracking)
             categories: Movie categories to extract (default: ["popular", "top_rated"])
-            pages_per_category: Number of pages to fetch per category (default: 250 = 5000 movies/category, use 500 for max)
+            pages_per_category: Number of pages to fetch per category (default: 100 = ~2000 movies)
             max_pages: Maximum pages to fetch as safety limit (default: 500)
         """
         if categories is None:
@@ -229,13 +244,17 @@ class BronzeIngestionJob:
         
         extraction_time = datetime.utcnow()
         
-        logger.info("Starting Bronze layer ingestion",
+        logger.info("Starting Bronze layer metadata ingestion for baselines",
                    extra={"context": {
                        "extraction_time": extraction_time.isoformat() + "Z",
                        "categories": categories,
                        "pages_per_category": pages_per_category if pages_per_category else "all",
                        "max_pages": max_pages
                    }})
+        
+        # Fetch genres first
+        genres = self.api_client.fetch_genres()
+        self._write_genres_to_bronze(genres, extraction_time)
         
         # Fetch movies from each category
         all_movies = []
@@ -255,54 +274,19 @@ class BronzeIngestionJob:
         # Write movies to Bronze
         self._write_movies_to_bronze(unique_movies, extraction_time)
         
-        # Fetch details for sample of movies
-        movie_ids = [m['id'] for m in unique_movies[:50]]  # Limit for performance
-        details = self._fetch_movie_details_batch(movie_ids)
-        self._write_details_to_bronze(details, extraction_time)
-        
-        # Fetch credits for sample
-        credits = self._fetch_credits_batch(movie_ids[:30])
-        self._write_credits_to_bronze(credits, extraction_time)
-        
-        # Fetch reviews for top movies
-        reviews = self._fetch_reviews_batch(movie_ids[:20])
+        # Fetch reviews for baseline sentiment calculation (top 50 movies only)
+        movie_ids = [m['id'] for m in unique_movies[:50]]
+        reviews = self._fetch_reviews_batch(movie_ids)
         self._write_reviews_to_bronze(reviews, extraction_time)
         
         # Log final metrics
         self.metrics.log(logger)
         
-        logger.info("Bronze layer ingestion completed successfully")
-    
-    def _fetch_movie_details_batch(self, movie_ids: List[int]) -> List[Dict]:
-        """Fetch details for multiple movies."""
-        logger.info(f"Fetching details for {len(movie_ids)} movies")
-        details = []
-        
-        for movie_id in movie_ids:
-            detail = self.api_client.fetch_movie_details(movie_id)
-            if detail:
-                details.append(detail)
-        
-        self.metrics.add_metric("movie_details_fetched", len(details))
-        return details
-    
-    def _fetch_credits_batch(self, movie_ids: List[int]) -> List[Dict]:
-        """Fetch credits for multiple movies."""
-        logger.info(f"Fetching credits for {len(movie_ids)} movies")
-        credits_list = []
-        
-        for movie_id in movie_ids:
-            credits = self.api_client.fetch_movie_credits(movie_id)
-            if credits:
-                credits['movie_id'] = movie_id
-                credits_list.append(credits)
-        
-        self.metrics.add_metric("credits_fetched", len(credits_list))
-        return credits_list
+        logger.info("Bronze layer metadata ingestion completed successfully")
     
     def _fetch_reviews_batch(self, movie_ids: List[int]) -> List[Dict]:
-        """Fetch reviews for multiple movies."""
-        logger.info(f"Fetching reviews for {len(movie_ids)} movies")
+        """Fetch reviews for multiple movies for baseline sentiment calculation."""
+        logger.info(f"Fetching reviews for {len(movie_ids)} movies for baseline calculation")
         all_reviews = []
         
         for movie_id in movie_ids:
@@ -313,6 +297,31 @@ class BronzeIngestionJob:
         
         self.metrics.add_metric("reviews_fetched", len(all_reviews))
         return all_reviews
+    
+    def _write_genres_to_bronze(self, genres: List[Dict], extraction_time: datetime):
+        """Write genres to Bronze layer."""
+        if not genres:
+            logger.warning("No genres to write to Bronze")
+            return
+        
+        logger.info(f"Writing {len(genres)} genres to Bronze layer")
+        
+        # Add extraction metadata
+        for genre in genres:
+            genre['extraction_timestamp'] = extraction_time.isoformat() + "Z"
+        
+        # Create DataFrame
+        df = self.spark.createDataFrame(genres)
+        
+        # Write to S3A (overwrite mode for genres since they're static)
+        output_path = get_bronze_path("tmdb_genres", None).rstrip('/')
+        
+        df.write \
+            .mode("overwrite") \
+            .parquet(output_path)
+        
+        logger.info(f"Wrote {len(genres)} genres to {output_path}")
+        self.metrics.add_metric("genres_written", len(genres))
     
     def _write_movies_to_bronze(self, movies: List[Dict], extraction_time: datetime):
         """Write movies to Bronze layer."""
@@ -325,84 +334,22 @@ class BronzeIngestionJob:
         # Add extraction metadata
         for movie in movies:
             movie['extraction_timestamp'] = extraction_time.isoformat() + "Z"
-            movie['partition_year'] = extraction_time.year
-            movie['partition_month'] = extraction_time.month
-            movie['partition_day'] = extraction_time.day
-            movie['partition_hour'] = extraction_time.hour
-            # Convert entire movie dict to JSON string for raw storage
-            movie['raw_data'] = str(movie)
         
         # Create DataFrame
         df = self.spark.createDataFrame(movies)
         
-        # Write to S3A with partitioning
-        output_path = get_bronze_path("movies", extraction_time)
+        # Write to S3A (overwrite mode for movies baseline dataset)
+        output_path = get_bronze_path("tmdb_movies", None).rstrip('/')
         
         df.write \
-            .mode("append") \
-            .partitionBy("partition_year", "partition_month", "partition_day", "partition_hour") \
+            .mode("overwrite") \
             .parquet(output_path)
         
         logger.info(f"Wrote {len(movies)} movies to {output_path}")
         self.metrics.add_metric("movies_written", len(movies))
     
-    def _write_details_to_bronze(self, details: List[Dict], extraction_time: datetime):
-        """Write movie details to Bronze layer."""
-        if not details:
-            logger.warning("No details to write to Bronze")
-            return
-        
-        logger.info(f"Writing {len(details)} movie details to Bronze layer")
-        
-        # Add extraction metadata
-        for detail in details:
-            detail['extraction_timestamp'] = extraction_time.isoformat() + "Z"
-            detail['partition_year'] = extraction_time.year
-            detail['partition_month'] = extraction_time.month
-            detail['partition_day'] = extraction_time.day
-            detail['partition_hour'] = extraction_time.hour
-            detail['raw_data'] = str(detail)
-        
-        df = self.spark.createDataFrame(details)
-        output_path = get_bronze_path("movie_details", extraction_time)
-        
-        df.write \
-            .mode("append") \
-            .partitionBy("partition_year", "partition_month", "partition_day", "partition_hour") \
-            .parquet(output_path)
-        
-        logger.info(f"Wrote {len(details)} details to {output_path}")
-        self.metrics.add_metric("details_written", len(details))
-    
-    def _write_credits_to_bronze(self, credits: List[Dict], extraction_time: datetime):
-        """Write credits to Bronze layer."""
-        if not credits:
-            logger.warning("No credits to write to Bronze")
-            return
-        
-        logger.info(f"Writing {len(credits)} credits to Bronze layer")
-        
-        for credit in credits:
-            credit['extraction_timestamp'] = extraction_time.isoformat() + "Z"
-            credit['partition_year'] = extraction_time.year
-            credit['partition_month'] = extraction_time.month
-            credit['partition_day'] = extraction_time.day
-            credit['partition_hour'] = extraction_time.hour
-            credit['raw_data'] = str(credit)
-        
-        df = self.spark.createDataFrame(credits)
-        output_path = get_bronze_path("credits", extraction_time)
-        
-        df.write \
-            .mode("append") \
-            .partitionBy("partition_year", "partition_month", "partition_day", "partition_hour") \
-            .parquet(output_path)
-        
-        logger.info(f"Wrote {len(credits)} credits to {output_path}")
-        self.metrics.add_metric("credits_written", len(credits))
-    
     def _write_reviews_to_bronze(self, reviews: List[Dict], extraction_time: datetime):
-        """Write reviews to Bronze layer."""
+        """Write reviews to Bronze layer for baseline calculation."""
         if not reviews:
             logger.warning("No reviews to write to Bronze")
             return
@@ -411,18 +358,12 @@ class BronzeIngestionJob:
         
         for review in reviews:
             review['extraction_timestamp'] = extraction_time.isoformat() + "Z"
-            review['partition_year'] = extraction_time.year
-            review['partition_month'] = extraction_time.month
-            review['partition_day'] = extraction_time.day
-            review['partition_hour'] = extraction_time.hour
-            review['raw_data'] = str(review)
         
         df = self.spark.createDataFrame(reviews)
-        output_path = get_bronze_path("reviews", extraction_time)
+        output_path = get_bronze_path("tmdb_reviews", None).rstrip('/')
         
         df.write \
-            .mode("append") \
-            .partitionBy("partition_year", "partition_month", "partition_day", "partition_hour") \
+            .mode("overwrite") \
             .parquet(output_path)
         
         logger.info(f"Wrote {len(reviews)} reviews to {output_path}")
@@ -430,14 +371,12 @@ class BronzeIngestionJob:
 
 
 def main():
-    """Main entry point for Bronze ingestion job."""
-    parser = argparse.ArgumentParser(description="Bronze Layer TMDB Ingestion")
-    parser.add_argument("--extraction-window", type=int, default=4,
-                       help="Extraction window in hours (default: 4)")
+    """Main entry point for Bronze metadata ingestion job."""
+    parser = argparse.ArgumentParser(description="Bronze Layer TMDB Metadata Ingestion for Baselines")
     parser.add_argument("--categories", type=str, default="popular,top_rated",
                        help="Comma-separated list of movie categories")
-    parser.add_argument("--pages-per-category", type=int, default=250,
-                       help="Number of pages to fetch per category (default: 250 = 5000 movies/category, max: 500)")
+    parser.add_argument("--pages-per-category", type=int, default=100,
+                       help="Number of pages to fetch per category (default: 100 = ~2000 movies)")
     parser.add_argument("--max-pages", type=int, default=500,
                        help="Maximum pages to fetch as safety limit (default: 500)")
     
@@ -459,14 +398,13 @@ def main():
         # Run ingestion
         job = BronzeIngestionJob(spark, api_key)
         job.run(
-            extraction_window_hours=args.extraction_window,
             categories=categories,
             pages_per_category=args.pages_per_category,
             max_pages=args.max_pages
         )
         
     except Exception as e:
-        logger.error(f"Bronze ingestion failed: {str(e)}", exc_info=True)
+        logger.error(f"Bronze metadata ingestion failed: {str(e)}", exc_info=True)
         sys.exit(1)
     
     finally:

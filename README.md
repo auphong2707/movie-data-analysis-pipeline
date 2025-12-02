@@ -1,10 +1,11 @@
-# Movie Data Analytics Pipeline - Lambda Architecture
+# Movie Social Engagement Analytics Pipeline - Lambda Architecture
 
-A production-ready big data analytics pipeline implementing **Lambda Architecture** to analyze TMDB movie data for real-time sentiment tracking, trend prediction, and comprehensive analytics.
+A production-ready big data analytics pipeline implementing **Lambda Architecture** to analyze **real-time social engagement from Reddit** combined with **historical review data from TMDB** for sentiment tracking, viral content detection, and audience insight analytics.
 
 ## 📋 Table of Contents
 
 - [Project Overview](#-project-overview)
+- [Lambda Architecture Layer Contributions](#-lambda-architecture-layer-contributions)
 - [Architecture](#-architecture)
 - [Technology Stack](#-technology-stack)
 - [Core Features](#-core-features)
@@ -20,32 +21,242 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 
 ## 🎯 Project Overview
 
-### Business Problems Solved
+### Business Goals
 
-1. **Movie Popularity & Trend Prediction**
-   - Analyze time-series signals (popularity, vote counts, rating velocity)
-   - Detect rising/declining titles in real-time
-   - Forecast short-term demand using historical patterns
+1. **PR Crisis Detection & Sentiment Monitoring**
+   - **Business Need**: Entertainment companies need to respond to PR crises within hours, not days
+   - **Solution**: Detect when current Reddit discussion sentiment drops significantly below historical TMDB baselines
+   - **Value**: Enable rapid PR response by identifying statistically significant negative sentiment shifts
+   - **Example**: Alert marketing teams when "Dune 2" sentiment drops to +0.3 (vs sci-fi baseline +0.65) indicating genuine crisis, not normal variance
 
-2. **Genre-Based Sentiment Insights**
-   - Real-time sentiment scoring on new reviews
-   - Historical sentiment trends by genre, year, and popularity tier
-   - Track audience perception shifts across blockbuster vs. niche films
+2. **Viral Content Identification for Marketing Amplification**
+   - **Business Need**: Marketing teams must identify and amplify viral content during its brief 24-48 hour peak window
+   - **Solution**: Distinguish genuine viral events from normal fluctuations by comparing real-time Reddit velocity against historical thresholds
+   - **Value**: Maximize ROI on marketing spend by identifying organic viral moments worthy of paid amplification
+   - **Example**: Detect "The Creator" discussion at 500 upvotes/hour (10x baseline of 50/hour) triggering viral amplification campaign
 
-3. **Recommendation System**
-   - Content-based filtering using metadata (genres, cast, keywords)
-   - Re-rank by current trends and sentiment scores
-   - Combine historical accuracy with real-time relevance
+3. **Content Recommendation Optimization**
+   - **Business Need**: Streaming platforms must surface trending content while it's hot to maximize engagement and subscriptions
+   - **Solution**: Re-rank recommendations by combining fresh Reddit buzz with historical TMDB performance data
+   - **Value**: Increase user engagement by surfacing content that exceeds both current social buzz AND historical quality benchmarks
+   - **Example**: Prioritize "Barbie" (Reddit: 2,000 comments/day + +0.9 sentiment) over competitors based on dual success metrics
 
-### Data Scope
+### Data Scope & Characteristics
 
-- **Source**: The Movie Database (TMDB) API
-- **Volume**: ~50K movies, 100K+ reviews/month
-- **Languages**: English-language content
-- **Update Frequency**: 
-  - Batch Layer: Every 4 hours (historical accuracy)
-  - Speed Layer: <5 minute latency (real-time freshness)
-- **API Rate Limit**: 4 requests/second (TMDB constraint)
+#### Primary Data Sources
+
+**Reddit API (Speed Layer - Real-Time Social Engagement)**
+- **Data Types**: Posts, comments, upvotes, Reddit awards, cross-posts from r/movies, r/boxoffice, r/TrueFilm
+- **Volume**: 500-2,000 posts/day + 10K-50K comments/day across movie subreddits
+- **Update Frequency**: 30-second polling (near real-time)
+- **API Rate Limit**: 60 requests/minute (free tier)
+- **Retention**: Last 48 hours in speed layer (Cassandra TTL)
+- **Real-Time Nature**: Discussions happen continuously; posts can go viral (0→10K upvotes) within hours
+
+**TMDB API (Batch Layer - Historical Review Archive)**
+- **Data Types**: Complete review history, vote counts, rating trends, movie metadata (genres, cast, release dates)
+- **Volume**: ~50K movies tracked, 1M+ historical reviews, complete vote history
+- **Update Frequency**: Every 4 hours (complete historical reprocessing)
+- **API Rate Limit**: 4 requests/second
+- **Retention**: 5 years of historical data in batch layer (HDFS)
+- **Historical Nature**: Provides baselines, trends, and statistical thresholds for contextualizing real-time signals
+
+#### Data Flow Strategy
+
+- **Speed Layer Focus**: Reddit discussions, upvote velocity, community engagement (last 48 hours)
+- **Batch Layer Focus**: TMDB review archive, sentiment baselines, genre trends, competitive benchmarks (>48 hours)
+- **Merge Strategy**: Query-time merge with 48-hour cutoff - recent Reddit data + historical TMDB context
+- **Languages**: Primarily English-language content
+- **Lambda Architecture Justification**: Reddit provides high-velocity streaming data; TMDB provides deep historical context
+
+## 🧩 Lambda Architecture Layer Contributions
+
+This section details how each layer of the Lambda Architecture contributes to solving the three business problems.
+
+### Business Problem #1: Multi-Source Sentiment Monitoring
+
+**Goal**: Detect sentiment shifts and PR crises by comparing real-time Reddit discussions against historical TMDB review baselines.
+
+#### Speed Layer Contribution (Reddit API)
+**What it processes:**
+- Real-time Reddit posts and comments from r/movies, r/boxoffice, r/TrueFilm
+- Live sentiment analysis on incoming discussions using VADER
+- Comment velocity tracking (comments per hour)
+- Upvote/downvote patterns indicating agreement/disagreement
+
+**Output:**
+- Current Reddit sentiment score (e.g., +0.3 for "Dune 2" in last 48h)
+- Sentiment velocity: "Dropped from +0.8 to +0.3 in last 6 hours"
+- Discussion volume: "450 comments in last 24 hours"
+
+**Limitation:** Cannot determine if +0.3 is good/bad without historical context.
+
+#### Batch Layer Contribution (TMDB API)
+**What it processes:**
+- Complete TMDB review archive (all reviews ever posted for 50K+ movies)
+- Historical sentiment analysis on millions of reviews
+- Genre-specific sentiment baselines (e.g., sci-fi avg: +0.65)
+- Director/franchise historical patterns (e.g., Denis Villeneuve's previous films)
+- Sentiment variance calculations (normal fluctuation range: ±0.15 for sci-fi)
+
+**Output:**
+- Historical baseline: "Sci-fi films average +0.65 sentiment"
+- Comparative context: "Dune 1 had +0.78 all-time sentiment"
+- Statistical thresholds: "Normal variance ±0.15, current -0.35 deviation = outlier"
+
+**Limitation:** 4-hour refresh lag; cannot detect real-time sentiment drops.
+
+#### Merged Result (Serving Layer)
+**Combined Intelligence:**
+```
+Query: "Is Dune 2 having a PR crisis?"
+
+Speed Layer: Current Reddit sentiment +0.3 (dropped from +0.8)
+Batch Layer: Sci-fi baseline +0.65, Dune 1 was +0.78, normal variance ±0.15
+
+Merged Answer:
+✅ ALERT: PR Crisis Detected
+- Current +0.3 is -0.35 below genre baseline (beyond normal ±0.15 variance)
+- Drop of -0.5 in 6 hours exceeds historical drop patterns
+- Significantly below franchise expectation (+0.78 for Dune 1)
+Recommendation: Immediate PR response required
+```
+
+**Value of Lambda Architecture:** Speed layer detects the drop; batch layer proves it's statistically significant.
+
+---
+
+### Business Problem #2: Viral Content & Trending Detection
+
+**Goal**: Identify breakout content by comparing real-time Reddit engagement velocity against historical viral thresholds.
+
+#### Speed Layer Contribution (Reddit API)
+**What it processes:**
+- Upvote velocity tracking (upvotes per hour)
+- Cross-subreddit spread monitoring (r/movies → r/all)
+- Reddit award velocity (gold/platinum per hour)
+- Comment acceleration (new comments per 5-min window)
+- Post age vs engagement ratio
+
+**Output:**
+- Current velocity: "500 upvotes/hour for 'The Creator' discussion"
+- Cross-subreddit spread: "Appeared in 5 movie-related subs in 2 hours"
+- Award rate: "Received 3 gold awards in 30 minutes"
+
+**Limitation:** Cannot determine if 500 upvotes/hour is viral without historical benchmarks.
+
+#### Batch Layer Contribution (TMDB API)
+**What it processes:**
+- Historical vote velocity patterns from TMDB (vote count changes over time)
+- Genre-specific viral thresholds calculated from years of data
+- Budget tier analysis (indie vs blockbuster viral patterns)
+- Historical viral case studies (e.g., "Everything Everywhere All At Once" vote patterns)
+- Seasonal trending baselines (summer vs winter viral thresholds)
+
+**Output:**
+- Genre baseline: "Mid-budget sci-fi: 50 votes/hour average, 150 votes/hour top quartile"
+- Viral threshold: "300+ votes/hour = 99th percentile (viral territory)"
+- Budget tier context: "$80M budget films: 2.5x coefficient = breakout"
+- Historical viral cases: "EEAAO peaked at 800 votes/hour during viral surge"
+
+**Limitation:** Historical thresholds don't capture real-time viral momentum.
+
+#### Merged Result (Serving Layer)
+**Combined Intelligence:**
+```
+Query: "Is 'The Creator' going viral?"
+
+Speed Layer: 500 upvotes/hour, cross-posted to 5 subs, 3 gold awards in 30 min
+Batch Layer: Genre baseline 50/hour, viral threshold 300/hour (99th percentile)
+
+Merged Answer:
+✅ VIRAL EVENT CONFIRMED
+- Current 500/hour is 10x genre baseline (viral coefficient 10x)
+- Exceeds 99th percentile threshold (300/hour) by 67%
+- Cross-subreddit spread indicates organic viral momentum
+- Award velocity (6/hour rate) matches historical viral patterns
+Recommendation: Amplify marketing; expect 24-48h sustained viral window
+```
+
+**Value of Lambda Architecture:** Speed layer captures viral momentum; batch layer validates it's genuinely exceptional.
+
+---
+
+### Business Problem #3: Audience Insight & Competitive Intelligence
+
+**Goal**: Provide competitive context for content performance by combining real-time Reddit engagement with historical TMDB review patterns.
+
+#### Speed Layer Contribution (Reddit API)
+**What it processes:**
+- Current discussion volume across multiple subreddits
+- Real-time sentiment on competing releases (same weekend)
+- Discussion topic extraction (spoilers vs non-spoilers, specific scenes)
+- User engagement quality (award-giving indicates strong reactions)
+- Community buzz intensity (comments per post ratio)
+
+**Output:**
+- Current engagement: "Barbie: 2,000 comments/day, +0.9 sentiment"
+- Competitor comparison: "Oppenheimer: 800 comments/day, +0.92 sentiment"
+- Discussion quality: "Barbie avg 12 awards/post vs Oppenheimer 6 awards/post"
+
+**Limitation:** Cannot determine if this performance is historically strong without baselines.
+
+#### Batch Layer Contribution (TMDB API)
+**What it processes:**
+- Complete historical review archive for genre/franchise context
+- Cross-movie comparisons (similar films, franchises, directors)
+- Release timing analysis (summer blockbusters, award season, etc.)
+- Genre evolution trends (comedy sentiment 2020: +0.75 → 2023: +0.68)
+- Franchise trajectory patterns (sequel performance vs originals)
+
+**Output:**
+- Genre baseline: "Summer comedies average +0.71 sentiment"
+- Franchise context: "Toy Story 4 (IP revival): +0.85, 3,400 reviews"
+- Competitive historical: "July releases face 15% higher competition"
+- Trend analysis: "Family films stable at +0.80 across 5 years"
+
+**Limitation:** Historical aggregations updated every 4 hours; misses breaking trends.
+
+#### Merged Result (Serving Layer)
+**Combined Intelligence:**
+```
+Query: "Should we prioritize Barbie in recommendations?"
+
+Speed Layer:
+- Barbie: 2,000 Reddit comments/day, +0.9 sentiment, 12 awards/post
+- Oppenheimer: 800 comments/day, +0.92 sentiment, 6 awards/post
+
+Batch Layer:
+- Genre baseline: Summer comedies +0.71 avg
+- Historical comp: Toy Story 4 was +0.85 sentiment, 3,400 TMDB reviews
+- Trend: Comedy sentiment declining (2023 avg: +0.68)
+
+Merged Answer:
+✅ PRIORITIZE BARBIE - Rare Dual Success
+- Reddit engagement 2.5x higher than competitor (2,000 vs 800 comments)
+- Sentiment +0.9 beats genre baseline (+0.71) by +0.19
+- Exceeds declining genre trend (+0.68) significantly
+- Higher engagement quality (awards/post) than competitor
+- Comparable to Toy Story 4 historical success pattern
+Recommendation: Top placement in recommendations; expect sustained performance
+```
+
+**Value of Lambda Architecture:** Speed layer shows current buzz; batch layer proves it's beating historical expectations.
+
+---
+
+### Summary: Why Both Layers Are Essential
+
+| **Layer** | **Contribution** | **Limitation Without Other Layer** |
+|-----------|------------------|-------------------------------------|
+| **Speed Layer (Reddit)** | Real-time signals, viral detection, immediate sentiment shifts | Cannot distinguish signal from noise; no context for "is this good?" |
+| **Batch Layer (TMDB)** | Historical baselines, statistical thresholds, genre/franchise context | 4-hour lag; cannot detect breaking trends or PR crises |
+| **Merged (Serving)** | Contextualized real-time insights: "Current performance vs historical norms" | — |
+
+**Key Insight:** 
+- Speed layer answers: **"What is happening NOW?"**
+- Batch layer answers: **"Is this NORMAL or EXCEPTIONAL?"**
+- Lambda Architecture answers: **"What is happening NOW, and should we ACT on it?"**
 
 ## 🏗️ Architecture
 
@@ -90,20 +301,25 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 
 The pipeline implements Nathan Marz's Lambda Architecture pattern with three distinct layers:
 
-**Batch Layer**: Processes complete historical datasets for accuracy (>48 hours old)
+**Batch Layer**: Processes complete historical social engagement data (>48 hours old)
+- Full review history with sentiment analysis
+- Comprehensive rating and voting patterns
+- Genre and temporal trend aggregations
 - Reprocessing capability for corrections
-- Complete data accuracy
-- Higher latency acceptable
+- Higher latency acceptable (4-hour refresh)
 
-**Speed Layer**: Processes recent data for low latency (≤48 hours old)  
-- Real-time incremental updates
-- Approximations acceptable
-- Sub-5-minute latency
+**Speed Layer**: Processes recent user activity for low latency (≤48 hours old)  
+- New reviews streamed in near real-time (30s polling)
+- Vote count velocity and popularity changes
+- Real-time sentiment scoring on fresh reviews
+- Trending detection based on recent engagement
+- Sub-5-minute processing latency
 
 **Serving Layer**: Merges batch accuracy with speed freshness
-- 48-hour cutoff merge strategy
-- Unified query interface
-- Best of both worlds
+- 48-hour cutoff merge strategy (recent speed data + historical batch data)
+- Unified query interface combining both views
+- Trending dashboards with minute-level freshness
+- Historical analytics with complete accuracy
 
 ## 🛠️ Technology Stack
 
@@ -146,28 +362,32 @@ The pipeline implements Nathan Marz's Lambda Architecture pattern with three dis
 
 ## 🎨 Core Features
 
-### Real-Time Analytics
-- **Sentiment Analysis**: VADER-based sentiment scoring on movie reviews
-- **Trending Detection**: Identify hot movies based on velocity and acceleration
-- **Live Statistics**: Real-time aggregations of ratings, votes, and popularity
+### Real-Time Social Engagement Analytics
+- **Live Review Stream**: Process new TMDB reviews within seconds of posting
+- **Sentiment Analysis**: VADER-based sentiment scoring on fresh user reviews
+- **Trending Detection**: Identify viral content based on vote velocity and review spikes
+- **Engagement Velocity**: Track rating activity, review volume, and popularity changes
+- **Crisis Detection**: Alert on sudden negative sentiment patterns for PR management
 
-### Historical Analysis
-- **Genre Analytics**: Comprehensive statistics by genre, year, and tier
-- **Temporal Trends**: Year-over-year and seasonal pattern analysis
-- **Actor Networks**: Collaboration graphs using GraphX
-- **Revenue Analysis**: Budget vs. revenue performance tracking
+### Historical Community Insights
+- **Sentiment Trends**: Long-term sentiment patterns by genre, release period, and tier
+- **Review Analytics**: Comprehensive review statistics and author patterns
+- **Engagement Patterns**: User behavior analysis (rating sprees, watchlist trends)
+- **Release Performance**: First-week/month review sentiment and volume tracking
+- **Competitive Analysis**: Cross-movie sentiment comparison for similar content
 
 ### Query Capabilities
 - **Fast Queries**: <100ms p95 latency through MongoDB + Redis caching
-- **Fresh Data**: 5-minute freshness from speed layer
-- **Deep History**: 5-year historical data from batch layer
-- **Flexible Search**: Full-text search with multiple filter dimensions
+- **Fresh Data**: Sub-5-minute freshness from speed layer (recent reviews/ratings)
+- **Deep History**: 5-year historical sentiment data from batch layer
+- **Flexible Search**: Full-text review search with sentiment, genre, and time filters
+- **Trending Endpoints**: Real-time "what's hot now" based on recent engagement
 
 ### Data Quality
 - **Schema Validation**: Automated validation at each layer
-- **Deduplication**: Intelligent duplicate removal by movie_id
+- **Deduplication**: Intelligent duplicate removal by review_id and movie_id
 - **Completeness Checks**: >95% data quality target
-- **Anomaly Detection**: Statistical outlier identification
+- **Anomaly Detection**: Statistical outlier identification in sentiment and engagement
 
 ## 📊 Data Pipeline Architecture
 
@@ -179,6 +399,7 @@ TMDB API (scheduled extraction)
 ┌───────────────────────────────────────┐
 │         BRONZE LAYER (HDFS)           │
 │  • Raw JSON → Parquet                 │
+│  • Reviews, ratings, movie metadata   │
 │  • Partition: /year/month/day/hour    │
 │  • Retention: 90 days                 │
 │  • No transformations (immutable)     │
@@ -186,19 +407,21 @@ TMDB API (scheduled extraction)
                  ↓ (Spark Batch Job)
 ┌───────────────────────────────────────┐
 │         SILVER LAYER (HDFS)           │
-│  • Deduplication by movie_id          │
+│  • Deduplication by review_id         │
 │  • Schema validation & enrichment     │
-│  • Genre/cast joins                   │
 │  • Historical sentiment analysis      │
+│  • Join reviews with movie metadata   │
+│  • Vote count aggregations            │
 │  • Partition: /year/month/genre       │
 │  • Retention: 2 years                 │
 └────────────────┬──────────────────────┘
                  ↓ (Spark Aggregations)
 ┌───────────────────────────────────────┐
 │          GOLD LAYER (HDFS)            │
-│  • Aggregations by genre/year/tier    │
-│  • Trend scores (7d, 30d, 90d)        │
-│  • Popularity metrics                 │
+│  • Review sentiment by genre/year     │
+│  • Rating velocity trends (7d, 30d)   │
+│  • Engagement metrics aggregations    │
+│  • Popularity tier analytics          │
 │  • Partition: /metric_type/year/month │
 │  • Retention: 5 years                 │
 └────────────────┬──────────────────────┘
@@ -206,6 +429,7 @@ TMDB API (scheduled extraction)
 ┌───────────────────────────────────────┐
 │      MONGODB (Batch Views)            │
 │  • Collection: batch_views            │
+│  • Historical reviews & sentiments    │
 │  • Updated every 4 hours              │
 │  • Indexed for fast queries           │
 └───────────────────────────────────────┘
@@ -214,12 +438,13 @@ TMDB API (scheduled extraction)
 ### Speed Layer Flow
 
 ```
-TMDB API (real-time stream)
-    ↓ (Kafka Producer - streaming)
+TMDB API (30-second polling for new data)
+    ↓ (Kafka Producer - streaming events)
 ┌───────────────────────────────────────┐
 │          KAFKA TOPICS                 │
-│  • movie.reviews (new reviews)        │
-│  • movie.ratings (new ratings)        │
+│  • movie.new_reviews (review stream)  │
+│  • movie.rating_events (vote changes) │
+│  • movie.popularity_changes (trends)  │
 │  • movie.metadata (updates)           │
 │  • Replication factor: 3              │
 │  • Retention: 7 days                  │
@@ -229,13 +454,16 @@ TMDB API (real-time stream)
 │      REAL-TIME PROCESSING             │
 │  • 5-minute tumbling windows          │
 │  • Real-time sentiment (VADER)        │
-│  • Incremental aggregations           │
-│  • Hot movie detection (velocity)     │
+│  • Vote velocity calculation          │
+│  • Incremental review aggregations    │
+│  • Trending detection (vote spikes)   │
 └────────────────┬──────────────────────┘
                  ↓ (Write to Cassandra)
 ┌───────────────────────────────────────┐
 │      CASSANDRA (Speed Views)          │
 │  • Table: speed_views                 │
+│  • Recent reviews & sentiment scores  │
+│  • Vote velocity metrics              │
 │  • TTL: 48 hours (auto-expire)        │
 │  • Partition: (movie_id, hour)        │
 │  • Replication factor: 3              │
@@ -244,6 +472,7 @@ TMDB API (real-time stream)
 ┌───────────────────────────────────────┐
 │      MONGODB (Speed Views)            │
 │  • Collection: speed_views            │
+│  • Real-time engagement metrics       │
 │  • Synced every 5 minutes             │
 │  • TTL index: 48 hours                │
 └───────────────────────────────────────┘
@@ -284,6 +513,75 @@ TMDB API (real-time stream)
         │               │  • System monitoring
         └───────────────┘  • 5 pre-built dashboards
 ```
+
+## 📊 Data Schema & Features
+
+### Batch Layer (Historical Social Engagement Data)
+
+**Bronze Layer** - Raw ingestion from TMDB API (>48 hours old)
+- **Movie Metadata**: Basic info (title, genres, release_date, runtime)
+- **Complete Review History**: All reviews with full text, author, timestamps
+- **Historical Rating Data**: Vote counts, vote averages over time
+- **Storage**: JSON in MinIO/HDFS partitioned by date
+
+**Silver Layer** - Cleaned and enriched
+- **Deduplicated Reviews**: Unique by review_id
+- **Sentiment Scores**: VADER sentiment analysis (-1 to 1) on all reviews
+- **Enriched Reviews**: Joined with movie metadata (genres, release context)
+- **Rating Aggregations**: Vote count trends, rating distributions
+- **Storage**: Parquet in MinIO/HDFS partitioned by genre/year
+
+**Gold Layer** - Analytical aggregations
+- **Sentiment by Genre/Year**: Average sentiment per genre and release year
+- **Review Volume Patterns**: Daily/weekly review counts, peak activity periods
+- **Engagement Metrics**: Review velocity trends, sentiment trends over time
+- **Release Performance**: First-week/month sentiment scores
+- **Comparative Analytics**: Cross-movie sentiment comparisons
+- **Storage**: Parquet aggregations + MongoDB batch_views collection
+
+### Speed Layer (Real-Time Social Engagement Signals)
+
+**Kafka Topics** - Event streams (30-second polling)
+- **`movie.new_reviews`**: Newly posted reviews detected from TMDB
+  - Fields: review_id, movie_id, author, content, sentiment, created_at, detected_at
+- **`movie.rating_events`**: Vote count and rating changes
+  - Fields: movie_id, vote_count_delta, vote_velocity, rating_delta, timestamp
+- **`movie.popularity_changes`**: TMDB popularity score changes
+  - Fields: movie_id, popularity_current, popularity_delta, popularity_velocity, is_trending
+
+**Cassandra Tables** - 5-minute windows (48-hour TTL)
+- **`review_sentiments`**: Real-time sentiment aggregations
+  - Metrics: avg_sentiment, review_count, positive/negative/neutral counts, sentiment_velocity
+- **`vote_velocity`**: Vote activity and rating momentum
+  - Metrics: vote_count_delta, vote_velocity, vote_acceleration, rating_momentum
+- **`trending_movies`**: Currently trending content
+  - Metrics: trending_score, vote_velocity, review_velocity, popularity_acceleration
+
+**MongoDB speed_views** - Synced every 5 minutes
+- Recent review sentiment (last 48h)
+- Vote velocity and rating momentum
+- Trending signals and viral content detection
+
+### Serving Layer (Merged Views)
+
+**MongoDB Collections**
+- **`batch_views`**: Historical sentiment analytics, complete review stats, long-term trends
+- **`speed_views`**: Real-time engagement (last 48h), fresh reviews, trending signals
+- **Merge Strategy**: 48-hour cutoff - speed data for recent activity, batch data for historical accuracy
+
+**API Response Features**
+- Sentiment scores with velocity trends
+- Review volume patterns and spikes
+- Vote count changes and momentum indicators
+- Trending rankings with composite scores
+- Time-series sentiment breakdowns
+- Genre-based engagement comparisons
+
+**Key Metrics Exposed**
+- **Sentiment**: Average score (-1 to 1), positive/negative/neutral distribution, velocity
+- **Engagement**: Review volume, vote velocity, rating momentum
+- **Trending**: Composite trending score, acceleration metrics, viral detection
+- **Temporal**: Daily/weekly/monthly aggregations, first-week performance
 
 ## 📁 Project Structure
 

@@ -1,10 +1,10 @@
-# TMDB Batch Layer - Movie Data Pipeline
+# TMDB Batch Layer - Baseline Calculation Pipeline
 
 > **📢 IMPORTANT**: This layer is now part of the unified setup at project root.  
 > **See the root [README.md](../../README.md) for the recommended way to run the complete Lambda Architecture.**  
 > The instructions below are for running the batch layer in isolation (development/testing only).
 
-**One-command deployment**: Fetch, transform, and analyze movie data from TMDB API using Apache Spark, MinIO, and MongoDB.
+**One-command deployment**: Calculate historical baselines from TMDB metadata for comparison with real-time Reddit data using Apache Spark, MinIO, and MongoDB.
 
 ---
 
@@ -28,16 +28,16 @@
 ## 📦 What This Does
 
 ```
-TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoDB
-              ↓                ↓                    ↓
-           MinIO            MinIO                MinIO
+TMDB API → Bronze (Metadata) → Silver (Baselines) → Gold (Export) → MongoDB
+              ↓                    ↓                     ↓
+           MinIO                MinIO                 MinIO
 ```
 
 ### Pipeline Flow
-1. **Bronze**: Fetch 80 movies from TMDB API → Store raw JSON in MinIO
-2. **Silver**: Clean, deduplicate, validate → Store Parquet in MinIO  
-3. **Gold**: Aggregate by genre (avg rating, revenue, count) → Store Parquet
-4. **Export**: Load analytical results into MongoDB for serving
+1. **Bronze**: Fetch ~2000 movies metadata from TMDB API → Store raw JSON in MinIO
+2. **Silver**: Calculate genre-level baselines (sentiment, vote thresholds) → Store Parquet in MinIO  
+3. **Gold**: Add metadata and prepare for export → Store Parquet
+4. **Export**: Load baseline data into MongoDB for serving layer comparison with Reddit data
 
 ### Services Running
 - **Airflow Web UI**: http://localhost:8088 (admin/admin)
@@ -53,7 +53,7 @@ TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoD
 ### 1. Trigger the Pipeline
 - Open http://localhost:8088
 - Login: `admin` / `admin`
-- Find DAG: `tmdb_batch_pipeline`
+- Find DAG: `tmdb_baseline_pipeline`
 - Click "Play" button → "Trigger DAG"
 - Wait 5-8 minutes for all tasks to turn green
 
@@ -61,21 +61,22 @@ TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoD
 - Open http://localhost:9001
 - Login: `minioadmin` / `minioadmin`
 - Browse buckets:
-  - `bronze/movies/` → Raw JSON files
-  - `silver/movies/` → Cleaned Parquet files  
-  - `gold/movies_by_genre/` → Aggregated Parquet files
+  - `bronze/tmdb_movies/` → Raw movie metadata JSON files
+  - `bronze/tmdb_genres/` → Genre list JSON
+  - `silver/genre_baselines/` → Calculated baseline Parquet files  
+  - `gold/baselines/` → Final baseline Parquet files
 
 ### 3. Query MongoDB Results
 ```bash
-# Count genre documents (expect ~19-20)
-docker exec -it serving-mongodb mongosh --eval "use tmdb_analytics; db.movies_by_genre.countDocuments()"
+# Count baseline documents (expect ~19-20 genres)
+docker exec -it serving-mongodb mongosh --eval "use tmdb_analytics; db.batch_views.countDocuments()"
 
-# View Drama genre statistics
+# View Action genre baseline
 docker exec -it serving-mongodb mongosh --eval "
   use tmdb_analytics;
-  db.movies_by_genre.find(
-    {genre: 'Drama'}, 
-    {genre: 1, avg_vote_average: 1, total_movies: 1}
+  db.batch_views.find(
+    {genre: 'Action'}, 
+    {genre: 1, avg_sentiment: 1, viral_threshold: 1, type: 1}
   ).pretty()
 "
 ```
@@ -83,11 +84,13 @@ docker exec -it serving-mongodb mongosh --eval "
 **Expected Output:**
 ```json
 {
-  "genre": "Drama",
-  "total_movies": 25,
-  "avg_vote_average": 7.2,
-  "avg_popularity": 45.3,
-  "total_revenue": 1500000000
+  "genre": "Action",
+  "avg_sentiment": 0.65,
+  "sentiment_stddev": 0.12,
+  "viral_threshold": 5000,
+  "type": "baseline",
+  "updated_at": "2025-12-03T02:00:00Z",
+  "source": "tmdb_batch"
 }
 ```
 
@@ -156,19 +159,17 @@ docker compose -f docker-compose.batch.yml build --no-cache
 layers/batch_layer/
 ├── docker-compose.batch.yml       # Orchestrates all services
 ├── Dockerfile.airflow              # Custom Airflow + PySpark image
-├── .env                            # TMDB API key (committed)
-├── start.sh                        # One-click startup
-├── dags/
-│   └── tmdb_batch_pipeline.py     # Airflow DAG (12 tasks)
-├── master_dataset/
-│   └── ingestion.py               # Bronze: Fetch from TMDB API
+├── .env.example                    # Environment variables template
+├── airflow_dags/
+│   └── tmdb_baseline_pipeline.py  # Airflow DAG (baseline calculation)
 ├── spark_jobs/
-│   ├── silver_transformation.py   # Silver: Clean & validate
-│   ├── gold_aggregation.py        # Gold: Aggregate by genre
+│   ├── bronze_ingest.py           # Bronze: Fetch TMDB metadata
+│   ├── silver_transform.py        # Silver: Calculate baselines
+│   ├── gold_aggregate.py          # Gold: Prepare baseline export
 │   ├── export_to_mongo.py         # Export: Load to MongoDB
 │   └── utils/                     # Shared Spark utilities
-└── config/
-    └── expectations/               # Data quality rules
+└── tests/
+    └── test_integration.py        # Integration tests
 ```
 
 ---
@@ -206,17 +207,21 @@ docker compose -f docker-compose.batch.yml up -d
 ```
 
 ### Change Pipeline Schedule
-Edit `dags/tmdb_batch_pipeline.py`:
+Edit `airflow_dags/tmdb_baseline_pipeline.py`:
 ```python
-default_args = {
-    'schedule_interval': '@daily',  # Options: '@hourly', '0 0 * * *', None
-}
+dag = DAG(
+    'tmdb_baseline_pipeline',
+    schedule_interval='0 2 * * *',  # Daily at 2 AM (default)
+    # Options: '@daily', '@weekly', '0 0 * * *', None
+)
 ```
 
 ### Increase Movie Count
-Edit `master_dataset/ingestion.py`:
+Edit `spark_jobs/bronze_ingest.py`:
 ```python
-MAX_PAGES = 4  # Change to 10 for 200 movies, 20 for 400 movies
+# In TMDBBaselineIngestion class
+def fetch_movies(self):
+    for page in range(1, 100):  # Change to 200 for ~4000 movies
 ```
 
 ---
@@ -224,11 +229,12 @@ MAX_PAGES = 4  # Change to 10 for 200 movies, 20 for 400 movies
 ## 💡 Key Features
 
 - **Dockerized**: No Python dependencies on host machine
-- **Portable**: Includes API key in `.env` (committed to repo)
+- **Portable**: Includes API key in `.env.example` template
 - **Resilient**: Retry logic for network timeouts (pip, curl)
 - **Observable**: Airflow UI shows real-time progress
 - **Validated**: Data quality checks at each stage
 - **Production-Ready**: Uses industry-standard tools (Spark, Airflow, MinIO)
+- **Baseline-Focused**: Calculates historical baselines for Reddit comparison
 
 ---
 
@@ -240,12 +246,12 @@ After successful run:
 {
   "_id": ObjectId("..."),
   "genre": "Action",
-  "total_movies": 18,
-  "avg_vote_average": 6.8,
-  "avg_popularity": 52.1,
-  "total_revenue": 2500000000,
-  "avg_revenue_per_movie": 138888888,
-  "last_updated": "2024-11-10T16:45:00Z"
+  "avg_sentiment": 0.65,
+  "sentiment_stddev": 0.12,
+  "viral_threshold": 5000,
+  "type": "baseline",
+  "updated_at": "2025-12-03T02:00:00Z",
+  "source": "tmdb_batch"
 }
 ```
 

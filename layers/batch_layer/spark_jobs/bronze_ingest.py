@@ -271,11 +271,14 @@ class BronzeIngestionJob:
         self.metrics.add_metric("total_movies_fetched", len(all_movies))
         self.metrics.add_metric("unique_movies", len(unique_movies))
         
+        # Enrich movies with detailed metadata (budget, runtime, belongs_to_collection, director)
+        enriched_movies = self._enrich_movies_with_details(unique_movies)
+        
         # Write movies to Bronze
-        self._write_movies_to_bronze(unique_movies, extraction_time)
+        self._write_movies_to_bronze(enriched_movies, extraction_time)
         
         # Fetch reviews for baseline sentiment calculation (top 50 movies only)
-        movie_ids = [m['id'] for m in unique_movies[:50]]
+        movie_ids = [m['id'] for m in enriched_movies[:50]]
         reviews = self._fetch_reviews_batch(movie_ids)
         self._write_reviews_to_bronze(reviews, extraction_time)
         
@@ -283,6 +286,86 @@ class BronzeIngestionJob:
         self.metrics.log(logger)
         
         logger.info("Bronze layer metadata ingestion completed successfully")
+    
+    def _enrich_movies_with_details(self, movies: List[Dict]) -> List[Dict]:
+        """
+        Enrich basic movie data with detailed metadata.
+        
+        Fetches for each movie:
+        - /movie/{id} endpoint: budget, runtime, belongs_to_collection
+        - /movie/{id}/credits endpoint: director
+        
+        Implements rate limiting to respect TMDB API limits (40 requests/10 seconds).
+        """
+        import time
+        
+        total_movies = len(movies)
+        enriched = []
+        request_count = 0
+        start_time = time.time()
+        
+        logger.info(f"Enriching {total_movies} movies with detailed metadata")
+        logger.info("This will take ~30 minutes due to API rate limiting")
+        
+        for idx, movie in enumerate(movies, 1):
+            movie_id = movie['id']
+            
+            try:
+                # Fetch detailed metadata
+                details = self.api_client.fetch_movie_details(movie_id)
+                request_count += 1
+                
+                if details:
+                    # Add budget, runtime, belongs_to_collection
+                    movie['budget'] = details.get('budget', 0)
+                    movie['runtime'] = details.get('runtime')
+                    movie['belongs_to_collection'] = details.get('belongs_to_collection')
+                else:
+                    movie['budget'] = 0
+                    movie['runtime'] = None
+                    movie['belongs_to_collection'] = None
+                
+                # Fetch credits for director
+                credits = self.api_client.fetch_movie_credits(movie_id)
+                request_count += 1
+                
+                if credits:
+                    # Extract director from crew
+                    crew = credits.get('crew', [])
+                    directors = [c['name'] for c in crew if c.get('job') == 'Director']
+                    movie['director'] = directors[0] if directors else None
+                else:
+                    movie['director'] = None
+                
+                enriched.append(movie)
+                
+                # Rate limiting: max 40 requests per 10 seconds = 4 req/sec
+                if request_count % 40 == 0:
+                    elapsed = time.time() - start_time
+                    if elapsed < 10:
+                        sleep_time = 10 - elapsed
+                        logger.info(f"Rate limit: sleeping {sleep_time:.1f}s (processed {idx}/{total_movies})")
+                        time.sleep(sleep_time)
+                    start_time = time.time()
+                
+                # Progress logging every 100 movies
+                if idx % 100 == 0:
+                    logger.info(f"Enriched {idx}/{total_movies} movies ({idx/total_movies*100:.1f}%)")
+                
+            except Exception as e:
+                logger.error(f"Failed to enrich movie {movie_id}: {str(e)}")
+                # Keep original movie without enrichment
+                movie['budget'] = 0
+                movie['runtime'] = None
+                movie['belongs_to_collection'] = None
+                movie['director'] = None
+                enriched.append(movie)
+        
+        enriched_count = sum(1 for m in enriched if m.get('budget') or m.get('runtime'))
+        logger.info(f"Successfully enriched {enriched_count}/{total_movies} movies with detailed data")
+        self.metrics.add_metric("movies_enriched", enriched_count)
+        
+        return enriched
     
     def _fetch_reviews_batch(self, movie_ids: List[int]) -> List[Dict]:
         """Fetch reviews for multiple movies for baseline sentiment calculation."""

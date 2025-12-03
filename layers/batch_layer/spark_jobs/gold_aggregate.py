@@ -1,8 +1,10 @@
 """
-Gold Layer - Baseline Export
+Gold Layer - Multi-Goal Dataset Export
 
-Reads baselines from Silver layer, adds metadata, and prepares for MongoDB export.
-Simplified for baseline-only architecture.
+Reads three datasets from Silver layer and prepares for MongoDB export:
+1. sentiment_baselines: Genre/franchise/director/temporal sentiment patterns
+2. viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+3. movie_intelligence: Individual movie competitive data
 
 Usage:
     spark-submit gold_aggregate.py
@@ -29,112 +31,123 @@ logger = get_logger(__name__)
 
 class GoldAggregationJob:
     """
-    Gold Layer baseline export job.
+    Gold Layer multi-goal dataset export job.
     
-    Simply reads baselines from Silver, adds final metadata,
-    and writes to Gold for MongoDB export.
+    Reads three datasets from Silver and writes to Gold for MongoDB export:
+    1. sentiment_baselines
+    2. viral_thresholds
+    3. movie_intelligence
     """
+    
+    DATASETS = [
+        "sentiment_baselines",
+        "viral_thresholds",
+        "movie_intelligence"
+    ]
     
     def __init__(self, spark):
         self.spark = spark
-        self.metrics = JobMetrics("gold_baseline_export")
+        self.metrics = JobMetrics("gold_multi_goal_export")
     
-    @log_execution(logger, "gold_baseline_export")
+    @log_execution(logger, "gold_multi_goal_export")
     def run(self):
         """
-        Export baselines from Silver to Gold.
-        
-        Adds final metadata before MongoDB export.
+        Export all three datasets from Silver to Gold.
         """
-        logger.info("Starting Gold layer baseline export")
+        logger.info("Starting Gold layer multi-goal export")
         
-        # Load baselines from Silver
-        baselines_df = self._load_silver_baselines()
-        
-        if baselines_df is None:
-            logger.warning("No baselines found in Silver layer")
-            return
-        
-        # Add final metadata
-        final_baselines = self._add_metadata(baselines_df)
-        
-        # Write to Gold
-        self._write_to_gold(final_baselines)
+        # Process each dataset
+        for dataset_name in self.DATASETS:
+            try:
+                logger.info(f"Processing dataset: {dataset_name}")
+                
+                # Load from Silver
+                df = self._load_from_silver(dataset_name)
+                
+                if df is None:
+                    logger.warning(f"No data found in Silver for {dataset_name}")
+                    continue
+                
+                # Add final metadata
+                df = self._add_metadata(df)
+                
+                # Write to Gold
+                self._write_to_gold(df, dataset_name)
+                
+            except Exception as e:
+                logger.error(f"Failed to process {dataset_name}: {str(e)}", exc_info=True)
+                # Continue with next dataset
         
         # Log metrics
         self.metrics.log(logger)
-        logger.info("Gold layer baseline export completed successfully")
+        logger.info("Gold layer multi-goal export completed")
     
-    def _load_silver_baselines(self) -> Optional[DataFrame]:
-        """Load baselines from Silver layer."""
+    def _load_from_silver(self, dataset_name: str) -> Optional[DataFrame]:
+        """Load dataset from Silver layer."""
         try:
-            silver_path = get_silver_path("baselines", None).rstrip('/')
-            logger.info(f"Loading baselines from Silver: {silver_path}")
+            silver_path = get_silver_path(dataset_name, None).rstrip('/')
+            logger.info(f"Loading {dataset_name} from Silver: {silver_path}")
             
             df = self.spark.read.parquet(silver_path)
             
             count = df.count()
-            logger.info(f"Loaded {count} genre baselines from Silver layer")
-            self.metrics.add_metric("silver_baselines_loaded", count)
+            logger.info(f"Loaded {count} records from Silver/{dataset_name}")
+            self.metrics.add_metric(f"{dataset_name}_loaded", count)
             
             return df if count > 0 else None
             
         except Exception as e:
-            logger.error(f"Failed to load Silver baselines: {str(e)}", exc_info=True)
+            logger.error(f"Failed to load Silver/{dataset_name}: {str(e)}", exc_info=True)
             return None
     
-    def _add_metadata(self, baselines_df: DataFrame) -> DataFrame:
+    def _add_metadata(self, df: DataFrame) -> DataFrame:
         """
-        Add final metadata to baselines before MongoDB export.
+        Add final metadata before MongoDB export.
         
-        Metadata already includes:
-        - genre, avg_sentiment, sentiment_stddev, viral_threshold
-        - avg_rating, avg_popularity, movie_count, review_count
-        - type='baseline', source='tmdb_batch', updated_at
+        Metadata already complete from Silver layer:
+        - type, updated_at fields already present
         
         No additional processing needed.
         """
-        logger.info("Baselines ready for export (metadata already complete)")
-        
-        return baselines_df
+        return df
     
-    def _write_to_gold(self, baselines_df: DataFrame):
-        """Write baselines to Gold layer."""
+    def _write_to_gold(self, df: DataFrame, dataset_name: str):
+        """Write dataset to Gold layer."""
         try:
-            output_path = get_gold_path("baselines", None).rstrip('/')
+            output_path = get_gold_path(dataset_name, None).rstrip('/')
             
-            logger.info(f"Writing baselines to Gold layer: {output_path}")
+            logger.info(f"Writing {dataset_name} to Gold layer: {output_path}")
             
-            baselines_df.write \
+            df.write \
                 .mode("overwrite") \
                 .parquet(output_path)
             
-            count = baselines_df.count()
-            logger.info(f"Successfully wrote {count} baselines to Gold layer")
-            self.metrics.add_metric("baselines_written", count)
+            count = df.count()
+            logger.info(f"Successfully wrote {count} records to Gold/{dataset_name}")
+            self.metrics.add_metric(f"{dataset_name}_written", count)
             
         except Exception as e:
-            logger.error(f"Failed to write baselines to Gold: {str(e)}", exc_info=True)
+            logger.error(f"Failed to write Gold/{dataset_name}: {str(e)}", exc_info=True)
             raise
 
 
 def main():
-    """Main entry point for Gold baseline export job."""
-    parser = argparse.ArgumentParser(description="Gold Layer Baseline Export")
+    """Main entry point for Gold multi-goal export job."""
+    parser = argparse.ArgumentParser(description="Gold Layer Multi-Goal Dataset Export")
     
     args = parser.parse_args()
     
     spark = None
     try:
         # Create Spark session
-        spark = get_spark_session("gold_baseline_export")
+        spark = get_spark_session("gold_multi_goal_export")
         
         # Run export
         job = GoldAggregationJob(spark)
         job.run()
         
     except Exception as e:
-        logger.error(f"Gold baseline export failed: {str(e)}", exc_info=True)
+        logger.error(f"Gold multi-goal export failed: {str(e)}", exc_info=True)
         sys.exit(1)
     
     finally:

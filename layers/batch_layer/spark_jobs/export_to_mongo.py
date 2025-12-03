@@ -1,8 +1,10 @@
 """
-Export Gold Layer Baselines to MongoDB
+Export Gold Layer Multi-Goal Data to MongoDB
 
-Reads baseline data from Gold layer and exports to MongoDB batch_views collection
-for serving layer queries.
+Reads three datasets from Gold layer and exports to MongoDB collections:
+1. sentiment_baselines: Genre/franchise/director/temporal sentiment patterns
+2. viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+3. movie_intelligence: Individual movie competitive data
 
 Usage:
     python export_to_mongo.py
@@ -31,10 +33,43 @@ class MongoDBExporter:
     Export Gold layer data to MongoDB.
     
     Features:
-    - Bulk upsert operations
-    - Index management
+    - Bulk upsert operations for three collections
+    - Index management per collection
     - Error handling and retry
     """
+    
+    # Collection configurations
+    COLLECTIONS = {
+        "sentiment_baselines": {
+            "indexes": [
+                ([("genre", 1), ("year", 1)], {}),
+                ([("franchise", 1)], {}),
+                ([("director", 1)], {}),
+                ([("type", 1), ("updated_at", -1)], {}),
+            ],
+            "filter_keys": ["genre", "franchise", "director", "year"]
+        },
+        "viral_thresholds": {
+            "indexes": [
+                ([("genre", 1), ("budget_tier", 1), ("season", 1)], {}),
+                ([("budget_tier", 1)], {}),
+                ([("type", 1), ("updated_at", -1)], {}),
+            ],
+            "filter_keys": ["genre", "budget_tier", "season"]
+        },
+        "movie_intelligence": {
+            "indexes": [
+                ([("movie_id", 1)], {"unique": True}),
+                ([("genre", 1), ("release_year", 1)], {}),
+                ([("release_month", 1), ("release_year", 1)], {}),
+                ([("franchise", 1)], {}),
+                ([("director", 1)], {}),
+                ([("budget_tier", 1), ("genre", 1)], {}),
+                ([("type", 1), ("updated_at", -1)], {}),
+            ],
+            "filter_keys": ["movie_id"]
+        }
+    }
     
     def __init__(self, connection_string: str, database: str = "moviedb"):
         """
@@ -56,28 +91,25 @@ class MongoDBExporter:
             self.client.close()
             logger.info("Closed MongoDB connection")
     
-    def create_indexes(self):
-        """Create indexes on batch_views collection for baselines."""
-        collection = self.db.batch_views
+    def create_indexes(self, collection_name: str):
+        """Create indexes on specified collection."""
+        collection = self.db[collection_name]
+        config = self.COLLECTIONS.get(collection_name)
         
-        indexes = [
-            # Primary baseline index
-            ([("genre", 1), ("type", 1)], {}),
-            ([("type", 1), ("updated_at", -1)], {}),
-            
-            # Query optimization indexes
-            ([("genre", 1)], {}),
-            ([("updated_at", -1)], {}),
-        ]
+        if not config:
+            logger.warning(f"No index configuration for collection: {collection_name}")
+            return
+        
+        indexes = config["indexes"]
         
         for keys, options in indexes:
             try:
                 collection.create_index(keys, **options)
-                logger.info(f"Created index: {keys}")
+                logger.info(f"Created index on {collection_name}: {keys}")
             except Exception as e:
-                logger.warning(f"Failed to create index {keys}: {str(e)}")
+                logger.warning(f"Failed to create index {keys} on {collection_name}: {str(e)}")
         
-        self.metrics.add_metric("indexes_created", len(indexes))
+        self.metrics.add_metric(f"{collection_name}_indexes_created", len(indexes))
     
     def _row_to_dict(self, row):
         """
@@ -105,29 +137,37 @@ class MongoDBExporter:
     def export_from_dataframe(
         self,
         df,
+        collection_name: str,
         batch_size: int = 1000
     ) -> int:
         """
-        Export Spark DataFrame (baselines) to MongoDB.
+        Export Spark DataFrame to MongoDB collection.
         
         Args:
-            df: Spark DataFrame with baseline data
+            df: Spark DataFrame with data
+            collection_name: Target MongoDB collection
             batch_size: Batch size for bulk writes
         
         Returns:
             Number of documents exported
         """
-        logger.info("Exporting baselines to MongoDB")
+        logger.info(f"Exporting to MongoDB collection: {collection_name}")
+        
+        # Get collection config
+        config = self.COLLECTIONS.get(collection_name)
+        if not config:
+            logger.error(f"Unknown collection: {collection_name}")
+            return 0
         
         # Convert DataFrame to list of dictionaries (preserving nested structures)
         records = df.collect()
         documents = [self._row_to_dict(row) for row in records]
         
         total_count = len(documents)
-        logger.info(f"Prepared {total_count} baseline documents for export")
+        logger.info(f"Prepared {total_count} documents for {collection_name}")
         
         # Bulk upsert in batches
-        collection = self.db.batch_views
+        collection = self.db[collection_name]
         exported_count = 0
         
         for i in range(0, total_count, batch_size):
@@ -136,11 +176,15 @@ class MongoDBExporter:
             # Create bulk operations
             operations = []
             for doc in batch:
-                # Filter by genre and type for baseline documents
+                # Build filter from configured keys (skip None values)
                 filter_doc = {
-                    "genre": doc.get("genre"),
-                    "type": "baseline"
+                    key: doc.get(key)
+                    for key in config["filter_keys"]
+                    if doc.get(key) is not None
                 }
+                
+                # Add type field for consistency
+                filter_doc["type"] = doc.get("type")
                 
                 operations.append(
                     UpdateOne(
@@ -156,26 +200,38 @@ class MongoDBExporter:
                 exported_count += result.upserted_count + result.modified_count
                 
                 logger.info(
-                    f"Batch {i // batch_size + 1}: "
+                    f"{collection_name} batch {i // batch_size + 1}: "
                     f"upserted={result.upserted_count}, modified={result.modified_count}"
                 )
                 
             except BulkWriteError as bwe:
                 # Log errors but continue
-                logger.error(f"Bulk write error: {bwe.details}", exc_info=True)
+                logger.error(f"Bulk write error in {collection_name}: {bwe.details}", exc_info=True)
                 # Count successful operations
                 exported_count += len(batch) - len(bwe.details.get('writeErrors', []))
         
-        logger.info(f"Exported {exported_count}/{total_count} baseline documents to MongoDB")
-        self.metrics.add_metric("baselines_exported", exported_count)
+        logger.info(f"Exported {exported_count}/{total_count} documents to {collection_name}")
+        self.metrics.add_metric(f"{collection_name}_exported", exported_count)
         
         return exported_count
 
 
 class MongoExportJob:
     """
-    Job to export baseline data from Gold layer to MongoDB.
+    Job to export multi-goal data from Gold layer to MongoDB.
+    
+    Exports three datasets:
+    1. sentiment_baselines
+    2. viral_thresholds
+    3. movie_intelligence
     """
+    
+    # Dataset names matching Gold layer output and MongoDB collections
+    DATASETS = [
+        "sentiment_baselines",
+        "viral_thresholds",
+        "movie_intelligence"
+    ]
     
     def __init__(self, spark, mongo_exporter: MongoDBExporter):
         self.spark = spark
@@ -184,54 +240,59 @@ class MongoExportJob:
     @log_execution(logger, "mongo_export")
     def run(self):
         """
-        Run MongoDB baseline export.
+        Run MongoDB export for all three datasets.
         """
-        logger.info("Starting MongoDB baseline export")
+        logger.info("Starting MongoDB multi-goal export")
         
-        # Create indexes
-        self.mongo_exporter.create_indexes()
-        
-        # Export baselines
-        try:
-            self._export_baselines()
-        except Exception as e:
-            logger.error(f"Failed to export baselines: {str(e)}", exc_info=True)
-            raise
+        # Export each dataset
+        for dataset_name in self.DATASETS:
+            try:
+                logger.info(f"Processing dataset: {dataset_name}")
+                
+                # Create indexes for this collection
+                self.mongo_exporter.create_indexes(dataset_name)
+                
+                # Export data
+                self._export_dataset(dataset_name)
+                
+            except Exception as e:
+                logger.error(f"Failed to export {dataset_name}: {str(e)}", exc_info=True)
+                # Continue with next dataset
         
         # Log final metrics
         self.mongo_exporter.metrics.log(logger)
-        logger.info("MongoDB baseline export completed successfully")
+        logger.info("MongoDB multi-goal export completed")
     
-    def _export_baselines(self):
-        """Export baselines from Gold to MongoDB."""
-        logger.info("Exporting baselines")
+    def _export_dataset(self, dataset_name: str):
+        """Export a single dataset from Gold to MongoDB."""
+        logger.info(f"Exporting {dataset_name}")
         
         # Read from Gold layer
-        gold_path = get_gold_path("baselines", None).rstrip('/')
+        gold_path = get_gold_path(dataset_name, None).rstrip('/')
         
         try:
             df = self.spark.read.parquet(gold_path)
             count = df.count()
             
             if count == 0:
-                logger.warning("No baseline data found in Gold layer")
+                logger.warning(f"No data found in Gold layer for {dataset_name}")
                 return
             
-            logger.info(f"Read {count} baseline records from {gold_path}")
+            logger.info(f"Read {count} records from {gold_path}")
             
             # Export to MongoDB
-            exported = self.mongo_exporter.export_from_dataframe(df)
+            exported = self.mongo_exporter.export_from_dataframe(df, dataset_name)
             
-            logger.info(f"Successfully exported {exported} baseline records")
+            logger.info(f"Successfully exported {exported} records to {dataset_name}")
             
         except Exception as e:
-            logger.error(f"Failed to export baselines: {str(e)}", exc_info=True)
+            logger.error(f"Failed to export {dataset_name}: {str(e)}", exc_info=True)
             raise
 
 
 def main():
-    """Main entry point for MongoDB baseline export job."""
-    parser = argparse.ArgumentParser(description="Export Gold Layer Baselines to MongoDB")
+    """Main entry point for MongoDB multi-goal export job."""
+    parser = argparse.ArgumentParser(description="Export Gold Layer Multi-Goal Data to MongoDB")
     parser.add_argument("--mongo-uri", type=str,
                        default=None,
                        help="MongoDB connection string (default: from env)")
@@ -261,7 +322,7 @@ def main():
         job.run()
         
     except Exception as e:
-        logger.error(f"MongoDB baseline export failed: {str(e)}", exc_info=True)
+        logger.error(f"MongoDB multi-goal export failed: {str(e)}", exc_info=True)
         sys.exit(1)
     
     finally:

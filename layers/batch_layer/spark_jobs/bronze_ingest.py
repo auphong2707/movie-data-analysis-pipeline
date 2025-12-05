@@ -319,7 +319,9 @@ class BronzeIngestionJob:
                     # Add budget, runtime, belongs_to_collection
                     movie['budget'] = details.get('budget', 0)
                     movie['runtime'] = details.get('runtime')
-                    movie['belongs_to_collection'] = details.get('belongs_to_collection')
+                    # Extract franchise name from belongs_to_collection object
+                    collection = details.get('belongs_to_collection')
+                    movie['belongs_to_collection'] = collection.get('name') if collection else None
                 else:
                     movie['budget'] = 0
                     movie['runtime'] = None
@@ -418,8 +420,38 @@ class BronzeIngestionJob:
         for movie in movies:
             movie['extraction_timestamp'] = extraction_time.isoformat() + "Z"
         
-        # Create DataFrame
-        df = self.spark.createDataFrame(movies)
+        # Define explicit schema to handle None values
+        from pyspark.sql.types import (
+            StructType, StructField, StringType, IntegerType, 
+            DoubleType, BooleanType, ArrayType
+        )
+        
+        schema = StructType([
+            StructField("id", IntegerType(), False),
+            StructField("title", StringType(), True),
+            StructField("original_title", StringType(), True),
+            StructField("overview", StringType(), True),
+            StructField("release_date", StringType(), True),
+            StructField("genre_ids", ArrayType(IntegerType()), True),
+            StructField("popularity", DoubleType(), True),
+            StructField("vote_average", DoubleType(), True),
+            StructField("vote_count", IntegerType(), True),
+            StructField("adult", BooleanType(), True),
+            StructField("video", BooleanType(), True),
+            StructField("poster_path", StringType(), True),
+            StructField("backdrop_path", StringType(), True),
+            StructField("original_language", StringType(), True),
+            # Enriched fields (will be None when enrichment is disabled)
+            StructField("budget", IntegerType(), True),
+            StructField("runtime", IntegerType(), True),
+            StructField("belongs_to_collection", StringType(), True),  # Franchise name
+            StructField("director", StringType(), True),
+            # Extraction metadata
+            StructField("extraction_timestamp", StringType(), False),
+        ])
+        
+        # Create DataFrame with explicit schema
+        df = self.spark.createDataFrame(movies, schema=schema)
         
         # Write to S3A (overwrite mode for movies baseline dataset)
         output_path = get_bronze_path("tmdb_movies", None).rstrip('/')

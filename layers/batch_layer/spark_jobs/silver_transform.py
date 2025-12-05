@@ -280,14 +280,9 @@ class BaselineCalculationJob:
             )
             
             # Extract franchise from belongs_to_collection (if available)
-            # Note: This field may not exist in basic TMDB movie data
+            # Note: Bronze layer now stores collection name directly as string
             if "belongs_to_collection" in enriched.columns:
-                enriched = enriched.withColumn(
-                    "franchise",
-                    F.when(F.col("belongs_to_collection").isNotNull(),
-                           F.col("belongs_to_collection.name"))
-                    .otherwise(F.lit(None))
-                )
+                enriched = enriched.withColumnRenamed("belongs_to_collection", "franchise")
             else:
                 logger.warning("belongs_to_collection field not available - franchise will be null")
                 enriched = enriched.withColumn("franchise", F.lit(None).cast(StringType()))
@@ -408,52 +403,46 @@ class BaselineCalculationJob:
                 F.col("review_count"),
                 F.lit(None).cast(StringType()).alias("franchise"),
                 F.lit(None).cast(DoubleType()).alias("franchise_avg_sentiment"),
-                F.lit(None).cast(StringType()).alias("director"),
-                F.lit(None).cast(DoubleType()).alias("director_avg_sentiment"),
                 F.lit(None).cast(IntegerType()).alias("year"),
                 F.lit(None).cast(DoubleType()).alias("yearly_sentiment")
             )
             
-            # Franchise-level baselines
+            # Franchise-level baselines (franchise dimension only, genre=null)
             franchise_baselines = enriched_movies_df.filter(
                 F.col("franchise").isNotNull()
-            ).groupBy("primary_genre", "franchise").agg(
+            ).groupBy("franchise").agg(
                 F.avg("avg_sentiment").alias("franchise_avg_sentiment"),
                 F.stddev("avg_sentiment").alias("sentiment_stddev"),
                 F.count("*").alias("movie_count"),
                 F.sum("review_count").alias("review_count")
             ).select(
-                F.col("primary_genre"),
+                F.lit(None).cast(StringType()).alias("primary_genre"),
                 F.col("franchise_avg_sentiment").alias("avg_sentiment"),
                 F.col("sentiment_stddev"),
                 F.col("movie_count"),
                 F.col("review_count"),
                 F.col("franchise"),
                 F.col("franchise_avg_sentiment"),
-                F.lit(None).cast(StringType()).alias("director"),
-                F.lit(None).cast(DoubleType()).alias("director_avg_sentiment"),
                 F.lit(None).cast(IntegerType()).alias("year"),
                 F.lit(None).cast(DoubleType()).alias("yearly_sentiment")
             )
             
-            # Year-level baselines
+            # Year-level baselines (year dimension only, genre=null)
             yearly_baselines = enriched_movies_df.filter(
                 F.col("release_year").isNotNull()
-            ).groupBy("primary_genre", "release_year").agg(
+            ).groupBy("release_year").agg(
                 F.avg("avg_sentiment").alias("yearly_sentiment"),
                 F.stddev("avg_sentiment").alias("sentiment_stddev"),
                 F.count("*").alias("movie_count"),
                 F.sum("review_count").alias("review_count")
             ).select(
-                F.col("primary_genre"),
+                F.lit(None).cast(StringType()).alias("primary_genre"),
                 F.col("yearly_sentiment").alias("avg_sentiment"),
                 F.col("sentiment_stddev"),
                 F.col("movie_count"),
                 F.col("review_count"),
                 F.lit(None).cast(StringType()).alias("franchise"),
                 F.lit(None).cast(DoubleType()).alias("franchise_avg_sentiment"),
-                F.lit(None).cast(StringType()).alias("director"),
-                F.lit(None).cast(DoubleType()).alias("director_avg_sentiment"),
                 F.col("release_year").alias("year"),
                 F.col("yearly_sentiment")
             )
@@ -498,7 +487,7 @@ class BaselineCalculationJob:
                 F.count("*").alias("movie_count")
             ).select(
                 F.col("primary_genre"),
-                F.col("viral_threshold"),
+                F.col("viral_threshold").cast(IntegerType()),
                 F.col("avg_popularity"),
                 F.col("movie_count"),
                 F.lit(None).cast(StringType()).alias("budget_tier"),
@@ -508,37 +497,37 @@ class BaselineCalculationJob:
                 F.lit(None).cast(IntegerType()).alias("seasonal_threshold")
             )
             
-            # Budget tier thresholds
+            # Budget tier thresholds (budget dimension only, genre=null)
             budget_thresholds = enriched_movies_df.filter(
                 F.col("budget_tier") != "unknown"
-            ).groupBy("primary_genre", "budget_tier").agg(
+            ).groupBy("budget_tier").agg(
                 F.expr("percentile_approx(vote_count, 0.99)").alias("budget_tier_threshold"),
                 F.expr("percentile_approx(vote_count, 0.99)").alias("viral_threshold"),
                 F.avg("popularity").alias("avg_popularity"),
                 F.count("*").alias("movie_count")
             ).select(
-                F.col("primary_genre"),
-                F.col("viral_threshold"),
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("viral_threshold").cast(IntegerType()),
                 F.col("avg_popularity"),
                 F.col("movie_count"),
                 F.col("budget_tier"),
                 F.col("budget_tier_threshold"),
-                F.lit(2.5).alias("budget_tier_coefficient"),  # Hardcoded breakout multiplier
+                F.lit(2.5).cast(DoubleType()).alias("budget_tier_coefficient"),  # Hardcoded breakout multiplier
                 F.lit(None).cast(StringType()).alias("season"),
                 F.lit(None).cast(IntegerType()).alias("seasonal_threshold")
             )
             
-            # Seasonal thresholds
+            # Seasonal thresholds (season dimension only, genre=null)
             seasonal_thresholds = enriched_movies_df.filter(
                 F.col("season") != "unknown"
-            ).groupBy("primary_genre", "season").agg(
+            ).groupBy("season").agg(
                 F.expr("percentile_approx(vote_count, 0.99)").alias("seasonal_threshold"),
                 F.expr("percentile_approx(vote_count, 0.99)").alias("viral_threshold"),
                 F.avg("popularity").alias("avg_popularity"),
                 F.count("*").alias("movie_count")
             ).select(
-                F.col("primary_genre"),
-                F.col("viral_threshold"),
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("viral_threshold").cast(IntegerType()),
                 F.col("avg_popularity"),
                 F.col("movie_count"),
                 F.lit(None).cast(StringType()).alias("budget_tier"),
@@ -555,7 +544,6 @@ class BaselineCalculationJob:
             viral_thresholds = viral_thresholds \
                 .withColumn("type", F.lit("viral_threshold")) \
                 .withColumn("updated_at", F.current_timestamp()) \
-                .withColumn("viral_case_study", F.lit(None).cast(StringType())) \
                 .withColumnRenamed("primary_genre", "genre")
             
             count = viral_thresholds.count()
@@ -605,11 +593,6 @@ class BaselineCalculationJob:
             select_fields.append(F.col("review_count"))
             
             movie_intelligence = enriched_movies_df.select(*select_fields)
-            
-            # Add competitive context placeholder
-            # TODO: Calculate same-month releases, genre rank, year rank
-            movie_intelligence = movie_intelligence \
-                .withColumn("competitive_context", F.lit(None).cast(StringType()))
             
             # Add metadata
             movie_intelligence = movie_intelligence \

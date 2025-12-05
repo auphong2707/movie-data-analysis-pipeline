@@ -40,7 +40,7 @@ TMDB API → Bronze (Metadata) → Silver (Baselines) → Gold (Export) → Mong
 4. **Export**: Load baseline data into MongoDB for serving layer comparison with Reddit data
 
 ### Services Running
-- **Airflow Web UI**: http://localhost:8088 (admin/admin)
+- **Airflow Web UI**: http://localhost:8080 (admin/admin)
 - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
 - **MongoDB**: mongodb://localhost:27017
 - **PostgreSQL**: Internal metadata store
@@ -67,30 +67,76 @@ TMDB API → Bronze (Metadata) → Silver (Baselines) → Gold (Export) → Mong
   - `gold/baselines/` → Final baseline Parquet files
 
 ### 3. Query MongoDB Results
-```bash
-# Count baseline documents (expect ~19-20 genres)
-docker exec -it serving-mongodb mongosh --eval "use tmdb_analytics; db.batch_views.countDocuments()"
 
-# View Action genre baseline
-docker exec -it serving-mongodb mongosh --eval "
-  use tmdb_analytics;
-  db.batch_views.find(
-    {genre: 'Action'}, 
-    {genre: 1, avg_sentiment: 1, viral_threshold: 1, type: 1}
-  ).pretty()
-"
+**Step 1: Connect to MongoDB**
+```bash
+docker exec -it serving-mongodb mongosh --username admin --authenticationDatabase admin moviedb
+```
+
+**Step 2: Run queries inside the authenticated shell**
+```js
+// Count total documents (expect ~3000-4000)
+db.batch_views.countDocuments()
+
+// Count by view type
+db.batch_views.aggregate([
+  { $group: { _id: "$view_type", count: { $sum: 1 } } }
+])
+
+// View Action genre sentiment baseline
+db.batch_views.findOne(
+  { view_type: 'sentiment_baseline', genre: 'Action' }, 
+  { genre: 1, avg_sentiment: 1, sentiment_stddev: 1, movie_count: 1, review_count: 1, _id: 0 }
+)
+
+// View viral threshold for Action blockbusters in summer
+db.batch_views.findOne(
+  { view_type: 'viral_threshold', genre: 'Action', budget_tier: 'blockbuster', season: 'summer' },
+  { genre: 1, budget_tier: 1, season: 1, viral_threshold: 1, avg_popularity: 1, _id: 0 }
+)
+
+// View individual movie intelligence
+db.batch_views.findOne(
+  { view_type: 'movie_intelligence', title: { $exists: true } },
+  { movie_id: 1, title: 1, genre: 1, vote_average: 1, avg_sentiment: 1, _id: 0 }
+)
+
+// Exit mongosh when done
+exit
 ```
 
 **Expected Output:**
-```json
+```
+3979
+
+[
+  { _id: 'movie_intelligence', count: 3295 },
+  { _id: 'sentiment_baseline', count: 658 },
+  { _id: 'viral_threshold', count: 26 }
+]
+
 {
-  "genre": "Action",
-  "avg_sentiment": 0.65,
-  "sentiment_stddev": 0.12,
-  "viral_threshold": 5000,
-  "type": "baseline",
-  "updated_at": "2025-12-03T02:00:00Z",
-  "source": "tmdb_batch"
+  genre: 'Action',
+  avg_sentiment: 0.0021077661263748473,
+  sentiment_stddev: 0.016247547088559453,
+  movie_count: 393,
+  review_count: 33
+}
+
+{
+  genre: 'Action',
+  budget_tier: 'blockbuster',
+  season: 'summer',
+  viral_threshold: 29058,
+  avg_popularity: 15.234
+}
+
+{
+  movie_id: 914,
+  title: 'The Great Dictator',
+  genre: 'Comedy',
+  vote_average: 8.3,
+  avg_sentiment: 0
 }
 ```
 
@@ -240,20 +286,85 @@ def fetch_movies(self):
 
 ## 📊 Sample MongoDB Output
 
-After successful run:
+After successful run, the `batch_views` collection contains **3 view types** in a unified schema:
+
+### 1. Sentiment Baseline (Genre/Franchise/Year Aggregations)
 
 ```json
 {
   "_id": ObjectId("..."),
+  "view_type": "sentiment_baseline",
   "genre": "Action",
-  "avg_sentiment": 0.65,
-  "sentiment_stddev": 0.12,
-  "viral_threshold": 5000,
-  "type": "baseline",
-  "updated_at": "2025-12-03T02:00:00Z",
-  "source": "tmdb_batch"
+  "franchise": null,
+  "year": null,
+  "avg_sentiment": 0.0021077661263748473,
+  "sentiment_stddev": 0.016247547088559453,
+  "movie_count": 393,
+  "review_count": 33,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "data_period_start": "1900-01-01",
+  "data_period_end": "2025-12-05",
+  "updated_at": "2025-12-05T17:27:00.196Z"
 }
 ```
+
+**Other Genre Examples:**
+```json
+{ "genre": "Science Fiction", "avg_sentiment": 0.084, "movie_count": 375 }
+{ "genre": "Comedy", "avg_sentiment": 0.114, "movie_count": 989 }
+{ "genre": "Horror", "avg_sentiment": 0.004, "movie_count": 363 }
+```
+
+### 2. Viral Threshold (Genre×Budget×Season Thresholds)
+
+```json
+{
+  "_id": ObjectId("..."),
+  "view_type": "viral_threshold",
+  "genre": "Action",
+  "budget_tier": "blockbuster",
+  "season": "summer",
+  "viral_threshold": 29058,
+  "avg_popularity": 6.973233333333333,
+  "movie_count": 3,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "updated_at": "2025-12-05T17:27:03.808Z"
+}
+```
+
+### 3. Movie Intelligence (Individual Movie Data)
+
+```json
+{
+  "_id": ObjectId("..."),
+  "view_type": "movie_intelligence",
+  "movie_id": 914,
+  "title": "The Great Dictator",
+  "director": "Charlie Chaplin",
+  "genre": "Comedy",
+  "budget": 2000000,
+  "budget_tier": "indie",
+  "runtime": 125,
+  "release_date": "1940-10-15",
+  "release_year": 1940,
+  "vote_average": 8.3,
+  "vote_count": 3566,
+  "popularity": 2.5774,
+  "avg_sentiment": 0,
+  "review_count": 0,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "updated_at": "2025-12-05T17:27:05.500Z"
+}
+```
+
+**Collection Stats**:
+- **Total documents**: ~3,979
+- **Movie Intelligence**: ~3,295 (individual movies)
+- **Sentiment Baselines**: ~658 (genre/franchise/year aggregations)
+- **Viral Thresholds**: ~26 (genre×budget×season combinations)
+- **Genres covered**: 19 (Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Science Fiction, TV Movie, Thriller, War, Western)
 
 ---
 

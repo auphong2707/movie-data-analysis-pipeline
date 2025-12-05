@@ -53,13 +53,13 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 - **Retention**: Last 48 hours in speed layer (Cassandra TTL)
 - **Real-Time Nature**: Discussions happen continuously; posts can go viral (0→10K upvotes) within hours
 
-**TMDB API (Batch Layer - Historical Review Archive)**
-- **Data Types**: Complete review history, vote counts, rating trends, movie metadata (genres, cast, release dates)
-- **Volume**: ~50K movies tracked, 1M+ historical reviews, complete vote history
-- **Update Frequency**: Every 4 hours (complete historical reprocessing)
+**TMDB API (Batch Layer - Baseline Calculation)**
+- **Data Types**: Movie metadata (genres, budget, runtime, release dates), vote counts, popularity scores, limited reviews for sentiment baselines
+- **Volume**: ~2,000 movies metadata, ~50 movies with reviews for baseline sentiment calculation
+- **Update Frequency**: Daily at 2 AM (baseline recalculation)
 - **API Rate Limit**: 4 requests/second
-- **Retention**: 5 years of historical data in batch layer (HDFS)
-- **Historical Nature**: Provides baselines, trends, and statistical thresholds for contextualizing real-time signals
+- **Storage**: MinIO/S3-compatible storage (Bronze/Silver/Gold layers)
+- **Purpose**: Calculate genre/franchise sentiment baselines, viral thresholds, and movie intelligence for comparison with real-time data
 
 #### Data Flow Strategy
 
@@ -93,18 +93,19 @@ This section details how each layer of the Lambda Architecture contributes to so
 
 #### Batch Layer Contribution (TMDB API)
 **What it processes:**
-- Complete TMDB review archive (all reviews ever posted for 50K+ movies)
-- Historical sentiment analysis on millions of reviews
+- TMDB movie metadata (~2,000 movies)
+- Limited reviews from top 50 movies for baseline sentiment calculation
 - Genre-specific sentiment baselines (e.g., sci-fi avg: +0.65)
-- Director/franchise historical patterns (e.g., Denis Villeneuve's previous films)
-- Sentiment variance calculations (normal fluctuation range: ±0.15 for sci-fi)
+- Franchise patterns from movie metadata (e.g., Dune franchise)
+- Budget tier analysis (indie/mid/blockbuster)
+- Seasonal and temporal patterns
 
 **Output:**
-- Historical baseline: "Sci-fi films average +0.65 sentiment"
-- Comparative context: "Dune 1 had +0.78 all-time sentiment"
-- Statistical thresholds: "Normal variance ±0.15, current -0.35 deviation = outlier"
+- Historical baseline: "Sci-fi films average +0.65 sentiment" (from sample reviews)
+- Viral thresholds: "Action blockbuster summer threshold: 29,058 votes"
+- Movie intelligence: Individual movie metadata with aggregated metrics
 
-**Limitation:** 4-hour refresh lag; cannot detect real-time sentiment drops.
+**Limitation:** Daily refresh (not real-time); limited review sample for sentiment baselines.
 
 #### Merged Result (Serving Layer)
 **Combined Intelligence:**
@@ -395,47 +396,44 @@ The pipeline implements Nathan Marz's Lambda Architecture pattern with three dis
 
 ```
 TMDB API (scheduled extraction)
-    ↓ (Airflow DAG - every 4 hours)
+    ↓ (Airflow DAG - daily at 2 AM)
 ┌───────────────────────────────────────┐
-│         BRONZE LAYER (HDFS)           │
+│         BRONZE LAYER (MinIO)          │
 │  • Raw JSON → Parquet                 │
-│  • Reviews, ratings, movie metadata   │
-│  • Partition: /year/month/day/hour    │
-│  • Retention: 90 days                 │
+│  • Movie metadata, genres, sample     │
+│    reviews from top 50 movies         │
+│  • Partition: /data_type              │
 │  • No transformations (immutable)     │
 └────────────────┬──────────────────────┘
                  ↓ (Spark Batch Job)
 ┌───────────────────────────────────────┐
-│         SILVER LAYER (HDFS)           │
-│  • Deduplication by review_id         │
-│  • Schema validation & enrichment     │
-│  • Historical sentiment analysis      │
-│  • Join reviews with movie metadata   │
-│  • Vote count aggregations            │
-│  • Partition: /year/month/genre       │
-│  • Retention: 2 years                 │
+│         SILVER LAYER (MinIO)          │
+│  • Enrichment (budget tiers, genres)  │
+│  • Baseline sentiment calculation     │
+│  • Viral threshold computation        │
+│  • Movie intelligence aggregation     │
+│  • Partition: /dataset_type           │
 └────────────────┬──────────────────────┘
-                 ↓ (Spark Aggregations)
+                 ↓ (Spark Union)
 ┌───────────────────────────────────────┐
-│          GOLD LAYER (HDFS)            │
-│  • Review sentiment by genre/year     │
-│  • Rating velocity trends (7d, 30d)   │
-│  • Engagement metrics aggregations    │
-│  • Popularity tier analytics          │
-│  • Partition: /metric_type/year/month │
-│  • Retention: 5 years                 │
+│          GOLD LAYER (MinIO)           │
+│  • Unified batch_views dataset        │
+│  • view_type discriminator field      │
+│  • Temporal metadata added            │
+│  • Partition: /batch_views            │
 └────────────────┬──────────────────────┘
                  ↓ (Export to Serving)
 ┌───────────────────────────────────────┐
 │      MONGODB (Batch Views)            │
 │  • Collection: batch_views            │
-│  • Historical reviews & sentiments    │
-│  • Updated every 4 hours              │
-│  • Indexed for fast queries           │
+│  • Sentiment baselines, viral         │
+│    thresholds, movie intelligence     │
+│  • Updated daily at 2 AM              │
+│  • 12 compound indexes for queries    │
 └───────────────────────────────────────┘
 ```
 
-### Speed Layer Flow
+### Speed Layer Flow (Planned)
 
 ```
 TMDB API (30-second polling for new data)
@@ -518,46 +516,40 @@ TMDB API (30-second polling for new data)
 
 ### Batch Layer (Historical Social Engagement Data)
 
-**Bronze Layer** - Raw ingestion from TMDB API (>48 hours old)
-- **Movie Metadata**: Basic info (title, genres, release_date, runtime)
-- **Complete Review History**: All reviews with full text, author, timestamps
-- **Historical Rating Data**: Vote counts, vote averages over time
-- **Storage**: JSON in MinIO/HDFS partitioned by date
+**Bronze Layer** - Raw ingestion from TMDB API
+- **Movie Metadata**: Basic info (title, genres, release_date, runtime, budget, popularity)
+- **Limited Reviews**: Reviews from top 50 movies for baseline sentiment calculation
+- **Genre Data**: Complete genre list from TMDB
+- **Storage**: Parquet in MinIO partitioned by data type (tmdb_movies, tmdb_reviews, tmdb_genres)
 
 **Silver Layer** - Cleaned and enriched
-- **Deduplicated Reviews**: Unique by review_id
-- **Sentiment Scores**: VADER sentiment analysis (-1 to 1) on all reviews
-- **Enriched Reviews**: Joined with movie metadata (genres, release context)
-- **Rating Aggregations**: Vote count trends, rating distributions
-- **Storage**: Parquet in MinIO/HDFS partitioned by genre/year
+- **Enriched Movies**: Movies joined with genre names, budget tiers, seasonal classification
+- **Sentiment Baselines**: Genre/franchise/year sentiment aggregations from review samples
+- **Viral Thresholds**: Genre×budget×season popularity thresholds for viral detection
+- **Movie Intelligence**: Individual movie data with all metrics for competitive analysis
+- **Storage**: Parquet in MinIO partitioned by dataset type
 
-**Gold Layer** - Analytical aggregations
-- **Sentiment by Genre/Year**: Average sentiment per genre and release year
-- **Review Volume Patterns**: Daily/weekly review counts, peak activity periods
-- **Engagement Metrics**: Review velocity trends, sentiment trends over time
-- **Release Performance**: First-week/month sentiment scores
-- **Comparative Analytics**: Cross-movie sentiment comparisons
-- **Storage**: Parquet aggregations + MongoDB batch_views collection
+**Gold Layer** - Unified export preparation
+- **Unified Batch Views**: Single dataset with view_type discriminator (sentiment_baseline, viral_threshold, movie_intelligence)
+- **Temporal Metadata**: Batch run timestamps, aggregation granularity, data period ranges
+- **Export Ready**: Formatted for MongoDB upsert with proper indexes
+- **Storage**: Parquet + MongoDB batch_views collection
 
 ### Speed Layer (Real-Time Social Engagement Signals)
 
-**Kafka Topics** - Event streams (30-second polling)
+> **⚠️ NOT YET IMPLEMENTED** - Planned for future development
+
+**Planned Kafka Topics** - Event streams (30-second polling)
 - **`movie.new_reviews`**: Newly posted reviews detected from TMDB
-  - Fields: review_id, movie_id, author, content, sentiment, created_at, detected_at
 - **`movie.rating_events`**: Vote count and rating changes
-  - Fields: movie_id, vote_count_delta, vote_velocity, rating_delta, timestamp
 - **`movie.popularity_changes`**: TMDB popularity score changes
-  - Fields: movie_id, popularity_current, popularity_delta, popularity_velocity, is_trending
 
-**Cassandra Tables** - 5-minute windows (48-hour TTL)
+**Planned Cassandra Tables** - 5-minute windows (48-hour TTL)
 - **`review_sentiments`**: Real-time sentiment aggregations
-  - Metrics: avg_sentiment, review_count, positive/negative/neutral counts, sentiment_velocity
 - **`vote_velocity`**: Vote activity and rating momentum
-  - Metrics: vote_count_delta, vote_velocity, vote_acceleration, rating_momentum
 - **`trending_movies`**: Currently trending content
-  - Metrics: trending_score, vote_velocity, review_velocity, popularity_acceleration
 
-**MongoDB speed_views** - Synced every 5 minutes
+**Planned MongoDB speed_views** - Synced every 5 minutes
 - Recent review sentiment (last 48h)
 - Vote velocity and rating momentum
 - Trending signals and viral content detection

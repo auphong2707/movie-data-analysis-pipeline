@@ -173,40 +173,170 @@ merged_data = merge_by_timestamp(batch_data, speed_data)
 
 ## MongoDB Schema
 
-### Database: `movie_analytics`
+### Database: `moviedb`
 
 ---
 
 ### Collection: `batch_views`
 
-**Purpose**: Store batch layer pre-computed views
+**Purpose**: Store batch layer pre-computed views with unified schema
 
+**Schema Design**: Flat union schema with `view_type` discriminator. All documents contain the same fields; irrelevant fields are null for each view type.
+
+**View Types**:
+- `sentiment_baseline`: Genre/franchise/year sentiment aggregations
+- `viral_threshold`: Genre×budget×season viral thresholds  
+- `movie_intelligence`: Individual movie metadata and metrics
+
+**Example Documents**:
+
+**1. Sentiment Baseline (Genre Aggregation)**
 ```javascript
 {
-  "_id": ObjectId("..."),
-  "movie_id": 12345,
-  "view_type": "genre_analytics",  // genre/trending/temporal/sentiment
-  "data": {
-    // View-specific data
-    "genre": "Action",
-    "year": 2025,
-    "month": 10,
-    "avg_rating": 7.5,
-    "total_movies": 150,
-    "avg_sentiment": 0.65
-  },
-  "computed_at": ISODate("2025-10-17T14:00:00Z"),
-  "batch_run_id": "batch_2025_10_17_14",
-  "version": 1
+  "_id": ObjectId("69331605f9cc2c27e1ca0390"),
+  "view_type": "sentiment_baseline",
+  "type": "sentiment_baseline",
+  
+  // Dimension (one of: genre, franchise, or year)
+  "genre": "Action",
+  "franchise": null,
+  "year": null,
+  
+  // Aggregated metrics
+  "avg_sentiment": 0.0021077661263748473,
+  "sentiment_stddev": 0.016247547088559453,
+  "movie_count": 393,
+  "review_count": 33,
+  
+  // Temporal metadata
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "data_period_start": "1900-01-01",
+  "data_period_end": "2025-12-05",
+  "updated_at": ISODate("2025-12-05T17:27:00.196Z"),
+  
+  // Null fields (not used for this view type)
+  "movie_id": null,
+  "title": null,
+  "director": null,
+  "budget": null,
+  "budget_tier": null,
+  "viral_threshold": null,
+  "avg_popularity": null,
+  "popularity": null,
+  "vote_average": null,
+  "vote_count": null,
+  "runtime": null,
+  "release_date": null,
+  "release_month": null,
+  "release_year": null,
+  "season": null,
+  "budget_tier_coefficient": null,
+  "budget_tier_threshold": null,
+  "seasonal_threshold": null,
+  "franchise_avg_sentiment": null,
+  "yearly_sentiment": null
+}
+```
+
+**2. Viral Threshold (Genre×Budget×Season)**
+```javascript
+{
+  "_id": ObjectId("69331605f9cc2c27e1ca039f"),
+  "view_type": "viral_threshold",
+  "type": "viral_threshold",
+  
+  // Dimensions (genre, budget_tier, season)
+  "genre": "Action",
+  "budget_tier": "blockbuster",
+  "season": "summer",
+  
+  // Threshold metrics
+  "viral_threshold": 29058,
+  "avg_popularity": 6.973233333333333,
+  "movie_count": 3,
+  
+  // Temporal metadata
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "data_period_start": "1900-01-01",
+  "data_period_end": "2025-12-05",
+  "updated_at": ISODate("2025-12-05T17:27:03.808Z"),
+  
+  // Null fields
+  "movie_id": null,
+  "title": null,
+  "director": null,
+  "franchise": null,
+  "year": null,
+  "avg_sentiment": null,
+  "sentiment_stddev": null,
+  "review_count": null,
+  // ... (other unused fields)
+}
+```
+
+**3. Movie Intelligence (Individual Movie)**
+```javascript
+{
+  "_id": ObjectId("69331605f9cc2c27e1c9f42b"),
+  "view_type": "movie_intelligence",
+  "type": "movie_intelligence",
+  
+  // Movie identity
+  "movie_id": 914,
+  "title": "The Great Dictator",
+  "director": "Charlie Chaplin",
+  "genre": "Comedy",
+  
+  // Movie metadata
+  "budget": 2000000,
+  "budget_tier": "indie",
+  "runtime": 125,
+  "release_date": "1940-10-15",
+  "release_year": 1940,
+  "release_month": "October",
+  
+  // Metrics
+  "vote_average": 8.3,
+  "vote_count": 3566,
+  "popularity": 2.5774,
+  "avg_sentiment": 0,
+  "review_count": 0,
+  
+  // Temporal metadata
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "data_period_start": "1900-01-01",
+  "data_period_end": "2025-12-05",
+  "updated_at": ISODate("2025-12-05T17:27:05.500Z"),
+  
+  // Null fields
+  "franchise": null,
+  "year": null,
+  "season": null,
+  "viral_threshold": null,
+  "sentiment_stddev": null,
+  "movie_count": null,
+  // ... (other unused fields)
 }
 ```
 
 **Indexes**:
 ```javascript
-db.batch_views.createIndex({ "movie_id": 1, "view_type": 1 })
-db.batch_views.createIndex({ "view_type": 1, "data.genre": 1, "data.year": 1 })
-db.batch_views.createIndex({ "computed_at": -1 })
-db.batch_views.createIndex({ "view_type": 1, "computed_at": -1 })
+// Primary indexes
+db.batch_views.createIndex({ "view_type": 1, "genre": 1 })
+db.batch_views.createIndex({ "view_type": 1, "franchise": 1 })
+db.batch_views.createIndex({ "view_type": 1, "year": 1 })
+db.batch_views.createIndex({ "view_type": 1, "movie_id": 1 })
+
+// Composite indexes for viral thresholds
+db.batch_views.createIndex({ "view_type": 1, "genre": 1, "budget_tier": 1, "season": 1 })
+
+// Temporal indexes
+db.batch_views.createIndex({ "batch_run_timestamp": -1 })
+db.batch_views.createIndex({ "view_type": 1, "batch_run_timestamp": -1 })
+db.batch_views.createIndex({ "aggregation_granularity": 1, "data_period_start": 1 })
 ```
 
 ---
@@ -673,7 +803,7 @@ api:
 ```yaml
 mongodb:
   uri: "mongodb://mongo-1:27017,mongo-2:27017,mongo-3:27017/?replicaSet=rs0"
-  database: "movie_analytics"
+  database: "moviedb"
   
   collections:
     batch_views: "batch_views"

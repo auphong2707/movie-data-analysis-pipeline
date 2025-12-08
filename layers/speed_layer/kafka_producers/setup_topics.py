@@ -32,6 +32,30 @@ class KafkaTopicSetup:
         
         # Topic configurations as per requirements
         self.topic_configs = {
+            # Reddit stream topics (NEW)
+            'reddit.posts': {
+                'num_partitions': 3,
+                'replication_factor': 3,
+                'config': {
+                    'cleanup.policy': 'delete',
+                    'retention.ms': '172800000',  # 48 hours (matches Cassandra TTL)
+                    'compression.type': 'gzip',
+                    'max.message.bytes': '1048576',  # 1MB
+                    'segment.ms': '3600000'  # 1 hour
+                }
+            },
+            'reddit.comments': {
+                'num_partitions': 3,
+                'replication_factor': 3,
+                'config': {
+                    'cleanup.policy': 'delete',
+                    'retention.ms': '172800000',  # 48 hours
+                    'compression.type': 'gzip',
+                    'max.message.bytes': '524288',  # 512KB
+                    'segment.ms': '3600000'
+                }
+            },
+            # Legacy TMDB topics (kept for reference, not used)
             'movie.reviews': {
                 'num_partitions': 6,
                 'replication_factor': 3,

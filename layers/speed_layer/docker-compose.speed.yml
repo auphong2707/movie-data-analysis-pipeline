@@ -1,6 +1,13 @@
-# Docker Compose for Speed Layer Infrastructure
-# Minimal set of services required for Speed Layer development and deployment
-# Environment variables are loaded from layers/speed_layer/.env
+# =====================================================================
+# Speed Layer - Docker Compose Configuration (Reddit-based)
+# =====================================================================
+# Components:
+# - Zookeeper + Kafka for Reddit stream ingestion
+# - Cassandra for speed views with 48h TTL
+# - Reddit Producer polling r/movies, r/boxoffice, r/TrueFilm
+# - Spark Streaming for real-time sentiment analysis
+# - Cassandra-MongoDB sync connector
+# =====================================================================
 
 networks:
   movie-pipeline:
@@ -267,12 +274,12 @@ services:
       - movie-pipeline
     restart: "no"
   
-  # TMDB Stream Producer - Polls TMDB API and streams to Kafka
-  tmdb-producer:
+  # Reddit Stream Producer - JSON scraping (no auth needed)
+  reddit-producer:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: tmdb-producer
+    container_name: reddit-producer
     depends_on:
       kafka-topics-init:
         condition: service_completed_successfully
@@ -280,10 +287,10 @@ services:
       - .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      TMDB_API_KEY: ${TMDB_API_KEY:?TMDB_API_KEY must be set in .env file}
+      REDDIT_USER_AGENT: "MovieAnalytics/1.0"
+      POLL_INTERVAL: 30
       PYTHONUNBUFFERED: 1
-    command: python kafka_producers/tmdb_stream_producer.py
+    command: python reddit_producers/reddit_stream_producer.py --subreddits movies boxoffice TrueFilm --poll-interval 30
     volumes:
       - .:/app
       - speed-layer-logs:/app/logs
@@ -291,18 +298,18 @@ services:
       - movie-pipeline
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep tmdb_stream_producer.py | grep -v grep || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep reddit_stream_producer.py | grep -v grep || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
-  # Review Sentiment Stream - Analyzes sentiment in real-time
-  sentiment-stream:
+  # Reddit Sentiment Stream - Analyzes Reddit sentiment in real-time
+  reddit-sentiment-stream:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: sentiment-stream
+    container_name: reddit-sentiment-stream
     depends_on:
       kafka-topics-init:
         condition: service_completed_successfully
@@ -314,11 +321,11 @@ services:
       - .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
-      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_HOST: cassandra
       CASSANDRA_KEYSPACE: speed_layer
       PYTHONUNBUFFERED: 1
-      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED"
-    command: python streaming_jobs/review_sentiment_stream.py
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED"
+    command: python streaming_jobs/reddit_sentiment_stream.py
     volumes:
       - .:/app
       - speed-layer-logs:/app/logs
@@ -327,7 +334,7 @@ services:
       - movie-pipeline
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep review_sentiment_stream.py | grep -v grep || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep reddit_sentiment_stream.py | grep -v grep || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

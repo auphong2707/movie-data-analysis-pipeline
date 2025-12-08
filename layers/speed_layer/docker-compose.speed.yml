@@ -423,11 +423,7 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
-      aggregation-stream:
-        condition: service_healthy
-      trending-stream:
-        condition: service_healthy
-      sentiment-stream:
+      reddit-sentiment-stream:
         condition: service_healthy
     env_file:
       - .env

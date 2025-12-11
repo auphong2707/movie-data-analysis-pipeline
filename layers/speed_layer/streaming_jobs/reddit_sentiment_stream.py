@@ -24,16 +24,13 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     from_json, col, window, count, sum as spark_sum, avg, max as spark_max,
     min as spark_min, current_timestamp, lit, when, explode, udf, collect_list,
-    broadcast
+    broadcast, date_trunc
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType,
     BooleanType, ArrayType, FloatType, TimestampType
 )
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import sys
-sys.path.append('/app/reddit_producers')
-from movie_matcher import MovieMatcher
 
 # Configure logging
 logging.basicConfig(
@@ -106,34 +103,19 @@ class RedditSentimentStreaming:
         # Initialize VADER sentiment analyzer
         self.sentiment_analyzer = SentimentIntensityAnalyzer()
         
-        # Initialize movie matcher
-        logger.info("Initializing TMDB movie matcher...")
-        self.movie_matcher = MovieMatcher(
-            tmdb_api_key=os.getenv('TMDB_API_KEY'),
-            similarity_threshold=0.7
-        )
-        
         logger.info("Spark session initialized")
     
     def create_sentiment_udf(self):
         """Create UDF for VADER sentiment analysis."""
+        analyzer = SentimentIntensityAnalyzer()
+        
         def analyze_sentiment(text: str) -> float:
             if not text:
                 return 0.0
-            scores = self.sentiment_analyzer.polarity_scores(text)
-            return scores['compound']  # -1.0 (negative) to 1.0 (positive)
+            scores = analyzer.polarity_scores(text)
+            return float(scores['compound'])
         
         return udf(analyze_sentiment, FloatType())
-    
-    def create_movie_matcher_udf(self):
-        """Create UDF for Reddit title to TMDB movie matching."""
-        def match_movie(title: str) -> int:
-            if not title:
-                return 0
-            match = self.movie_matcher.match_title(title)
-            return match['tmdb_id'] if match else 0
-        
-        return udf(match_movie, IntegerType())
     
     def read_reddit_posts_stream(self):
         """Read Reddit posts from Kafka."""
@@ -186,6 +168,7 @@ class RedditSentimentStreaming:
     def process_posts_with_sentiment(self, posts_df):
         """
         Process posts: sentiment analysis and viral metrics.
+        No TMDB matching - just analyze by movie title mentions.
         
         Args:
             posts_df: Streaming DataFrame of Reddit posts
@@ -194,22 +177,15 @@ class RedditSentimentStreaming:
             Processed DataFrame with sentiment and metrics
         """
         sentiment_udf = self.create_sentiment_udf()
-        movie_matcher_udf = self.create_movie_matcher_udf()
         
         # Explode potential_movies array to get one row per movie mention
         posts_exploded = posts_df.select(
-            explode(col("potential_movies")).alias("reddit_title"),
+            explode(col("potential_movies")).alias("movie_title"),
             col("*")
         )
         
-        # Match Reddit titles to TMDB movies
-        posts_matched = posts_exploded.withColumn(
-            "tmdb_id",
-            movie_matcher_udf(col("reddit_title"))
-        ).filter(col("tmdb_id") > 0)  # Only keep successful matches
-        
         # Calculate sentiment on title + selftext
-        posts_with_sentiment = posts_matched.withColumn(
+        posts_with_sentiment = posts_exploded.withColumn(
             "combined_text",
             when(col("selftext").isNotNull(), 
                  col("title") + " " + col("selftext"))
@@ -224,8 +200,7 @@ class RedditSentimentStreaming:
             .withWatermark("event_time", "10 minutes") \
             .groupBy(
                 window(col("event_time"), "5 minutes"),
-                col("reddit_title"),
-                col("tmdb_id")
+                col("movie_title")
             ) \
             .agg(
                 count("post_id").alias("post_count"),
@@ -261,16 +236,19 @@ class RedditSentimentStreaming:
         ).withColumn(
             "window_end", col("window.end")
         ).withColumn(
+            "hour", date_trunc("hour", col("window.start"))
+        ).withColumn(
             "data_source", lit("reddit")
         ).withColumn(
             "processed_at", current_timestamp()
-        ).withColumnRenamed("reddit_title", "movie_title")
+        )
         
         return windowed
     
     def process_comments_with_sentiment(self, comments_df):
         """
         Process comments: sentiment analysis aggregated by movie.
+        No TMDB matching - just analyze by movie title mentions.
         
         Args:
             comments_df: Streaming DataFrame of Reddit comments
@@ -279,22 +257,15 @@ class RedditSentimentStreaming:
             Processed DataFrame with sentiment metrics
         """
         sentiment_udf = self.create_sentiment_udf()
-        movie_matcher_udf = self.create_movie_matcher_udf()
         
         # Explode potential_movies
         comments_exploded = comments_df.select(
-            explode(col("potential_movies")).alias("reddit_title"),
+            explode(col("potential_movies")).alias("movie_title"),
             col("*")
         )
         
-        # Match to TMDB movies
-        comments_matched = comments_exploded.withColumn(
-            "tmdb_id",
-            movie_matcher_udf(col("reddit_title"))
-        ).filter(col("tmdb_id") > 0)
-        
         # Calculate sentiment
-        comments_with_sentiment = comments_matched.withColumn(
+        comments_with_sentiment = comments_exploded.withColumn(
             "sentiment_score",
             sentiment_udf(col("body"))
         )
@@ -304,8 +275,7 @@ class RedditSentimentStreaming:
             .withWatermark("event_time", "10 minutes") \
             .groupBy(
                 window(col("event_time"), "5 minutes"),
-                col("reddit_title"),
-                col("tmdb_id")
+                col("movie_title")
             ) \
             .agg(
                 count("comment_id").alias("comment_count"),
@@ -321,8 +291,10 @@ class RedditSentimentStreaming:
         ).withColumn(
             "window_end", col("window.end")
         ).withColumn(
+            "hour", date_trunc("hour", col("window.start"))
+        ).withColumn(
             "processed_at", current_timestamp()
-        ).withColumnRenamed("reddit_title", "movie_title")
+        )
         
         return windowed
     

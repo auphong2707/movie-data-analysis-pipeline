@@ -11,7 +11,8 @@
 
 networks:
   movie-pipeline:
-    driver: bridge
+    external: true
+    name: movie-pipeline
 
 services:
   # Zookeeper for Kafka

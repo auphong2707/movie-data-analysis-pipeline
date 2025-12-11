@@ -233,23 +233,22 @@ class RedditStreamProducer:
             posts: List of post dictionaries
             comments: List of comment dictionaries
         """
-        # Publish posts
+        # Publish posts (async, don't wait)
         for post in posts:
             try:
-                future = self.producer.send('reddit.posts', value=post)
-                future.get(timeout=10)  # Wait for confirmation
-            except KafkaError as e:
+                self.producer.send('reddit.posts', value=post)
+            except Exception as e:
                 logger.error(f"Failed to publish post {post['post_id']}: {e}")
         
-        # Publish comments
+        # Publish comments (async, don't wait)
         for comment in comments:
             try:
-                future = self.producer.send('reddit.comments', value=comment)
-                future.get(timeout=10)
-            except KafkaError as e:
+                self.producer.send('reddit.comments', value=comment)
+            except Exception as e:
                 logger.error(f"Failed to publish comment {comment['comment_id']}: {e}")
         
-        self.producer.flush()
+        # Flush to ensure delivery
+        self.producer.flush(timeout=5)
         
         logger.info(f"Published {len(posts)} posts and {len(comments)} comments to Kafka")
     

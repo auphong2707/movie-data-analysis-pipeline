@@ -275,8 +275,9 @@ Recommendation: Top placement in recommendations; expect sustained performance
 - ✅ MongoDB sync operational (clean TMDB-validated dataset)
 - ✅ TMDB validation active (0.8 similarity threshold, fuzzy matching, year extraction)
 - ✅ Data quality verified: Real movie titles only (Fight Club, The Avengers, Shrek, etc.)
-- ❓ Batch layer TMDB integration needs verification
-- ❓ Serving layer merger needs verification
+- ✅ **BATCH LAYER OPERATIONAL**: 5,821 documents in MongoDB (sentiment baselines, viral thresholds, movie intelligence)
+- ✅ **Airflow DAG operational**: tmdb_baseline_pipeline scheduled daily at 2 AM, last successful run Dec 11
+- ⚠️ Serving layer merger needs implementation (batch + speed view merging logic)
 
 ## 🏗️ Architecture
 
@@ -748,14 +749,14 @@ db.speed_views.find().limit(5)  # Recent (≤48h)
 - [x] Documentation (12+ markdown files)
 - [x] Template code for all layers
 
-### Phase 2: Batch Layer - ⚠️ NEEDS VERIFICATION
-- [x] Deploy HDFS cluster (3 datanodes + namenode) - deployment completed
-- [ ] Implement TMDB → HDFS ingestion - needs verification with API key
-- [ ] Create Airflow DAGs (batch orchestration) - needs verification
-- [ ] Bronze → Silver transformations - needs verification
-- [ ] Silver → Gold aggregations - needs verification
-- [ ] Sentiment analysis (batch processing) - needs verification
-- [ ] Export batch views to MongoDB - needs verification
+### Phase 2: Batch Layer - ✅ COMPLETED (with operational monitoring)
+- [x] Deploy MinIO cluster (S3-compatible storage) - fully operational on ports 9000-9001
+- [x] Implement TMDB → MinIO ingestion - API key configured, bronze layer populated
+- [x] Create Airflow DAGs (batch orchestration) - `tmdb_baseline_pipeline` operational, 14 tasks
+- [x] Bronze → Silver transformations - sentiment baselines, viral thresholds, movie intelligence generated
+- [x] Silver → Gold aggregations - unified batch_views dataset created with view_type discriminator
+- [x] Sentiment analysis (batch processing) - VADER-like analyzer implemented and operational
+- [x] Export batch views to MongoDB - **5,821 documents** in batch_views collection (850 sentiment_baseline, 27 viral_threshold, 4,944 movie_intelligence)
 
 ### Phase 3: Speed Layer - ✅ COMPLETED
 - [x] Deploy Kafka cluster (3 brokers + Zookeeper)
@@ -772,24 +773,27 @@ db.speed_views.find().limit(5)  # Recent (≤48h)
 - [x] **Data quality validation** (old bad data cleaned, only TMDB-validated titles remain)
 - [x] **Schema alignment** (Cassandra ↔ Spark ↔ MongoDB all synchronized)
 
-### Phase 4: Serving Layer - ✅ OPERATIONAL (Speed Layer), ⚠️ BATCH LAYER PENDING
+### Phase 4: Serving Layer - ✅ OPERATIONAL (Speed + Batch Data), ⚠️ MERGER LOGIC PENDING
 - [x] Deploy MongoDB (batch_views + speed_views collections)
-- [x] **Speed views fully operational** (5-min sync active)
+- [x] **Speed views fully operational** (5-min sync active with TMDB-validated data)
+- [x] **Batch views fully operational** (5,821 documents: sentiment baselines, viral thresholds, movie intelligence)
 - [x] Implement FastAPI REST API (running on port 8000)
 - [x] **Cassandra → MongoDB sync working** (reddit-cassandra-sync running, real-time data flow)
-- [x] **Data quality ensured** (only TMDB-validated movie titles)
-- [ ] View merger (batch + speed merge logic) - awaiting batch layer completion
-- [ ] Redis caching layer - needs verification
+- [x] **Data quality ensured** (only TMDB-validated movie titles in both layers)
+- [x] Redis caching layer deployed (running on port 6379)
+- [ ] View merger (batch + speed merge logic with 48-hour cutoff) - **needs implementation**
 - [ ] Apache Superset dashboards - needs verification
 - [ ] Grafana monitoring - needs verification
 - [ ] API authentication & rate limiting - needs verification
 
 ### Phase 5: System Refinement
 - [x] **Speed layer data quality validated** (TMDB-validated titles only)
+- [x] **Batch layer data quality validated** (5,821 clean documents with proper view types)
 - [x] **Schema synchronization** (Cassandra, Spark, MongoDB aligned)
 - [x] **Bad data cleanup** (invalid documents removed, clean dataset maintained)
+- [x] **MongoDB indexes created** (12 compound indexes for efficient batch view queries)
+- [ ] View merger implementation (48-hour cutoff logic for batch + speed merge)
 - [ ] Requirements checklist finalization
-- [ ] Batch layer data quality checks & validation
 - [ ] Performance optimizations
 - [ ] End-to-end integration testing
 

@@ -49,25 +49,30 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 - **Data Types**: Posts, comments, upvotes, Reddit awards, cross-posts from r/movies, r/boxoffice, r/TrueFilm
 - **Volume**: 500-2,000 posts/day + 10K-50K comments/day across movie subreddits
 - **Update Frequency**: 30-second polling (near real-time)
-- **API Rate Limit**: 60 requests/minute (free tier)
+- **Authentication**: None required (public JSON endpoints: `/r/subreddit.json`)
 - **Retention**: Last 48 hours in speed layer (Cassandra TTL)
 - **Real-Time Nature**: Discussions happen continuously; posts can go viral (0→10K upvotes) within hours
+- **Current Status**: ✅ **OPERATIONAL** - Pipeline extracting TMDB-validated movie titles (TMDB cache active)
 
-**TMDB API (Batch Layer - Baseline Calculation)**
+**TMDB API (Batch Layer + Speed Layer Movie Validation)**
 - **Data Types**: Movie metadata (genres, budget, runtime, release dates), vote counts, popularity scores, limited reviews for sentiment baselines
 - **Volume**: ~2,000 movies metadata, ~50 movies with reviews for baseline sentiment calculation
 - **Update Frequency**: Daily at 2 AM (baseline recalculation)
 - **API Rate Limit**: 4 requests/second
 - **Storage**: MinIO/S3-compatible storage (Bronze/Silver/Gold layers)
-- **Purpose**: Calculate genre/franchise sentiment baselines, viral thresholds, and movie intelligence for comparison with real-time data
+- **Purpose**: 
+  - **Batch Layer**: Calculate genre/franchise sentiment baselines, viral thresholds, and movie intelligence
+  - **Speed Layer**: Validate Reddit-extracted movie titles against TMDB database (fuzzy matching)
+- **Current Status**: ✅ **INTEGRATED** - Speed layer validates against TMDB database (4 categories: popular, top_rated, now_playing, upcoming)
 
 #### Data Flow Strategy
 
-- **Speed Layer Focus**: Reddit discussions, upvote velocity, community engagement (last 48 hours)
-- **Batch Layer Focus**: TMDB review archive, sentiment baselines, genre trends, competitive benchmarks (>48 hours)
-- **Merge Strategy**: Query-time merge with 48-hour cutoff - recent Reddit data + historical TMDB context
+- **Speed Layer Focus**: Reddit discussions, upvote velocity, community engagement, sentiment analysis (last 48 hours)
+- **Batch Layer Focus**: TMDB movie metadata, sentiment baselines, viral thresholds, genre trends (historical only)
+- **Merge Strategy**: Query-time merge with 48-hour cutoff - recent Reddit data + historical TMDB baselines
 - **Languages**: Primarily English-language content
-- **Lambda Architecture Justification**: Reddit provides high-velocity streaming data; TMDB provides deep historical context
+- **Lambda Architecture Justification**: Reddit provides high-velocity social engagement data; TMDB provides historical movie intelligence and statistical baselines
+- **Implementation Note**: Speed layer uses Reddit JSON scraping (no auth); batch layer uses TMDB API
 
 ## 🧩 Lambda Architecture Layer Contributions
 
@@ -77,21 +82,23 @@ This section details how each layer of the Lambda Architecture contributes to so
 
 **Goal**: Detect sentiment shifts and PR crises by comparing real-time Reddit discussions against historical TMDB review baselines.
 
-#### Speed Layer Contribution (Reddit API)
+#### Speed Layer Contribution (Reddit API - No Authentication)
 **What it processes:**
-- Real-time Reddit posts and comments from r/movies, r/boxoffice, r/TrueFilm
+- Real-time Reddit posts and comments from r/movies, r/boxoffice, r/TrueFilm (JSON scraping)
 - Live sentiment analysis on incoming discussions using VADER
 - Comment velocity tracking (comments per hour)
 - Upvote/downvote patterns indicating agreement/disagreement
+- Movie title extraction from post titles and comment bodies
 
 **Output:**
 - Current Reddit sentiment score (e.g., +0.3 for "Dune 2" in last 48h)
 - Sentiment velocity: "Dropped from +0.8 to +0.3 in last 6 hours"
 - Discussion volume: "450 comments in last 24 hours"
+- Viral metrics: Upvote velocity, award velocity, cross-subreddit spread
 
-**Limitation:** Cannot determine if +0.3 is good/bad without historical context.
+**Limitation:** Cannot determine if +0.3 is good/bad without historical TMDB baselines.
 
-#### Batch Layer Contribution (TMDB API)
+#### Batch Layer Contribution (TMDB API - Historical Only)
 **What it processes:**
 - TMDB movie metadata (~2,000 movies)
 - Limited reviews from top 50 movies for baseline sentiment calculation
@@ -104,8 +111,9 @@ This section details how each layer of the Lambda Architecture contributes to so
 - Historical baseline: "Sci-fi films average +0.65 sentiment" (from sample reviews)
 - Viral thresholds: "Action blockbuster summer threshold: 29,058 votes"
 - Movie intelligence: Individual movie metadata with aggregated metrics
+- Statistical context: Genre norms, franchise expectations, budget tier benchmarks
 
-**Limitation:** Daily refresh (not real-time); limited review sample for sentiment baselines.
+**Limitation:** Daily refresh (not real-time); limited review sample; no real-time TMDB streaming.
 
 #### Merged Result (Serving Layer)
 **Combined Intelligence:**
@@ -255,9 +263,20 @@ Recommendation: Top placement in recommendations; expect sustained performance
 | **Merged (Serving)** | Contextualized real-time insights: "Current performance vs historical norms" | — |
 
 **Key Insight:** 
-- Speed layer answers: **"What is happening NOW?"**
-- Batch layer answers: **"Is this NORMAL or EXCEPTIONAL?"**
+- Speed layer (Reddit) answers: **"What is happening NOW in social discussions?"**
+- Batch layer (TMDB) answers: **"Is this NORMAL or EXCEPTIONAL based on historical data?"**
 - Lambda Architecture answers: **"What is happening NOW, and should we ACT on it?"**
+
+**Implementation Status:**
+- ✅ **SPEED LAYER OPERATIONAL**: Movie extraction fixed with TMDB validation (313 movies cached)
+- ✅ Reddit data collection operational (posts + comments in Kafka)
+- ✅ Spark Streaming operational (5-minute windows, VADER sentiment, viral metrics)
+- ✅ Cassandra storage operational (post + comment metrics, 48h TTL)
+- ✅ MongoDB sync operational (clean TMDB-validated dataset)
+- ✅ TMDB validation active (0.8 similarity threshold, fuzzy matching, year extraction)
+- ✅ Data quality verified: Real movie titles only (Fight Club, The Avengers, Shrek, etc.)
+- ❓ Batch layer TMDB integration needs verification
+- ❓ Serving layer merger needs verification
 
 ## 🏗️ Architecture
 
@@ -433,46 +452,53 @@ TMDB API (scheduled extraction)
 └───────────────────────────────────────┘
 ```
 
-### Speed Layer Flow (Planned)
+### Speed Layer Flow (✅ Fully Operational - Reddit-based)
 
 ```
-TMDB API (30-second polling for new data)
-    ↓ (Kafka Producer - streaming events)
+Reddit API (r/movies, r/boxoffice, r/TrueFilm)
+    ↓ (30-second polling, no auth required)
 ┌───────────────────────────────────────┐
-│          KAFKA TOPICS                 │
-│  • movie.new_reviews (review stream)  │
-│  • movie.rating_events (vote changes) │
-│  • movie.popularity_changes (trends)  │
-│  • movie.metadata (updates)           │
-│  • Replication factor: 3              │
-│  • Retention: 7 days                  │
+│  REDDIT PRODUCER (Python + requests)  │ ✅ OPERATIONAL
+│  • Polls 3 subreddits every 30s       │
+│  • JSON scraping (no credentials)     │
+│  • TMDB validation (cache active)     │
+│  • Fuzzy matching (0.8 threshold)     │
+└────────────────┬──────────────────────┘
+                 ↓ (Kafka topics: reddit.posts, reddit.comments)
+┌───────────────────────────────────────┐
+│          KAFKA TOPICS                 │ ✅ OPERATIONAL
+│  • reddit.posts                       │
+│  • reddit.comments                    │
+│  • Partitions: 3 per topic            │
+│  • Retention: 48 hours                │
+│  • Auto-created topics                │
 └────────────────┬──────────────────────┘
                  ↓ (Spark Structured Streaming)
 ┌───────────────────────────────────────┐
-│      REAL-TIME PROCESSING             │
+│      REAL-TIME PROCESSING             │ ✅ OPERATIONAL
 │  • 5-minute tumbling windows          │
-│  • Real-time sentiment (VADER)        │
-│  • Vote velocity calculation          │
-│  • Incremental review aggregations    │
-│  • Trending detection (vote spikes)   │
+│  • VADER sentiment analysis           │
+│  • Upvote/comment/award velocity      │
+│  • Movie title aggregation            │
+│  • Viral score calculation            │
+│  • 30-second watermark for low latency│
 └────────────────┬──────────────────────┘
                  ↓ (Write to Cassandra)
 ┌───────────────────────────────────────┐
-│      CASSANDRA (Speed Views)          │
-│  • Table: speed_views                 │
-│  • Recent reviews & sentiment scores  │
-│  • Vote velocity metrics              │
+│      CASSANDRA (Speed Views)          │ ✅ POPULATED
+│  • reddit_post_metrics                │
+│  • reddit_comment_metrics             │
 │  • TTL: 48 hours (auto-expire)        │
-│  • Partition: (movie_id, hour)        │
-│  • Replication factor: 3              │
+│  • Partition: (movie_title, hour)     │
+│  • Clean TMDB-validated titles        │
 └────────────────┬──────────────────────┘
-                 ↓ (Periodic sync - 5 min)
+                 ↓ (Sync every 5 min)
 ┌───────────────────────────────────────┐
-│      MONGODB (Speed Views)            │
+│      MONGODB (Speed Views)            │ ✅ OPERATIONAL
 │  • Collection: speed_views            │
-│  • Real-time engagement metrics       │
-│  • Synced every 5 minutes             │
-│  • TTL index: 48 hours                │
+│  • Sync connector: RUNNING            │
+│  • Clean data (old bad data removed)  │
+│  • TMDB-validated titles only         │
 └───────────────────────────────────────┘
 ```
 
@@ -535,24 +561,31 @@ TMDB API (30-second polling for new data)
 - **Export Ready**: Formatted for MongoDB upsert with proper indexes
 - **Storage**: Parquet + MongoDB batch_views collection
 
-### Speed Layer (Real-Time Social Engagement Signals)
+### Speed Layer (Real-Time Reddit Social Engagement)
 
-> **⚠️ NOT YET IMPLEMENTED** - Planned for future development
+> **✅ FULLY OPERATIONAL** - Complete Reddit data pipeline with real-time sentiment analysis
 
-**Planned Kafka Topics** - Event streams (30-second polling)
-- **`movie.new_reviews`**: Newly posted reviews detected from TMDB
-- **`movie.rating_events`**: Vote count and rating changes
-- **`movie.popularity_changes`**: TMDB popularity score changes
+**Kafka Topics (✅ OPERATIONAL)** - Event streams (30-second polling)
+- **`reddit.posts`**: Reddit posts from r/movies, r/boxoffice, r/TrueFilm
+- **`reddit.comments`**: Reddit comments with movie mentions
+- **Partitions**: 3 per topic for parallel processing
+- **Retention**: 48 hours auto-cleanup
+- **TMDB Validation**: Producer validates all extracted titles against 313-movie cache
 
-**Planned Cassandra Tables** - 5-minute windows (48-hour TTL)
-- **`review_sentiments`**: Real-time sentiment aggregations
-- **`vote_velocity`**: Vote activity and rating momentum
-- **`trending_movies`**: Currently trending content
+**Cassandra Tables (✅ OPERATIONAL)** - 5-minute windows (48-hour TTL)
+- **`reddit_post_metrics`**: Post-level metrics with viral scores
+- **`reddit_comment_metrics`**: Comment-level sentiment aggregations
+- **Metrics**: upvote_velocity, comment_velocity, award_velocity, avg_sentiment, viral_score
+- **Partition Key**: (movie_title, hour, window_start)
+- **Data Quality**: Only TMDB-validated movie titles (Fight Club, The Avengers, Shrek, etc.)
+- **Status**: Actively receiving data from Spark Streaming
 
-**Planned MongoDB speed_views** - Synced every 5 minutes
-- Recent review sentiment (last 48h)
-- Vote velocity and rating momentum
-- Trending signals and viral content detection
+**MongoDB speed_views (✅ OPERATIONAL)** - Active sync every 5 minutes
+- Collection: `speed_views`
+- Data types: `reddit_post`, `reddit_comment`
+- Sync connector: `reddit-cassandra-sync` container running
+- Auto TTL: 48 hours (documents expire automatically)
+- Features: Recent Reddit sentiment, viral metrics, upvote velocity, trending signals
 
 ### Serving Layer (Merged Views)
 
@@ -715,37 +748,50 @@ db.speed_views.find().limit(5)  # Recent (≤48h)
 - [x] Documentation (12+ markdown files)
 - [x] Template code for all layers
 
-### Phase 2: Batch Layer - ✅ COMPLETED
-- [x] Deploy HDFS cluster (3 datanodes + namenode)
-- [x] Implement TMDB → HDFS ingestion
-- [x] Create Airflow DAGs (batch orchestration)
-- [x] Bronze → Silver transformations (deduplication, validation)
-- [x] Silver → Gold aggregations (genre, trends, ratings)
-- [x] Sentiment analysis (batch processing)
-- [x] Export batch views to MongoDB
+### Phase 2: Batch Layer - ⚠️ NEEDS VERIFICATION
+- [x] Deploy HDFS cluster (3 datanodes + namenode) - deployment completed
+- [ ] Implement TMDB → HDFS ingestion - needs verification with API key
+- [ ] Create Airflow DAGs (batch orchestration) - needs verification
+- [ ] Bronze → Silver transformations - needs verification
+- [ ] Silver → Gold aggregations - needs verification
+- [ ] Sentiment analysis (batch processing) - needs verification
+- [ ] Export batch views to MongoDB - needs verification
 
 ### Phase 3: Speed Layer - ✅ COMPLETED
 - [x] Deploy Kafka cluster (3 brokers + Zookeeper)
-- [x] Deploy Schema Registry (Avro schemas)
-- [x] Implement Kafka producers (real-time)
-- [x] Deploy Cassandra cluster (3 nodes, 48h TTL)
-- [x] Spark Structured Streaming jobs
-- [x] Real-time sentiment analysis
-- [x] Write to Cassandra speed views
+- [x] Implement Reddit JSON scraper (no auth required)
+- [x] Kafka producers publishing to reddit.posts, reddit.comments (6,932 total messages)
+- [x] Deploy Cassandra cluster (1 node, 48h TTL schema)
+- [x] **TMDB validation integrated** (multi-category cache, 4 categories)
+- [x] **Fuzzy matching** (0.8 similarity threshold, year extraction, article normalization)
+- [x] Spark Structured Streaming jobs (fully operational with 30s watermark)
+- [x] Real-time sentiment analysis (VADER on 5-minute windows)
+- [x] Write to Cassandra speed views (post + comment metrics)
+- [x] Viral metrics calculation (upvote/comment/award velocity)
+- [x] MongoDB sync connector deployed (active sync, TMDB-validated titles only)
+- [x] **Data quality validation** (old bad data cleaned, only TMDB-validated titles remain)
+- [x] **Schema alignment** (Cassandra ↔ Spark ↔ MongoDB all synchronized)
 
-### Phase 4: Serving Layer - ✅ COMPLETED
-- [x] Deploy MongoDB (materialized views)
-- [x] Implement FastAPI REST API
-- [x] View merger (batch + speed merge logic)
-- [x] Redis caching layer
-- [x] Apache Superset dashboards
-- [x] Grafana monitoring
-- [x] API authentication & rate limiting
+### Phase 4: Serving Layer - ✅ OPERATIONAL (Speed Layer), ⚠️ BATCH LAYER PENDING
+- [x] Deploy MongoDB (batch_views + speed_views collections)
+- [x] **Speed views fully operational** (5-min sync active)
+- [x] Implement FastAPI REST API (running on port 8000)
+- [x] **Cassandra → MongoDB sync working** (reddit-cassandra-sync running, real-time data flow)
+- [x] **Data quality ensured** (only TMDB-validated movie titles)
+- [ ] View merger (batch + speed merge logic) - awaiting batch layer completion
+- [ ] Redis caching layer - needs verification
+- [ ] Apache Superset dashboards - needs verification
+- [ ] Grafana monitoring - needs verification
+- [ ] API authentication & rate limiting - needs verification
 
 ### Phase 5: System Refinement
+- [x] **Speed layer data quality validated** (TMDB-validated titles only)
+- [x] **Schema synchronization** (Cassandra, Spark, MongoDB aligned)
+- [x] **Bad data cleanup** (invalid documents removed, clean dataset maintained)
 - [ ] Requirements checklist finalization
-- [ ] Data quality checks & validation
+- [ ] Batch layer data quality checks & validation
 - [ ] Performance optimizations
+- [ ] End-to-end integration testing
 
 ## 📚 Documentation
 

@@ -125,7 +125,7 @@ class RedditSentimentStreaming:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.kafka_bootstrap) \
             .option("subscribe", "reddit.posts") \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .load()
         
         # Parse JSON and extract fields
@@ -149,7 +149,7 @@ class RedditSentimentStreaming:
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.kafka_bootstrap) \
             .option("subscribe", "reddit.comments") \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .load()
         
         # Parse JSON and extract fields
@@ -197,7 +197,7 @@ class RedditSentimentStreaming:
         
         # Apply 5-minute tumbling windows
         windowed = posts_with_sentiment \
-            .withWatermark("event_time", "10 minutes") \
+            .withWatermark("event_time", "30 seconds") \
             .groupBy(
                 window(col("event_time"), "5 minutes"),
                 col("movie_title")
@@ -233,8 +233,6 @@ class RedditSentimentStreaming:
         # Add metadata
         windowed = windowed.withColumn(
             "window_start", col("window.start")
-        ).withColumn(
-            "window_end", col("window.end")
         ).withColumn(
             "hour", date_trunc("hour", col("window.start"))
         ).withColumn(
@@ -272,26 +270,35 @@ class RedditSentimentStreaming:
         
         # Apply 5-minute tumbling windows
         windowed = comments_with_sentiment \
-            .withWatermark("event_time", "10 minutes") \
+            .withWatermark("event_time", "30 seconds") \
             .groupBy(
                 window(col("event_time"), "5 minutes"),
                 col("movie_title")
             ) \
             .agg(
                 count("comment_id").alias("comment_count"),
-                spark_sum("upvotes").alias("total_comment_upvotes"),
-                spark_sum("awards").alias("total_comment_awards"),
-                avg("sentiment_score").alias("avg_comment_sentiment"),
-                spark_max("upvotes").alias("max_comment_upvotes")
+                spark_sum("upvotes").alias("total_upvotes"),
+                spark_sum("awards").alias("total_awards"),
+                avg("sentiment_score").alias("avg_sentiment"),
+                spark_max("upvotes").alias("max_upvotes")
             )
+        
+        # Calculate velocities
+        windowed = windowed.withColumn(
+            "upvote_velocity",
+            col("total_upvotes") / 300.0  # upvotes per second (5-min window)
+        ).withColumn(
+            "award_velocity",
+            col("total_awards") / 300.0
+        )
         
         # Add metadata
         windowed = windowed.withColumn(
             "window_start", col("window.start")
         ).withColumn(
-            "window_end", col("window.end")
-        ).withColumn(
             "hour", date_trunc("hour", col("window.start"))
+        ).withColumn(
+            "data_source", lit("reddit")
         ).withColumn(
             "processed_at", current_timestamp()
         )

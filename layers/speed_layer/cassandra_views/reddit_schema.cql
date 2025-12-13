@@ -25,22 +25,22 @@ USE speed_layer;
 
 CREATE TABLE IF NOT EXISTS reddit_post_metrics (
     movie_title TEXT,
+    hour TIMESTAMP,
     window_start TIMESTAMP,
-    window_end TIMESTAMP,
-    post_count BIGINT,
+    post_count INT,
     total_upvotes BIGINT,
-    avg_upvote_ratio DOUBLE,
-    total_comments BIGINT,
-    total_awards BIGINT,
-    avg_sentiment DOUBLE,
-    max_upvotes BIGINT,
+    avg_upvote_ratio FLOAT,
+    total_comments INT,
+    total_awards INT,
+    avg_sentiment FLOAT,
+    max_upvotes INT,
     upvote_velocity DOUBLE,
     comment_velocity DOUBLE,
     award_velocity DOUBLE,
     viral_score DOUBLE,
     data_source TEXT,
     processed_at TIMESTAMP,
-    PRIMARY KEY (movie_title, window_start)
+    PRIMARY KEY ((movie_title, hour), window_start)
 ) WITH CLUSTERING ORDER BY (window_start DESC)
   AND default_time_to_live = 172800
   AND comment = 'Reddit post viral metrics aggregated in 5-minute windows';
@@ -62,15 +62,18 @@ ON reddit_post_metrics (viral_score);
 
 CREATE TABLE IF NOT EXISTS reddit_comment_metrics (
     movie_title TEXT,
+    hour TIMESTAMP,
     window_start TIMESTAMP,
-    window_end TIMESTAMP,
-    comment_count BIGINT,
-    total_comment_upvotes BIGINT,
-    total_comment_awards BIGINT,
-    avg_comment_sentiment DOUBLE,
-    max_comment_upvotes BIGINT,
+    comment_count INT,
+    total_upvotes BIGINT,
+    total_awards INT,
+    avg_sentiment FLOAT,
+    max_upvotes INT,
+    upvote_velocity DOUBLE,
+    award_velocity DOUBLE,
+    data_source TEXT,
     processed_at TIMESTAMP,
-    PRIMARY KEY (movie_title, window_start)
+    PRIMARY KEY ((movie_title, hour), window_start)
 ) WITH CLUSTERING ORDER BY (window_start DESC)
   AND default_time_to_live = 172800
   AND comment = 'Reddit comment metrics aggregated in 5-minute windows';

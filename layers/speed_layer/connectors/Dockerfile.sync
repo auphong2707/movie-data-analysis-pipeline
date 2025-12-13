@@ -1,0 +1,13 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-sync.txt .
+RUN pip install --no-cache-dir -r requirements-sync.txt
+
+# Copy sync script
+COPY reddit_sync.py .
+
+# Run sync service
+CMD ["python", "-u", "reddit_sync.py"]

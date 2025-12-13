@@ -22,6 +22,7 @@ import argparse
 import requests
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
+from movie_matcher import MovieMatcher
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +69,10 @@ class RedditStreamProducer:
         
         logger.info(f"Initializing Reddit JSON scraper (no auth required)...")
         
+        # Initialize TMDB movie matcher
+        self.movie_matcher = MovieMatcher()
+        logger.info(f"MovieMatcher initialized with {len(self.movie_matcher.movie_cache)} movies")
+        
         # Initialize Kafka producer
         logger.info(f"Connecting to Kafka: {kafka_bootstrap_servers}")
         self.producer = KafkaProducer(
@@ -82,16 +87,13 @@ class RedditStreamProducer:
     
     def _extract_movie_titles(self, text: str) -> List[str]:
         """
-        Extract potential movie titles from Reddit text.
-        
-        Simple heuristic: Look for quoted strings, capitalized phrases.
-        More sophisticated matching will be done in Spark streaming.
+        Extract and validate movie titles from text using TMDB matching.
         
         Args:
             text: Post title or comment body
             
         Returns:
-            List of potential movie titles
+            List of validated TMDB movie titles
         """
         if not text:
             return []
@@ -103,7 +105,30 @@ class RedditStreamProducer:
         # Extract words in title case (potential movie names)
         title_case = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
         
-        return list(set(quoted + title_case))[:5]  # Limit to 5 candidates
+        # Extract multi-word titles (2-6 words)
+        multi_word = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-zA-Z]+){1,5})\b', text)
+        
+        # Combine candidates
+        candidates = list(set(quoted + title_case + multi_word))
+        
+        # Validate against TMDB
+        validated_titles = []
+        for candidate in candidates[:20]:  # Check top 20 candidates
+            if len(candidate) < 3 or len(candidate) > 100:
+                continue
+            
+            match = self.movie_matcher.match_title(candidate)
+            if match and match['similarity'] >= 0.8:
+                # Use TMDB canonical title
+                validated_titles.append(match['tmdb_title'])
+                logger.debug(f"✓ TMDB match: '{candidate}' → '{match['tmdb_title']}' (score: {match['similarity']:.2f})")
+            else:
+                logger.debug(f"✗ No TMDB match for: '{candidate}'")
+        
+        result = list(set(validated_titles))[:5]  # Return up to 5 validated titles
+        if result:
+            logger.info(f"Extracted {len(result)} valid movie titles: {result}")
+        return result
     
     def _rate_limit(self):
         """Implement rate limiting: max 1 request per 2 seconds."""

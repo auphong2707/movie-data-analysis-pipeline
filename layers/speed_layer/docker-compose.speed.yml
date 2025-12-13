@@ -291,6 +291,7 @@ services:
       REDDIT_USER_AGENT: "MovieAnalytics/1.0"
       POLL_INTERVAL: 30
       PYTHONUNBUFFERED: 1
+      TMDB_API_KEY: ${TMDB_API_KEY}
     command: python reddit_producers/reddit_stream_producer.py --subreddits movies boxoffice TrueFilm --poll-interval 30
     volumes:
       - .:/app

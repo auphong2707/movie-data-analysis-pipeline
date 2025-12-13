@@ -13,6 +13,7 @@ Usage:
 import os
 import logging
 import re
+import time
 from typing import Optional, List, Dict, Tuple
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
@@ -124,7 +125,8 @@ class MovieMatcher:
         """
         Load popular movies from TMDB API into cache.
         
-        Fetches top 500 popular movies (10 pages * 50 movies).
+        Fetches multiple movie categories for comprehensive coverage.
+        Uses batch layer's approach with rate limiting.
         """
         if not self.tmdb_api_key:
             logger.warning("TMDB API key not set. Using empty cache.")
@@ -133,33 +135,54 @@ class MovieMatcher:
         self.movie_cache = {}
         
         try:
-            # Fetch popular movies (10 pages = ~200 movies)
-            for page in range(1, 11):
-                response = requests.get(
-                    f"{self.base_url}/movie/popular",
-                    params={'api_key': self.tmdb_api_key, 'page': page},
-                    timeout=10
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                for movie in data.get('results', []):
-                    movie_id = movie['id']
-                    title = movie['title']
-                    year = None
-                    
-                    # Extract year from release_date
-                    if movie.get('release_date'):
-                        try:
-                            year = int(movie['release_date'][:4])
-                        except ValueError:
-                            pass
-                    
-                    # Store in cache
-                    normalized = self._normalize_title(title)
-                    self.movie_cache[normalized] = (movie_id, title, year)
+            # Fetch from multiple categories for better coverage
+            categories = [
+                ('popular', 10),      # Top 200 popular movies
+                ('top_rated', 5),     # Top 100 rated movies
+                ('now_playing', 3),   # Current ~60 movies
+                ('upcoming', 2),      # Upcoming ~40 movies
+            ]
             
-            logger.info(f"Loaded {len(self.movie_cache)} movies into cache")
+            total_movies = 0
+            
+            for category, max_pages in categories:
+                logger.info(f"Fetching {category} movies from TMDB...")
+                
+                for page in range(1, max_pages + 1):
+                    # Rate limiting: 4 requests/second (same as batch layer)
+                    time.sleep(0.25)
+                    
+                    try:
+                        response = requests.get(
+                            f"{self.base_url}/movie/{category}",
+                            params={'api_key': self.tmdb_api_key, 'page': page},
+                            timeout=10
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        for movie in data.get('results', []):
+                            movie_id = movie['id']
+                            title = movie['title']
+                            year = None
+                            
+                            # Extract year from release_date
+                            if movie.get('release_date'):
+                                try:
+                                    year = int(movie['release_date'][:4])
+                                except ValueError:
+                                    pass
+                            
+                            # Store in cache
+                            normalized = self._normalize_title(title)
+                            self.movie_cache[normalized] = (movie_id, title, year)
+                            total_movies += 1
+                        
+                    except requests.RequestException as e:
+                        logger.warning(f"Failed to fetch {category} page {page}: {e}")
+                        continue
+            
+            logger.info(f"Loaded {len(self.movie_cache)} unique movies into cache from {total_movies} total results")
             
         except Exception as e:
             logger.error(f"Failed to load TMDB movies: {e}")

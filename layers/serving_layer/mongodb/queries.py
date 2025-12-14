@@ -74,35 +74,6 @@ class MovieQueries:
             'view_type': 'movie_details'
         })
     
-    def get_batch_temporal_trends(
-        self,
-        metric: str,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
-    ) -> List[Dict]:
-        """
-        Get temporal trends from batch layer
-        
-        Args:
-            metric: Metric type (rating, sentiment, popularity)
-            start_date: Start date filter
-            end_date: End date filter
-        
-        Returns:
-            List of temporal trend documents
-        """
-        query = {
-            'view_type': 'temporal_trends',
-            'data.metric': metric
-        }
-        
-        if start_date:
-            query['computed_at'] = {'$gte': start_date}
-        if end_date:
-            query.setdefault('computed_at', {})['$lte'] = end_date
-        
-        return list(self.batch_views.find(query).sort('computed_at', ASCENDING))
-    
     # --- Speed Layer Queries ---
     
     def get_speed_movie_stats(
@@ -250,12 +221,12 @@ class MovieQueries:
         year_to: Optional[int] = None,
         rating_min: Optional[float] = None,
         rating_max: Optional[float] = None,
-        sort_by: str = 'popularity',
+        sort_by: str = 'rating',
         limit: int = 20,
         offset: int = 0
     ) -> Dict[str, Any]:
         """
-        Search movies with multiple filters
+        Search movies with multiple filters (aligned with actual data schema)
         
         Args:
             query: Text search query
@@ -264,7 +235,7 @@ class MovieQueries:
             year_to: Maximum year
             rating_min: Minimum rating
             rating_max: Maximum rating
-            sort_by: Sort field (popularity, rating, release_date)
+            sort_by: Sort field (rating, sentiment, viral_score, release_date)
             limit: Maximum results
             offset: Pagination offset
         
@@ -291,13 +262,14 @@ class MovieQueries:
             if rating_max:
                 search_query['avg_rating']['$lte'] = rating_max
         
-        # Sort mapping
+        # Sort mapping (aligned with actual batch_views schema)
         sort_map = {
-            'popularity': ('avg_popularity', DESCENDING),
             'rating': ('avg_rating', DESCENDING),
+            'sentiment': ('avg_sentiment', DESCENDING),
+            'viral_score': ('viral_coefficient', DESCENDING),
             'release_date': ('year', DESCENDING)
         }
-        sort_field, sort_order = sort_map.get(sort_by, ('data.avg_popularity', DESCENDING))
+        sort_field, sort_order = sort_map.get(sort_by, ('avg_rating', DESCENDING))
         
         # Execute query
         cursor = self.batch_views.find(search_query).sort(sort_field, sort_order)

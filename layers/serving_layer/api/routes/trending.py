@@ -33,57 +33,64 @@ def get_cache():
 async def get_trending_movies(
     genre: Optional[str] = Query(None, description="Filter by genre"),
     limit: int = Query(20, ge=1, le=100, description="Number of results"),
-    window: int = Query(6, ge=1, le=48, description="Time window in hours"),
+    viral_coefficient_threshold: float = Query(1.0, description="Minimum viral coefficient"),
     merger: ViewMerger = Depends(get_view_merger),
     cache = Depends(get_cache)
 ):
     """
-    Get currently trending movies
+    Get currently trending movies (Business Goal #2: Viral Content Identification)
     
-    Returns per README schema with:
-    - rank: Position in trending list
-    - trending_score: Composite score
-    - velocity: Popularity increase rate
-    - acceleration: Rating velocity
+    Uses Reddit viral coefficient instead of TMDB popularity:
+    - Calculates upvote/comment velocity from Reddit speed layer
+    - Compares against genre-specific viral thresholds from batch layer
+    - Returns viral coefficient (velocity / threshold)
+    
+    Returns:
+    - rank: Position in viral ranking
+    - viral_coefficient: How many times above viral threshold
+    - reddit_metrics: Upvotes, comments, sentiment from Reddit
+    - viral_status: "viral" (>=1.0) or "trending" (<1.0)
     
     Args:
         genre: Optional genre filter
         limit: Maximum number of results (1-100)
-        window: Time window in hours (1-48)
+        viral_coefficient_threshold: Minimum viral coefficient (default: 1.0)
     
     Returns:
-        Trending movies list per README format
+        Viral movies ranked by Reddit engagement coefficient
     """
     try:
-        # Try cache first (skip cache if genre filter is used)
-        cache_key = f"trending:{genre}:{limit}:{window}"
-        cached = None if genre else cache.get(cache_key)
+        # Try cache first
+        cache_key = f"trending:viral:{genre}:{limit}:{viral_coefficient_threshold}"
+        cached = cache.get(cache_key)
         if cached:
-            logger.info(f"Cache hit for trending movies")
+            logger.info(f"Cache hit for viral trending movies")
             return cached
         
-        # Get trending movies (already formatted by ViewMerger)
-        response = merger.merge_trending_views(
+        # Use merge_viral_data instead of merge_trending_views
+        response = merger.merge_viral_data(
             genre=genre,
             limit=limit,
-            window_hours=window
+            viral_coefficient_threshold=viral_coefficient_threshold
         )
         
-        if not response.get('trending_movies'):
+        if not response.get('viral_movies'):
             return {
-                'trending_movies': [],
-                'generated_at': None,
-                'window': f"{window}h",
-                'data_source': 'speed'
+                'viral_movies': [],
+                'total_trending': 0,
+                'threshold_used': viral_coefficient_threshold,
+                'window_hours': 48,
+                'timestamp': None,
+                'message': 'No viral content found in time window'
             }
         
-        # Cache result (short TTL - trending changes fast)
+        # Cache result (short TTL - viral trends change fast)
         cache.set(cache_key, response, ttl_seconds=300)  # 5 minutes
         
         return response
         
     except Exception as e:
-        logger.error(f"Error getting trending movies: {e}")
+        logger.error(f"Error getting viral trending movies: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

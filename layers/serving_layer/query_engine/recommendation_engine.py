@@ -375,3 +375,199 @@ class RecommendationEngine:
                 result.add(genre['name'])
         
         return result
+    
+    def get_dual_success_recommendations(
+        self,
+        genre: Optional[str] = None,
+        limit: int = 20,
+        min_reddit_score: float = 0.0,
+        min_tmdb_rating: float = 6.0,
+        reddit_weight: float = 0.6,
+        tmdb_weight: float = 0.4
+    ) -> List[Dict[str, Any]]:
+        """
+        Dual-Success Recommendations (Business Goal #3)
+        
+        Combines Reddit buzz (freshness, engagement) with TMDB quality (historical ratings)
+        to surface movies that are both trending AND high quality.
+        
+        Args:
+            genre: Filter by genre (optional)
+            limit: Number of recommendations
+            min_reddit_score: Minimum Reddit buzz score (0-1)
+            min_tmdb_rating: Minimum TMDB rating (0-10)
+            reddit_weight: Weight for Reddit buzz (default: 0.6)
+            tmdb_weight: Weight for TMDB quality (default: 0.4)
+        
+        Returns:
+            List of movies ranked by dual-success score
+        """
+        cutoff_time = datetime.utcnow() - timedelta(hours=48)
+        
+        # Step 1: Calculate Reddit buzz scores from speed layer
+        reddit_buzz = {}
+        
+        # Aggregate Reddit engagement metrics
+        pipeline = [
+            {
+                "$match": {
+                    "data_type": "reddit_post",
+                    "hour": {"$gte": cutoff_time}
+                }
+            },
+            {
+                "$group": {
+                    "_id": "$movie_title",
+                    "total_upvotes": {"$sum": "$metrics.upvotes"},
+                    "total_comments": {"$sum": "$metrics.num_comments"},
+                    "total_awards": {"$sum": "$metrics.awards"},
+                    "avg_sentiment": {"$avg": "$metrics.sentiment_score"},
+                    "post_count": {"$sum": 1},
+                    "subreddit_count": {"$addToSet": "$subreddit"}
+                }
+            }
+        ]
+        
+        reddit_data = list(self.speed_views.aggregate(pipeline))
+        
+        # Calculate buzz scores
+        max_upvotes = max([r["total_upvotes"] for r in reddit_data], default=1)
+        max_comments = max([r["total_comments"] for r in reddit_data], default=1)
+        
+        for reddit_item in reddit_data:
+            movie_title = reddit_item["_id"]
+            
+            # Normalize engagement metrics (0-1)
+            upvote_score = reddit_item["total_upvotes"] / max_upvotes
+            comment_score = reddit_item["total_comments"] / max_comments
+            sentiment_score = (reddit_item["avg_sentiment"] + 1) / 2  # -1 to 1 -> 0 to 1
+            subreddit_score = min(len(reddit_item["subreddit_count"]) / 10, 1)  # Max at 10 subreddits
+            
+            # Reddit buzz score (weighted combination)
+            buzz_score = (
+                upvote_score * 0.4 +
+                comment_score * 0.3 +
+                sentiment_score * 0.2 +
+                subreddit_score * 0.1
+            )
+            
+            reddit_buzz[movie_title] = {
+                "buzz_score": buzz_score,
+                "upvotes": reddit_item["total_upvotes"],
+                "comments": reddit_item["total_comments"],
+                "sentiment": round(reddit_item["avg_sentiment"], 3),
+                "subreddit_count": len(reddit_item["subreddit_count"]),
+                "post_count": reddit_item["post_count"]
+            }
+        
+        # Step 2: Get TMDB quality scores from batch layer
+        match_criteria = {"view_type": "movie_intelligence"}
+        if genre:
+            match_criteria["data.genres"] = genre
+        
+        candidates = []
+        for movie in self.batch_views.find(match_criteria).limit(500):
+            if "data" not in movie:
+                continue
+            
+            data = movie["data"]
+            movie_title = data.get("title")
+            
+            if not movie_title:
+                continue
+            
+            # Get TMDB quality metrics
+            tmdb_rating = data.get("vote_average", 0)
+            tmdb_vote_count = data.get("vote_count", 0)
+            tmdb_popularity = data.get("popularity", 0)
+            
+            # Skip if below minimum TMDB rating
+            if tmdb_rating < min_tmdb_rating:
+                continue
+            
+            # TMDB quality score (0-1)
+            rating_score = tmdb_rating / 10
+            vote_confidence = min(tmdb_vote_count / 1000, 1)  # Max confidence at 1000 votes
+            popularity_score = min(tmdb_popularity / 100, 1)  # Normalize popularity
+            
+            tmdb_quality_score = (
+                rating_score * 0.5 +
+                vote_confidence * 0.3 +
+                popularity_score * 0.2
+            )
+            
+            # Step 3: Combine Reddit buzz + TMDB quality
+            reddit_data = reddit_buzz.get(movie_title, {})
+            reddit_score = reddit_data.get("buzz_score", 0)
+            
+            # Skip if below minimum Reddit score
+            if reddit_score < min_reddit_score:
+                continue
+            
+            # Calculate dual-success score
+            dual_success_score = (
+                reddit_score * reddit_weight +
+                tmdb_quality_score * tmdb_weight
+            )
+            
+            candidates.append({
+                "movie_id": movie.get("movie_id"),
+                "title": movie_title,
+                "genres": data.get("genres", []),
+                "release_date": data.get("release_date"),
+                "dual_success_score": dual_success_score,
+                "reddit_buzz": {
+                    "score": round(reddit_score, 3),
+                    "upvotes": reddit_data.get("upvotes", 0),
+                    "comments": reddit_data.get("comments", 0),
+                    "sentiment": reddit_data.get("sentiment", 0),
+                    "subreddit_count": reddit_data.get("subreddit_count", 0)
+                },
+                "tmdb_quality": {
+                    "score": round(tmdb_quality_score, 3),
+                    "rating": round(tmdb_rating, 2),
+                    "vote_count": tmdb_vote_count,
+                    "popularity": round(tmdb_popularity, 2)
+                }
+            })
+        
+        # Step 4: Sort by dual-success score
+        candidates.sort(key=lambda x: x["dual_success_score"], reverse=True)
+        
+        # Step 5: Format response
+        return [
+            {
+                "movie_id": c["movie_id"],
+                "title": c["title"],
+                "genres": c["genres"],
+                "release_date": c["release_date"],
+                "dual_success_score": round(c["dual_success_score"], 3),
+                "reddit_buzz": c["reddit_buzz"],
+                "tmdb_quality": c["tmdb_quality"],
+                "recommendation_reason": self._generate_recommendation_reason(c)
+            }
+            for c in candidates[:limit]
+        ]
+    
+    def _generate_recommendation_reason(self, candidate: Dict) -> str:
+        """Generate human-readable recommendation reason"""
+        reddit = candidate["reddit_buzz"]
+        tmdb = candidate["tmdb_quality"]
+        
+        reasons = []
+        
+        if reddit["score"] > 0.7:
+            reasons.append(f"trending on Reddit ({reddit['upvotes']} upvotes)")
+        if reddit["sentiment"] > 0.5:
+            reasons.append("positive community sentiment")
+        if reddit["subreddit_count"] >= 5:
+            reasons.append(f"viral across {reddit['subreddit_count']} subreddits")
+        if tmdb["rating"] >= 8.0:
+            reasons.append(f"highly rated ({tmdb['rating']}/10)")
+        if tmdb["vote_count"] >= 1000:
+            reasons.append("well-established popularity")
+        
+        if not reasons:
+            return "Balanced Reddit buzz and TMDB quality"
+        
+        return ", ".join(reasons[:3]).capitalize()

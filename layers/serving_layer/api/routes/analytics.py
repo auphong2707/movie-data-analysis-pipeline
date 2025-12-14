@@ -42,24 +42,25 @@ async def get_genre_analytics(
     genre: str,
     year: Optional[int] = Query(None, description="Filter by year"),
     month: Optional[int] = Query(None, ge=1, le=12, description="Filter by month"),
-    merger: ViewMerger = Depends(get_view_merger),
+    queries: MovieQueries = Depends(get_movie_queries),
     cache = Depends(get_cache)
 ):
     """
-    Get analytics for a specific genre
+    Get analytics for a specific genre (aligned with actual batch_views schema)
     
-    Returns per README schema:
-    - statistics: total_movies, avg_rating, avg_sentiment, avg_popularity, revenue
-    - top_movies: List of top movies in genre
-    - trends: rating/sentiment/popularity trend directions
+    Returns:
+    - sentiment_baseline: Genre sentiment baseline from TMDB historical data
+    - viral_threshold: Genre-specific viral engagement thresholds
+    - movie_count: Number of movies in genre
+    - top_movies: Top-rated movies in genre
     
     Args:
         genre: Genre name (e.g., Action, Drama, Comedy)
-        year: Optional year filter
-        month: Optional month filter (1-12)
+        year: Optional year filter (applied to movie search)
+        month: Optional month filter (not used for baselines)
     
     Returns:
-        Genre analytics per README format
+        Genre analytics with sentiment baselines and viral thresholds
     """
     try:
         # Try cache first
@@ -69,18 +70,80 @@ async def get_genre_analytics(
             logger.info(f"Cache hit for genre analytics {genre}")
             return cached
         
-        # Get genre analytics (already formatted by ViewMerger)
-        response = merger.merge_analytics_views(
-            genre=genre,
-            year=year,
-            month=month
-        )
+        db = get_database()
         
-        if not response.get('found', True):
-            raise HTTPException(
-                status_code=404,
-                detail=f"No analytics found for genre {genre}"
-            )
+        # Query sentiment baseline from batch_views
+        sentiment_baseline = db.batch_views.find_one({
+            "view_type": "sentiment_baseline",
+            "genre": genre
+        })
+        
+        # Query viral threshold from batch_views
+        viral_threshold = db.batch_views.find_one({
+            "view_type": "viral_threshold",
+            "genre": genre
+        })
+        
+        # Get movie intelligence for this genre
+        match_criteria = {
+            "view_type": "movie_intelligence",
+            "data.genres": genre
+        }
+        
+        if year:
+            match_criteria["data.release_date"] = {"$regex": f"^{year}"}
+        
+        movies = list(db.batch_views.find(match_criteria).limit(100))
+        
+        # Calculate statistics
+        if movies:
+            ratings = [m.get("data", {}).get("vote_average", 0) for m in movies if "data" in m]
+            avg_rating = sum(ratings) / len(ratings) if ratings else 0
+            
+            # Get top movies
+            top_movies = sorted(
+                [m for m in movies if "data" in m],
+                key=lambda x: x.get("data", {}).get("vote_average", 0),
+                reverse=True
+            )[:10]
+            
+            top_movies_list = [
+                {
+                    "movie_id": m.get("movie_id"),
+                    "title": m.get("data", {}).get("title"),
+                    "rating": round(m.get("data", {}).get("vote_average", 0), 2),
+                    "vote_count": m.get("data", {}).get("vote_count", 0),
+                    "release_date": m.get("data", {}).get("release_date")
+                }
+                for m in top_movies
+            ]
+        else:
+            avg_rating = 0
+            top_movies_list = []
+        
+        response = {
+            "genre": genre,
+            "year_filter": year,
+            "month_filter": month,
+            "sentiment_baseline": {
+                "avg_sentiment": round(sentiment_baseline.get("avg_sentiment", 0), 3) if sentiment_baseline else None,
+                "sentiment_stddev": round(sentiment_baseline.get("sentiment_stddev", 0), 3) if sentiment_baseline else None,
+                "sample_size": sentiment_baseline.get("sample_size", 0) if sentiment_baseline else 0,
+                "positive_ratio": round(sentiment_baseline.get("positive_ratio", 0), 3) if sentiment_baseline else None
+            } if sentiment_baseline else None,
+            "viral_threshold": {
+                "vote_velocity_p99": viral_threshold.get("vote_velocity_p99", 0) if viral_threshold else None,
+                "comment_velocity_p99": viral_threshold.get("comment_velocity_p99", 0) if viral_threshold else None,
+                "engagement_velocity_p99": viral_threshold.get("engagement_velocity_p99", 0) if viral_threshold else None,
+                "budget_tier": viral_threshold.get("budget_tier") if viral_threshold else None,
+                "season": viral_threshold.get("season") if viral_threshold else None
+            } if viral_threshold else None,
+            "statistics": {
+                "movie_count": len(movies),
+                "avg_rating": round(avg_rating, 2)
+            },
+            "top_movies": top_movies_list
+        }
         
         # Cache result (30 minutes - analytics are updated by batch layer)
         cache.set(cache_key, response, ttl_seconds=1800)
@@ -91,86 +154,6 @@ async def get_genre_analytics(
         raise
     except Exception as e:
         logger.error(f"Error getting analytics for genre {genre}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@router.get("/trends")
-async def get_trends(
-    movie_id: Optional[int] = Query(None, description="Specific movie ID"),
-    genre: Optional[str] = Query(None, description="Specific genre"),
-    metric: str = Query("rating", description="Metric to analyze: rating, sentiment, popularity"),
-    window: str = Query("30d", description="Time window: 7d, 30d, 90d"),
-    merger: ViewMerger = Depends(get_view_merger),
-    cache = Depends(get_cache)
-):
-    """
-    Get time-series trend analysis
-    
-    Returns per README schema:
-    - data_points: Array of {date, value, count}
-    - summary: {avg, min, max, trend, change_rate}
-    
-    Supports filtering by:
-    - movie_id: Trends for specific movie
-    - genre: Trends for specific genre
-    - Or overall trends if no filter
-    
-    Args:
-        movie_id: Optional movie ID filter
-        genre: Optional genre filter
-        metric: Metric to analyze (rating, sentiment, popularity)
-        window: Time window (7d, 30d, 90d)
-    
-    Returns:
-        Time-series data per README format
-    """
-    try:
-        # Validate metric
-        if metric not in ['rating', 'sentiment', 'popularity']:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid metric: {metric}. Must be rating, sentiment, or popularity"
-            )
-        
-        # Try cache first
-        cache_key = f"trends:{movie_id}:{genre}:{metric}:{window}"
-        cached = cache.get(cache_key)
-        if cached:
-            return cached
-        
-        # Get temporal trends (already formatted by ViewMerger)
-        response = merger.get_temporal_trends(
-            metric=metric,
-            movie_id=movie_id,
-            genre=genre,
-            window=window
-        )
-        
-        if not response.get('data_points'):
-            return {
-                'metric': metric,
-                'window': window,
-                'movie_id': movie_id,
-                'genre': genre,
-                'data_points': [],
-                'summary': {
-                    'avg': 0,
-                    'min': 0,
-                    'max': 0,
-                    'trend': 'no_data',
-                    'change_rate': 0
-                }
-            }
-        
-        # Cache result (1 hour - trends from batch layer)
-        cache.set(cache_key, response, ttl_seconds=3600)
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting trends: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

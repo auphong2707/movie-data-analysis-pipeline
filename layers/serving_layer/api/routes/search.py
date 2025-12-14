@@ -37,7 +37,7 @@ async def search_movies(
     year_to: Optional[int] = Query(None, ge=1900, le=2100, description="Maximum year"),
     rating_min: Optional[float] = Query(None, ge=0, le=10, description="Minimum rating"),
     rating_max: Optional[float] = Query(None, ge=0, le=10, description="Maximum rating"),
-    sort_by: str = Query("popularity", description="Sort field"),
+    sort_by: str = Query("rating", description="Sort field"),
     limit: int = Query(20, ge=1, le=100, description="Results per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     queries: MovieQueries = Depends(get_movie_queries),
@@ -52,9 +52,10 @@ async def search_movies(
     - Year range
     - Rating range
     
-    Sorting options:
-    - popularity: Most popular first
-    - rating: Highest rated first
+    Sorting options (aligned with actual data):
+    - rating: Highest TMDB rating first (default)
+    - sentiment: Best sentiment score first (from batch_views)
+    - viral_score: Highest Reddit viral coefficient first (from speed_views)
     - release_date: Most recent first
     
     Args:
@@ -64,7 +65,7 @@ async def search_movies(
         year_to: Maximum year
         rating_min: Minimum rating
         rating_max: Maximum rating
-        sort_by: Sort field (popularity, rating, release_date)
+        sort_by: Sort field (rating, sentiment, viral_score, release_date)
         limit: Results per page (1-100)
         offset: Pagination offset
     

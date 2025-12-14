@@ -8,7 +8,6 @@ from .analytics import router as analytics_router
 from .search import router as search_router
 from .health import router as health_router
 from .recommendations import router as recommendations_router
-from .predictions import router as predictions_router
 
 __all__ = [
     'movies_router',
@@ -16,6 +15,5 @@ __all__ = [
     'analytics_router',
     'search_router',
     'health_router',
-    'recommendations_router',
-    'predictions_router'
+    'recommendations_router'
 ]

@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Histogram
 import logging
 import sys
 
@@ -21,6 +23,31 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Custom Prometheus metrics for business goals
+crisis_alerts_total = Counter(
+    'crisis_alerts_total',
+    'Total number of PR crisis alerts detected',
+    ['severity']
+)
+
+viral_detections_total = Counter(
+    'viral_detections_total',
+    'Total number of viral content detections',
+    ['genre']
+)
+
+recommendation_requests_total = Counter(
+    'recommendation_requests_total',
+    'Total number of recommendation requests',
+    ['recommendation_type']
+)
+
+dual_success_score = Histogram(
+    'dual_success_score',
+    'Distribution of dual-success recommendation scores',
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
 
 # Import routes
 from .routes import (
@@ -122,6 +149,23 @@ app = FastAPI(
 
 # Setup CORS middleware
 setup_cors(app)
+
+# Initialize Prometheus instrumentation
+instrumentator = Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=True,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/metrics", "/health"],
+    env_var_name="ENABLE_METRICS",
+    inprogress_name="fastapi_inprogress",
+    inprogress_labels=True,
+)
+
+# Instrument the app and expose /metrics endpoint
+instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=True)
+
+logger.info("Prometheus instrumentation enabled at /metrics")
 
 # Initialize rate limiter (will be used in routes if enabled)
 rate_limiter = get_rate_limiter()

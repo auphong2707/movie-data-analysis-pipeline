@@ -124,7 +124,7 @@ services:
     networks:
       - movie-pipeline
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -202,20 +202,17 @@ services:
 
   # Airflow Init - Database initialization
   batch-airflow-init:
-    build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.airflow
-    image: movie-pipeline-airflow:latest
+    image: apache/airflow:2.7.3-python3.11
     container_name: batch-airflow-init
     depends_on:
       batch-postgres:
         condition: service_healthy
     environment:
-      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-true}
-      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-false}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: admin
@@ -228,11 +225,14 @@ services:
         airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
     networks:
       - movie-pipeline
-    restart: "no"
 
   # Airflow Webserver
   batch-airflow-webserver:
+    build:
+      context: ./layers/batch_layer
+      dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
+    pull_policy: build  # Always build locally, never pull from registry
     container_name: batch-airflow-webserver
     hostname: airflow-webserver
     depends_on:
@@ -243,7 +243,7 @@ services:
       serving-mongodb:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "8088:8080"
     volumes:
       - ./layers/batch_layer/airflow_dags:/opt/airflow/dags
       - ./layers/batch_layer/spark_jobs:/opt/airflow/spark_jobs
@@ -271,7 +271,11 @@ services:
 
   # Airflow Scheduler
   batch-airflow-scheduler:
+    build:
+      context: ./layers/batch_layer
+      dockerfile: Dockerfile.airflow
     image: movie-pipeline-airflow:latest
+    pull_policy: build  # Always build locally, never pull from registry
     container_name: batch-airflow-scheduler
     hostname: airflow-scheduler
     depends_on:
@@ -388,10 +392,11 @@ services:
     networks:
       - movie-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # Kafka Broker 2
@@ -427,10 +432,11 @@ services:
     networks:
       - movie-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9093"]
+      test: ["CMD-SHELL", "nc -z localhost 9093 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # Kafka Broker 3
@@ -466,10 +472,11 @@ services:
     networks:
       - movie-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9094"]
+      test: ["CMD-SHELL", "nc -z localhost 9094 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # Schema Registry - Avro Schema Management
@@ -518,7 +525,7 @@ services:
       JVM_EXTRA_OPTS: "-Dcassandra.materialized_views_enabled=true -Dcassandra.user_defined_functions_enabled=true -Dcassandra.enable_user_defined_functions=true -Dcassandra.enable_scripted_user_defined_functions=true"
     volumes:
       - speed-cassandra-data:/var/lib/cassandra
-      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
+      - ./layers/speed_layer/cassandra_views/reddit_schema.cql:/schema.cql
     networks:
       - movie-pipeline
     healthcheck:
@@ -536,7 +543,7 @@ services:
       speed-cassandra:
         condition: service_healthy
     volumes:
-      - ./layers/speed_layer/cassandra_views/schema.cql:/schema.cql
+      - ./layers/speed_layer/cassandra_views/reddit_schema.cql:/schema.cql
     networks:
       - movie-pipeline
     command: >
@@ -556,8 +563,8 @@ services:
   # Kafka Topics Initialization
   speed-kafka-topics-init:
     build:
-      context: ./dockerfiles
-      dockerfile: Dockerfile.speed-layer
+      context: ./layers/speed_layer
+      dockerfile: Dockerfile
     image: movie-pipeline-speed-layer:latest
     container_name: speed-kafka-topics-init
     depends_on:
@@ -572,6 +579,7 @@ services:
     env_file:
       - .env
     environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
       PYTHONUNBUFFERED: 1
     command: python kafka_producers/setup_topics.py create
     volumes:
@@ -580,18 +588,22 @@ services:
       - movie-pipeline
     restart: "no"
 
-  # TMDB Stream Producer
-  speed-tmdb-producer:
+  # Reddit Stream Producer - JSON scraping (no auth needed)
+  speed-reddit-producer:
     image: movie-pipeline-speed-layer:latest
-    container_name: speed-tmdb-producer
+    container_name: speed-reddit-producer
     depends_on:
       speed-kafka-topics-init:
         condition: service_completed_successfully
     env_file:
       - .env
     environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      REDDIT_USER_AGENT: "MovieAnalytics/1.0"
+      POLL_INTERVAL: 30
       PYTHONUNBUFFERED: 1
-    command: python kafka_producers/tmdb_stream_producer.py
+      TMDB_API_KEY: ${TMDB_API_KEY}
+    command: python reddit_producers/reddit_stream_producer.py --subreddits movies boxoffice TrueFilm --poll-interval 30
     volumes:
       - ./layers/speed_layer:/app
       - speed-application-logs:/app/logs
@@ -599,16 +611,16 @@ services:
       - movie-pipeline
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep tmdb_stream_producer.py | grep -v grep || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep reddit_stream_producer.py | grep -v grep || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
-  # Review Sentiment Stream
-  speed-sentiment-stream:
+  # Reddit Sentiment Stream - Analyzes Reddit sentiment in real-time
+  speed-reddit-sentiment-stream:
     image: movie-pipeline-speed-layer:latest
-    container_name: speed-sentiment-stream
+    container_name: speed-reddit-sentiment-stream
     depends_on:
       speed-kafka-topics-init:
         condition: service_completed_successfully
@@ -619,9 +631,12 @@ services:
     env_file:
       - .env
     environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
       PYTHONUNBUFFERED: 1
-      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
-    command: python streaming_jobs/review_sentiment_stream.py
+      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED"
+    command: python streaming_jobs/reddit_sentiment_stream.py
     volumes:
       - ./layers/speed_layer:/app
       - speed-application-logs:/app/logs
@@ -630,69 +645,7 @@ services:
       - movie-pipeline
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep review_sentiment_stream.py | grep -v grep || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # Movie Aggregation Stream
-  speed-aggregation-stream:
-    image: movie-pipeline-speed-layer:latest
-    container_name: speed-aggregation-stream
-    depends_on:
-      speed-kafka-topics-init:
-        condition: service_completed_successfully
-      speed-cassandra:
-        condition: service_healthy
-      speed-cassandra-init:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      PYTHONUNBUFFERED: 1
-      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
-    command: python streaming_jobs/movie_aggregation_stream.py
-    volumes:
-      - ./layers/speed_layer:/app
-      - speed-application-logs:/app/logs
-      - speed-spark-checkpoints:/app/checkpoints
-    networks:
-      - movie-pipeline
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep movie_aggregation_stream.py | grep -v grep || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # Trending Detection Stream
-  speed-trending-stream:
-    image: movie-pipeline-speed-layer:latest
-    container_name: speed-trending-stream
-    depends_on:
-      speed-kafka-topics-init:
-        condition: service_completed_successfully
-      speed-cassandra:
-        condition: service_healthy
-      speed-cassandra-init:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      PYTHONUNBUFFERED: 1
-      SPARK_SUBMIT_OPTS: "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
-    command: python streaming_jobs/trending_detection_stream.py
-    volumes:
-      - ./layers/speed_layer:/app
-      - speed-application-logs:/app/logs
-      - speed-spark-checkpoints:/app/checkpoints
-    networks:
-      - movie-pipeline
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep trending_detection_stream.py | grep -v grep || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep reddit_sentiment_stream.py | grep -v grep || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -707,17 +660,19 @@ services:
         condition: service_healthy
       serving-mongodb:
         condition: service_healthy
-      speed-aggregation-stream:
-        condition: service_healthy
-      speed-trending-stream:
-        condition: service_healthy
-      speed-sentiment-stream:
+      speed-reddit-sentiment-stream:
         condition: service_healthy
     env_file:
       - .env
     environment:
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: speed_layer
+      MONGO_URI: mongodb://admin:password@mongodb:27017
+      MONGO_DATABASE: moviedb
+      SYNC_INTERVAL: 300
+      CLEANUP_INTERVAL: 3600
       PYTHONUNBUFFERED: 1
-    command: python connectors/cassandra_to_mongo.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
+    command: python connectors/reddit_sync.py --cassandra-hosts cassandra --mongo-uri mongodb://admin:password@mongodb:27017
     volumes:
       - ./layers/speed_layer:/app
       - speed-application-logs:/app/logs
@@ -725,7 +680,7 @@ services:
       - movie-pipeline
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep cassandra_to_mongo.py | grep -v grep || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep reddit_sync.py | grep -v grep || exit 1"]
       interval: 60s
       timeout: 10s
       retries: 3

@@ -31,7 +31,6 @@ from .routes import (
     health_router
 )
 from api.routes.recommendations import router as recommendations_router
-from api.routes.predictions import router as predictions_router
 
 # Import clients for lifecycle management
 from mongodb.client import get_mongodb_client, close_mongodb_client
@@ -147,7 +146,6 @@ app.include_router(trending_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(search_router, prefix="/api/v1")
 app.include_router(recommendations_router, prefix="/api/v1")
-app.include_router(predictions_router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/")
@@ -168,8 +166,7 @@ async def root():
             "trending": "/api/v1/trending",
             "analytics": "/api/v1/analytics",
             "search": "/api/v1/search",
-            "recommendations": "/api/v1/recommendations",
-            "predictions": "/api/v1/predictions"
+            "recommendations": "/api/v1/recommendations"
         }
     }
 

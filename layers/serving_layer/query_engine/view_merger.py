@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from pymongo.database import Database
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -789,3 +790,357 @@ class ViewMerger:
             return 'negative'
         else:
             return 'neutral'
+    
+    def merge_sentiment_data(
+        self,
+        movie_title: str,
+        window_hours: int = 48,
+        crisis_threshold_sigma: float = 3.0
+    ) -> Dict[str, Any]:
+        """
+        Enhanced sentiment analysis with crisis detection (Business Goal #1)
+        
+        Compares current Reddit sentiment against TMDB historical baselines
+        to detect PR crises using statistical deviation.
+        
+        Args:
+            movie_title: Movie title to analyze
+            window_hours: Time window for speed layer data (default: 48h)
+            crisis_threshold_sigma: Number of standard deviations for crisis (default: 3.0)
+        
+        Returns:
+            Comprehensive sentiment analysis with crisis detection
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        result = {
+            "movie_title": movie_title,
+            "current_sentiment": None,
+            "genre_baseline": None,
+            "franchise_baseline": None,
+            "crisis_detection": {
+                "is_crisis": False,
+                "severity": "none",
+                "deviation_sigma": 0.0,
+                "message": None
+            },
+            "sentiment_velocity": None,
+            "breakdown": [],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Step 1: Get current Reddit sentiment from speed layer
+        speed_posts = list(self.speed_views.find({
+            "movie_title": movie_title,
+            "data_type": "reddit_post",
+            "hour": {"$gte": cutoff_time}
+        }).sort("hour", -1).limit(50))
+        
+        if not speed_posts:
+            result["crisis_detection"]["message"] = "No recent Reddit data available"
+            return result
+        
+        # Aggregate current sentiment from Reddit posts
+        total_sentiment = 0
+        total_upvotes = 0
+        sentiment_by_hour = {}
+        
+        for post in speed_posts:
+            metrics = post.get("metrics", {})
+            sentiment = metrics.get("sentiment_score", 0)
+            upvotes = metrics.get("upvotes", 0)
+            hour = post.get("hour")
+            
+            total_sentiment += sentiment * upvotes  # Weight by upvotes
+            total_upvotes += upvotes
+            
+            # Track hourly sentiment for velocity calculation
+            hour_key = hour.strftime("%Y-%m-%d %H:00") if isinstance(hour, datetime) else str(hour)
+            if hour_key not in sentiment_by_hour:
+                sentiment_by_hour[hour_key] = {"sentiment": 0, "count": 0}
+            sentiment_by_hour[hour_key]["sentiment"] += sentiment
+            sentiment_by_hour[hour_key]["count"] += 1
+        
+        current_sentiment = total_sentiment / total_upvotes if total_upvotes > 0 else 0
+        result["current_sentiment"] = {
+            "score": round(current_sentiment, 3),
+            "label": self._get_sentiment_label(current_sentiment),
+            "sample_size": len(speed_posts),
+            "total_upvotes": total_upvotes
+        }
+        
+        # Step 2: Calculate sentiment velocity (6-hour window)
+        if len(sentiment_by_hour) >= 2:
+            sorted_hours = sorted(sentiment_by_hour.items())
+            recent_hours = sorted_hours[-6:]  # Last 6 hours
+            
+            if len(recent_hours) >= 2:
+                first_sentiment = recent_hours[0][1]["sentiment"] / recent_hours[0][1]["count"]
+                last_sentiment = recent_hours[-1][1]["sentiment"] / recent_hours[-1][1]["count"]
+                velocity = last_sentiment - first_sentiment
+                
+                result["sentiment_velocity"] = {
+                    "value": round(velocity, 3),
+                    "direction": "increasing" if velocity > 0 else ("decreasing" if velocity < 0 else "stable"),
+                    "window_hours": len(recent_hours)
+                }
+        
+        # Step 3: Get genre baseline from batch layer
+        # First, get movie intelligence to find genre
+        movie_intel = self.batch_views.find_one({
+            "view_type": "movie_intelligence",
+            "data.title": movie_title
+        })
+        
+        if movie_intel and "data" in movie_intel:
+            genres = movie_intel["data"].get("genres", [])
+            
+            if genres:
+                primary_genre = genres[0] if isinstance(genres, list) else genres
+                
+                # Get genre sentiment baseline
+                genre_baseline = self.batch_views.find_one({
+                    "view_type": "sentiment_baseline",
+                    "genre": primary_genre
+                })
+                
+                if genre_baseline:
+                    baseline_sentiment = genre_baseline.get("avg_sentiment", 0)
+                    baseline_stddev = genre_baseline.get("sentiment_stddev", 0.15)
+                    
+                    result["genre_baseline"] = {
+                        "genre": primary_genre,
+                        "avg_sentiment": round(baseline_sentiment, 3),
+                        "stddev": round(baseline_stddev, 3),
+                        "sample_size": genre_baseline.get("sample_size", 0)
+                    }
+                    
+                    # Step 4: Crisis Detection - Calculate deviation
+                    deviation = current_sentiment - baseline_sentiment
+                    sigma_deviation = abs(deviation) / baseline_stddev if baseline_stddev > 0 else 0
+                    
+                    result["crisis_detection"]["deviation_sigma"] = round(sigma_deviation, 2)
+                    
+                    # Determine crisis severity
+                    if deviation < 0 and sigma_deviation >= crisis_threshold_sigma:
+                        result["crisis_detection"]["is_crisis"] = True
+                        result["crisis_detection"]["severity"] = "critical"
+                        result["crisis_detection"]["message"] = (
+                            f"CRITICAL: Sentiment dropped {abs(deviation):.2f} "
+                            f"({sigma_deviation:.1f}σ below baseline). Immediate PR response needed."
+                        )
+                    elif deviation < 0 and sigma_deviation >= (crisis_threshold_sigma * 0.67):
+                        result["crisis_detection"]["is_crisis"] = True
+                        result["crisis_detection"]["severity"] = "warning"
+                        result["crisis_detection"]["message"] = (
+                            f"WARNING: Sentiment {abs(deviation):.2f} below baseline "
+                            f"({sigma_deviation:.1f}σ). Monitor closely."
+                        )
+                    else:
+                        result["crisis_detection"]["message"] = f"Sentiment within normal range ({sigma_deviation:.1f}σ)"
+        
+        # Step 5: Get franchise baseline (if applicable)
+        if movie_intel and "data" in movie_intel:
+            franchise_info = movie_intel["data"].get("belongs_to_collection")
+            if franchise_info:
+                franchise_name = franchise_info.get("name") if isinstance(franchise_info, dict) else None
+                
+                if franchise_name:
+                    franchise_baseline = self.batch_views.find_one({
+                        "view_type": "sentiment_baseline",
+                        "franchise": franchise_name
+                    })
+                    
+                    if franchise_baseline:
+                        result["franchise_baseline"] = {
+                            "franchise": franchise_name,
+                            "avg_sentiment": round(franchise_baseline.get("avg_sentiment", 0), 3),
+                            "stddev": round(franchise_baseline.get("sentiment_stddev", 0.15), 3)
+                        }
+        
+        # Step 6: Create sentiment breakdown (hourly)
+        for hour_key, data in sorted(sentiment_by_hour.items()):
+            result["breakdown"].append({
+                "hour": hour_key,
+                "avg_sentiment": round(data["sentiment"] / data["count"], 3),
+                "sample_size": data["count"]
+            })
+        
+        return result
+    
+    def merge_viral_data(
+        self,
+        movie_title: Optional[str] = None,
+        genre: Optional[str] = None,
+        limit: int = 20,
+        viral_coefficient_threshold: float = 1.0
+    ) -> Dict[str, Any]:
+        """
+        Viral content detection with threshold comparison (Business Goal #2)
+        
+        Identifies viral content by comparing current Reddit engagement velocity
+        against historical viral thresholds from batch layer.
+        
+        Args:
+            movie_title: Specific movie to analyze (optional)
+            genre: Filter by genre (optional)
+            limit: Number of results to return
+            viral_coefficient_threshold: Minimum viral coefficient (default: 1.0)
+        
+        Returns:
+            List of viral movies with engagement metrics and viral coefficients
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        result = {
+            "viral_movies": [],
+            "total_trending": 0,
+            "threshold_used": viral_coefficient_threshold,
+            "window_hours": self.cutoff_hours,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Step 1: Query speed layer for Reddit engagement data
+        match_criteria = {
+            "data_type": "reddit_post",
+            "hour": {"$gte": cutoff_time}
+        }
+        
+        if movie_title:
+            match_criteria["movie_title"] = movie_title
+        
+        # Aggregate Reddit metrics by movie
+        pipeline = [
+            {"$match": match_criteria},
+            {
+                "$group": {
+                    "_id": "$movie_title",
+                    "total_upvotes": {"$sum": "$metrics.upvotes"},
+                    "total_comments": {"$sum": "$metrics.num_comments"},
+                    "total_awards": {"$sum": "$metrics.awards"},
+                    "avg_sentiment": {"$avg": "$metrics.sentiment_score"},
+                    "post_count": {"$sum": 1},
+                    "subreddits": {"$addToSet": "$subreddit"},
+                    "earliest_hour": {"$min": "$hour"},
+                    "latest_hour": {"$max": "$hour"}
+                }
+            }
+        ]
+        
+        reddit_aggregated = list(self.speed_views.aggregate(pipeline))
+        
+        if not reddit_aggregated:
+            result["message"] = "No recent Reddit data found"
+            return result
+        
+        # Step 2: Calculate velocities and match with viral thresholds
+        viral_movies = []
+        
+        for movie_data in reddit_aggregated:
+            movie_title_key = movie_data["_id"]
+            
+            # Calculate time span in hours
+            earliest = movie_data["earliest_hour"]
+            latest = movie_data["latest_hour"]
+            time_span_hours = (latest - earliest).total_seconds() / 3600 if isinstance(earliest, datetime) else 1
+            time_span_hours = max(time_span_hours, 1)  # Avoid division by zero
+            
+            # Calculate velocities (per hour)
+            upvote_velocity = movie_data["total_upvotes"] / time_span_hours
+            comment_velocity = movie_data["total_comments"] / time_span_hours
+            award_velocity = movie_data["total_awards"] / time_span_hours
+            
+            # Step 3: Get movie intelligence for genre
+            movie_intel = self.batch_views.find_one({
+                "view_type": "movie_intelligence",
+                "data.title": movie_title_key
+            })
+            
+            if not movie_intel:
+                continue
+            
+            movie_genres = movie_intel.get("data", {}).get("genres", [])
+            primary_genre = movie_genres[0] if isinstance(movie_genres, list) and movie_genres else "Unknown"
+            
+            # Apply genre filter if specified
+            if genre and primary_genre != genre:
+                continue
+            
+            # Step 4: Lookup viral threshold from batch layer
+            viral_threshold = self.batch_views.find_one({
+                "view_type": "viral_threshold",
+                "genre": primary_genre
+            })
+            
+            if not viral_threshold:
+                # Use default thresholds if no genre-specific threshold found
+                viral_threshold = {
+                    "vote_velocity_p99": 300,  # Default threshold
+                    "comment_velocity_p99": 50,
+                    "engagement_velocity_p99": 400
+                }
+            
+            # Step 5: Calculate viral coefficient
+            # Viral coefficient = current velocity / threshold velocity
+            upvote_threshold = viral_threshold.get("vote_velocity_p99", 300)
+            comment_threshold = viral_threshold.get("comment_velocity_p99", 50)
+            engagement_threshold = viral_threshold.get("engagement_velocity_p99", 400)
+            
+            # Calculate combined engagement velocity
+            engagement_velocity = upvote_velocity + comment_velocity
+            
+            # Viral coefficient (how many times above threshold)
+            viral_coefficient = engagement_velocity / engagement_threshold if engagement_threshold > 0 else 0
+            
+            # Step 6: Calculate percentile ranking
+            percentile = min(99.9, 50 + (viral_coefficient - 1) * 20)  # Rough percentile estimate
+            
+            # Step 7: Track cross-subreddit spread
+            subreddit_count = len(movie_data["subreddits"])
+            cross_subreddit_spread = subreddit_count > 3  # Viral if spreading across 4+ subreddits
+            
+            # Only include if above viral threshold
+            if viral_coefficient >= viral_coefficient_threshold:
+                viral_entry = {
+                    "movie_title": movie_title_key,
+                    "genre": primary_genre,
+                    "viral_metrics": {
+                        "viral_coefficient": round(viral_coefficient, 2),
+                        "percentile_rank": round(percentile, 1),
+                        "upvote_velocity": round(upvote_velocity, 1),
+                        "comment_velocity": round(comment_velocity, 1),
+                        "award_velocity": round(award_velocity, 2),
+                        "engagement_velocity": round(engagement_velocity, 1)
+                    },
+                    "thresholds": {
+                        "upvote_p99": upvote_threshold,
+                        "comment_p99": comment_threshold,
+                        "engagement_p99": engagement_threshold
+                    },
+                    "reddit_stats": {
+                        "total_upvotes": movie_data["total_upvotes"],
+                        "total_comments": movie_data["total_comments"],
+                        "total_awards": movie_data["total_awards"],
+                        "avg_sentiment": round(movie_data["avg_sentiment"], 3),
+                        "post_count": movie_data["post_count"],
+                        "subreddit_count": subreddit_count,
+                        "cross_subreddit_spread": cross_subreddit_spread,
+                        "subreddits": movie_data["subreddits"]
+                    },
+                    "viral_status": "viral" if viral_coefficient >= 1.0 else "trending",
+                    "time_window": {
+                        "start": earliest.isoformat() if isinstance(earliest, datetime) else str(earliest),
+                        "end": latest.isoformat() if isinstance(latest, datetime) else str(latest),
+                        "hours": round(time_span_hours, 1)
+                    }
+                }
+                
+                viral_movies.append(viral_entry)
+        
+        # Step 8: Sort by viral coefficient (descending)
+        viral_movies.sort(key=lambda x: x["viral_metrics"]["viral_coefficient"], reverse=True)
+        
+        result["viral_movies"] = viral_movies[:limit]
+        result["total_trending"] = len(viral_movies)
+        
+        return result

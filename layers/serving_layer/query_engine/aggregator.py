@@ -29,141 +29,130 @@ class DataAggregator:
         self.batch_views = db.batch_views
         self.speed_views = db.speed_views
     
-    def aggregate_genre_stats(
-        self,
-        genre: str,
-        year: Optional[int] = None,
-        month: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def get_sentiment_baseline(self, genre: str) -> Optional[Dict[str, Any]]:
         """
-        Aggregate statistics for a specific genre
+        Get sentiment baseline for a genre from batch layer
         
         Args:
             genre: Genre name
-            year: Filter by year (optional)
-            month: Filter by month (optional)
         
         Returns:
-            Aggregated genre statistics
+            Sentiment baseline document or None
         """
-        pipeline = [
-            {
-                "$match": {
-                    "view_type": "genre_analytics",
-                    "data.genre": genre
+        try:
+            result = self.batch_views.find_one({
+                "view_type": "sentiment_baseline",
+                "genre": genre
+            })
+            
+            if result:
+                return {
+                    "genre": result.get("genre"),
+                    "avg_sentiment": result.get("avg_sentiment", 0.0),
+                    "sentiment_stddev": result.get("sentiment_stddev", 0.0),
+                    "review_count": result.get("review_count", 0),
+                    "positive_ratio": result.get("positive_ratio", 0.0),
+                    "negative_ratio": result.get("negative_ratio", 0.0),
+                    "sample_size": result.get("sample_size", 0)
                 }
-            }
-        ]
-        
-        # Add time filters if provided
-        if year:
-            pipeline[0]["$match"]["data.year"] = year
-        if month:
-            pipeline[0]["$match"]["data.month"] = month
-        
-        # Aggregate statistics
-        pipeline.extend([
-            {
-                "$group": {
-                    "_id": None,
-                    "total_movies": {"$sum": "$data.total_movies"},
-                    "avg_rating": {"$avg": "$data.avg_rating"},
-                    "avg_sentiment": {"$avg": "$data.avg_sentiment"},
-                    "total_revenue": {"$sum": "$data.total_revenue"},
-                    "avg_budget": {"$avg": "$data.avg_budget"},
-                    "avg_runtime": {"$avg": "$data.avg_runtime"}
-                }
-            }
-        ])
-        
-        result = list(self.batch_views.aggregate(pipeline))
-        
-        if result:
-            return result[0]
-        
-        return {
-            "total_movies": 0,
-            "avg_rating": 0.0,
-            "avg_sentiment": 0.0,
-            "total_revenue": 0,
-            "avg_budget": 0,
-            "avg_runtime": 0
-        }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting sentiment baseline for genre {genre}: {e}")
+            return None
     
-    def aggregate_temporal_trends(
-        self,
-        movie_id: Optional[int] = None,
-        genre: Optional[str] = None,
-        metric: str = "rating",
-        window_days: int = 30
-    ) -> List[Dict[str, Any]]:
+    def get_viral_threshold(
+        self, 
+        genre: str, 
+        budget_tier: Optional[str] = None,
+        season: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Aggregate temporal trends for rating, sentiment, or popularity
+        Get viral threshold for a genre from batch layer
         
         Args:
-            movie_id: Specific movie (optional)
-            genre: Specific genre (optional)
-            metric: Metric to aggregate (rating, sentiment, popularity)
-            window_days: Time window in days
+            genre: Genre name
+            budget_tier: Budget tier (low, medium, high, blockbuster) - optional
+            season: Season (spring, summer, fall, winter) - optional
         
         Returns:
-            List of daily aggregated data points
+            Viral threshold document or None
         """
-        cutoff_date = datetime.utcnow() - timedelta(days=window_days)
-        
-        # Build match criteria
-        match_criteria = {
-            "view_type": "temporal_analytics",
-            "computed_at": {"$gte": cutoff_date}
-        }
-        
-        if movie_id:
-            match_criteria["movie_id"] = movie_id
-        if genre:
-            match_criteria["data.genre"] = genre
-        
-        # Map metric to data field
-        metric_field_map = {
-            "rating": "data.avg_rating",
-            "sentiment": "data.avg_sentiment",
-            "popularity": "data.avg_popularity"
-        }
-        
-        metric_field = metric_field_map.get(metric, "data.avg_rating")
-        
-        pipeline = [
-            {"$match": match_criteria},
-            {
-                "$project": {
-                    "date": {
-                        "$dateToString": {
-                            "format": "%Y-%m-%d",
-                            "date": "$computed_at"
-                        }
-                    },
-                    "value": metric_field,
-                    "count": "$data.movie_count"
-                }
-            },
-            {
-                "$group": {
-                    "_id": "$date",
-                    "value": {"$avg": "$value"},
-                    "count": {"$sum": "$count"}
-                }
-            },
-            {"$sort": {"_id": 1}},
-            {
-                "$project": {
-                    "_id": 0,
-                    "date": "$_id",
-                    "value": 1,
-                    "count": 1
-                }
+        try:
+            match_criteria = {
+                "view_type": "viral_threshold",
+                "genre": genre
             }
-        ]
+            
+            if budget_tier:
+                match_criteria["budget_tier"] = budget_tier
+            if season:
+                match_criteria["season"] = season
+            
+            result = self.batch_views.find_one(match_criteria)
+            
+            if result:
+                return {
+                    "genre": result.get("genre"),
+                    "budget_tier": result.get("budget_tier"),
+                    "season": result.get("season"),
+                    "vote_velocity_p99": result.get("vote_velocity_p99", 0),
+                    "vote_velocity_p95": result.get("vote_velocity_p95", 0),
+                    "vote_velocity_p90": result.get("vote_velocity_p90", 0),
+                    "comment_velocity_p99": result.get("comment_velocity_p99", 0),
+                    "engagement_velocity_p99": result.get("engagement_velocity_p99", 0),
+                    "sample_size": result.get("sample_size", 0)
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting viral threshold for genre {genre}: {e}")
+            return None
+    
+    def get_movie_intelligence(self, movie_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get movie intelligence (TMDB metadata) from batch layer
         
-        return list(self.batch_views.aggregate(pipeline))
+        Args:
+            movie_id: TMDB movie ID
+        
+        Returns:
+            Movie intelligence document or None
+        """
+        try:
+            result = self.batch_views.find_one({
+                "view_type": "movie_intelligence",
+                "movie_id": movie_id
+            })
+            
+            if result and "data" in result:
+                data = result["data"]
+                return {
+                    "movie_id": movie_id,
+                    "title": data.get("title"),
+                    "original_title": data.get("original_title"),
+                    "release_date": data.get("release_date"),
+                    "genres": data.get("genres", []),
+                    "overview": data.get("overview"),
+                    "vote_average": data.get("vote_average", 0.0),
+                    "vote_count": data.get("vote_count", 0),
+                    "popularity": data.get("popularity", 0.0),
+                    "original_language": data.get("original_language"),
+                    "production_companies": data.get("production_companies", []),
+                    "production_countries": data.get("production_countries", []),
+                    "runtime": data.get("runtime"),
+                    "budget": data.get("budget"),
+                    "revenue": data.get("revenue"),
+                    "keywords": data.get("keywords", [])
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting movie intelligence for movie {movie_id}: {e}")
+            return None
     
     def aggregate_top_movies(
         self,

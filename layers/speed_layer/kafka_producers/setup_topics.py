@@ -12,7 +12,7 @@ from kafka.errors import TopicAlreadyExistsError, KafkaError
 
 # Configuration
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka-1:29092,kafka-2:29092,kafka-3:29092')
-REPLICATION_FACTOR = 3
+REPLICATION_FACTOR = 1  # Changed to 1 since topics are created per-broker
 PARTITIONS = 3
 RETENTION_MS = 172800000  # 48 hours
 
@@ -25,7 +25,8 @@ TOPICS = [
         'config': {
             'retention.ms': str(RETENTION_MS),
             'compression.type': 'gzip',
-            'cleanup.policy': 'delete'
+            'cleanup.policy': 'delete',
+            'min.insync.replicas': '1'  # Must be <= replication_factor
         }
     },
     {
@@ -35,7 +36,8 @@ TOPICS = [
         'config': {
             'retention.ms': str(RETENTION_MS),
             'compression.type': 'gzip',
-            'cleanup.policy': 'delete'
+            'cleanup.policy': 'delete',
+            'min.insync.replicas': '1'  # Must be <= replication_factor
         }
     },
     {
@@ -45,7 +47,8 @@ TOPICS = [
         'config': {
             'retention.ms': str(RETENTION_MS),
             'compression.type': 'gzip',
-            'cleanup.policy': 'delete'
+            'cleanup.policy': 'delete',
+            'min.insync.replicas': '1'  # Must be <= replication_factor
         }
     }
 ]
@@ -102,11 +105,14 @@ def create_topics(bootstrap_servers):
         try:
             result = admin_client.create_topics(new_topics=new_topics, validate_only=False)
             
-            # Check results
-            for topic_name, future in result.items():
+            # Check results - result is a dict-like object
+            for topic_name in [t['name'] for t in TOPICS]:
                 try:
-                    future.result()  # Block until topic is created
-                    print(f"   ✅ Topic '{topic_name}' created successfully")
+                    if topic_name in result:
+                        result[topic_name].result()  # Block until topic is created
+                        print(f"   ✅ Topic '{topic_name}' created successfully")
+                    else:
+                        print(f"   ℹ️  Topic '{topic_name}' - no result")
                 except TopicAlreadyExistsError:
                     print(f"   ℹ️  Topic '{topic_name}' already exists")
                 except Exception as e:

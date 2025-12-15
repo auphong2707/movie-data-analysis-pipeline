@@ -182,9 +182,9 @@ echo ""
 echo -e "${YELLOW}[4/6] Clearing checkpoints and logs...${NC}"
 
 # Clear local checkpoints
-if [ -d "$SCRIPT_DIR/checkpoints" ]; then
+if [ -d "$SCRIPT_DIR/app/checkpoints" ]; then
     echo "  → Clearing local checkpoints..."
-    rm -rf "$SCRIPT_DIR/checkpoints"/*
+    rm -rf "$SCRIPT_DIR/app/checkpoints"/*
 fi
 
 # Clear logs

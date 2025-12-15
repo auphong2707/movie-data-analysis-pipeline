@@ -93,7 +93,7 @@ class RedditSentimentStreaming:
         logger.info("Initializing Spark session...")
         self.spark = SparkSession.builder \
             .appName("RedditSentimentStream") \
-            .config("spark.sql.streaming.checkpointLocation", "/opt/spark/checkpoints/reddit_stream") \
+            .config("spark.sql.streaming.checkpointLocation", "/apt/checkpoints/reddit_stream") \
             .config("spark.cassandra.connection.host", cassandra_host) \
             .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4,com.datastax.spark:spark-cassandra-connector_2.12:3.4.1") \
             .getOrCreate()
@@ -320,7 +320,7 @@ class RedditSentimentStreaming:
             .format("org.apache.spark.sql.cassandra") \
             .option("keyspace", "speed_layer") \
             .option("table", table_name) \
-            .option("checkpointLocation", f"/opt/spark/checkpoints/{table_name}") \
+            .option("checkpointLocation", f"/app/checkpoints/{table_name}") \
             .start()
         
         return query

@@ -215,58 +215,103 @@ class MovieMatcher:
         reddit_year = self._extract_year(reddit_title)
         normalized_reddit = self._normalize_title(reddit_title)
         
-        # Try exact match first
-        if normalized_reddit in self.movie_cache:
-            movie_id, tmdb_title, year = self.movie_cache[normalized_reddit]
-            return {
-                'tmdb_id': movie_id,
-                'tmdb_title': tmdb_title,
-                'year': year,
-                'similarity': 1.0,
-                'reddit_title': reddit_title
-            }
+        # Phase 1: Extract metadata from Reddit title
+        reddit_num = re.search(r'(\d+)\s*$', normalized_reddit)
+        reddit_has_number = reddit_num is not None
         
-        # Fuzzy match - find all candidates above threshold
+        # Phase 2: Find ALL potential candidates
         candidates = []
         
         for cached_title, (movie_id, tmdb_title, year) in self.movie_cache.items():
+            # Calculate base similarity using fuzzy matching
             similarity = self._calculate_similarity(normalized_reddit, cached_title)
             
-            if similarity >= self.similarity_threshold:
-                score = similarity
+            # Determine match type
+            is_exact_match = (similarity == 1.0)
+            is_fuzzy_match = (similarity >= self.similarity_threshold)  # 0.75
+            is_substring_match = (
+                cached_title.startswith(normalized_reddit + ' ') or
+                cached_title.startswith(normalized_reddit + ':')
+            )
+            
+            # Skip if no reasonable match
+            if not (is_exact_match or is_fuzzy_match or is_substring_match):
+                continue
+            
+            # Phase 3: Calculate final score with SEQUEL BIAS
+            # Strategy: Only consider movies ≤ 1.5 years old, exclude older ones
+            
+            cached_num = re.search(r'(\d+)\s*$', cached_title)
+            cached_has_number = cached_num is not None
+            
+            # Calculate years ago (for recency scoring)
+            years_ago = datetime.now().year - year if year else 999
+            
+            # SKIP movies older than 1.5 years (only consider 2024-2025 releases)
+            if years_ago > 1.5:
+                continue
+            
+            # Initialize score
+            score = similarity
+            
+            # SEQUEL BIAS: If user didn't specify a number, prefer newest releases
+            if not reddit_has_number:
                 
-                # Boost score if years match
-                if reddit_year and year and reddit_year == year:
-                    score += 0.15
+                if is_substring_match and not cached_has_number:
+                    # Subtitle sequel (e.g., "Avatar: Fire and Ash", "The Dark Knight")
+                    # Apply recency boost for movies within 1.5 years
+                    # Formula: adjustment = 0.8 * e^(-0.5 * years_ago)
+                    # Results: 0 years → +0.80, 1 year → +0.48, 1.5 years → +0.38
+                    import math
+                    recency_adjustment = 0.8 * math.exp(-0.5 * years_ago)
+                    score += recency_adjustment
                 
-                # CRITICAL: Penalize if numbers don't match (e.g., "Zootopia" vs "Zootopia 2")
-                # Extract trailing numbers from both titles
-                reddit_num = re.search(r'(\d+)\s*$', normalized_reddit)
-                cached_num = re.search(r'(\d+)\s*$', cached_title)
+                elif cached_has_number:
+                    # Numbered sequel (e.g., "Zootopia 2")
+                    # Check if base matches (strip number)
+                    cached_base = re.sub(r'\s*\d+\s*$', '', cached_title).strip()
+                    base_similarity = self._calculate_similarity(normalized_reddit, cached_base)
+                    
+                    if base_similarity > 0.95:
+                        # Base matches! Apply same recency adjustment
+                        import math
+                        recency_adjustment = 0.8 * math.exp(-0.5 * years_ago)
+                        score += recency_adjustment
+                    else:
+                        # Base doesn't match - penalize
+                        score -= 0.5
                 
-                if reddit_num and not cached_num:
-                    # Reddit has number (e.g., "zootopia 2") but cache doesn't (e.g., "zootopia")
-                    score -= 0.3  # Heavy penalty
-                elif not reddit_num and cached_num:
-                    # Reddit doesn't have number but cache does
-                    score -= 0.2  # Medium penalty
-                elif reddit_num and cached_num and reddit_num.group(1) != cached_num.group(1):
-                    # Both have numbers but they don't match
-                    score -= 0.4  # Very heavy penalty
-                
-                # Boost recent releases (within last 2 years)
-                if year:
-                    years_ago = datetime.now().year - year
-                    if years_ago <= 2:
-                        score += 0.05
-                
-                candidates.append({
-                    'tmdb_id': movie_id,
-                    'tmdb_title': tmdb_title,
-                    'year': year,
-                    'similarity': score,
-                    'reddit_title': reddit_title
-                })
+                elif is_exact_match:
+                    # Exact match to original movie (e.g., "Avatar" → "avatar")
+                    # Within 1.5 years, so it's a recent release, give modest boost
+                    import math
+                    recency_adjustment = 0.8 * math.exp(-0.5 * years_ago)
+                    score += recency_adjustment
+            
+            else:
+                # User specified a number - they want THAT specific sequel
+                if cached_has_number:
+                    if reddit_num.group(1) == cached_num.group(1):
+                        # Perfect match!
+                        score += 2.0
+                    else:
+                        # Wrong sequel number
+                        score -= 2.0
+                else:
+                    # User wants numbered sequel, this is base - penalize
+                    score -= 1.0
+            
+            # Bonus: year match
+            if reddit_year and year and reddit_year == year:
+                score += 1.0
+            
+            candidates.append({
+                'tmdb_id': movie_id,
+                'tmdb_title': tmdb_title,
+                'year': year,
+                'similarity': score,
+                'reddit_title': reddit_title
+            })
         
         if not candidates:
             return None

@@ -172,6 +172,10 @@ echo ""
 
 log_info "Triggering batch DAG: ${DAG_ID}"
 
+# First, unpause the DAG if it's paused
+log_info "Unpausing DAG (DAGs are paused by default)..."
+docker exec batch-airflow-scheduler airflow dags unpause ${DAG_ID} 2>&1 > /dev/null
+
 # Use Airflow CLI to trigger DAG (more reliable than REST API with session auth)
 TRIGGER_OUTPUT=$(docker exec batch-airflow-scheduler airflow dags trigger ${DAG_ID} 2>&1)
 

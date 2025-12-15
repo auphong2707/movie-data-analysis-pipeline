@@ -239,10 +239,10 @@ class RedditSentimentStreaming:
         )
         
         # Create a debug UDF that combines text AND logs it (forces execution)
-        def debug_combine_text_udf_func(title, selftext):
+        def debug_combine_text_udf_func(title, selftext, awards, upvotes, num_comments):
             import sys
-            # Log the raw values we receive
-            print(f"DEBUG [POST-DATA]: title='{title}' (type={type(title).__name__}) selftext='{selftext}' (type={type(selftext).__name__})", file=sys.stderr)
+            # Log the raw values we receive including awards
+            print(f"DEBUG [POST-DATA]: title='{title[:50] if title else None}...' awards={awards} upvotes={upvotes} comments={num_comments}", file=sys.stderr)
             
             # Handle None values
             if title is None:
@@ -261,7 +261,7 @@ class RedditSentimentStreaming:
         # Use the debug UDF to create combined_text (forces it to execute)
         posts_with_sentiment = posts_exploded.withColumn(
             "combined_text",
-            debug_combine_text_udf(col("title"), col("selftext"))
+            debug_combine_text_udf(col("title"), col("selftext"), col("awards"), col("upvotes"), col("num_comments"))
         ).withColumn(
             "sentiment_score",
             sentiment_udf(col("combined_text"))

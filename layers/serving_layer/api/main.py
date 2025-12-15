@@ -53,7 +53,6 @@ dual_success_score = Histogram(
 from .routes import (
     movies_router,
     trending_router,
-    analytics_router,
     search_router,
     health_router
 )
@@ -132,7 +131,6 @@ app = FastAPI(
     - **Movie Details**: Get complete movie information from batch and speed layers
     - **Sentiment Analysis**: Real-time and historical sentiment tracking
     - **Trending Movies**: Discover what's hot right now
-    - **Analytics**: Genre analytics and temporal trends
     - **Search**: Flexible movie search with multiple filters
     
     ### Data Sources
@@ -154,16 +152,15 @@ setup_cors(app)
 instrumentator = Instrumentator(
     should_group_status_codes=True,
     should_ignore_untemplated=True,
-    should_respect_env_var=True,
+    should_respect_env_var=False,  # Always enable metrics
     should_instrument_requests_inprogress=True,
-    excluded_handlers=["/metrics", "/health"],
-    env_var_name="ENABLE_METRICS",
+    excluded_handlers=["/health"],  # Don't exclude /metrics
     inprogress_name="fastapi_inprogress",
     inprogress_labels=True,
 )
 
 # Instrument the app and expose /metrics endpoint
-instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=True)
+instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 logger.info("Prometheus instrumentation enabled at /metrics")
 
@@ -187,7 +184,6 @@ async def global_exception_handler(request, exc):
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(movies_router, prefix="/api/v1")
 app.include_router(trending_router, prefix="/api/v1")
-app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(search_router, prefix="/api/v1")
 app.include_router(recommendations_router, prefix="/api/v1")
 
@@ -208,7 +204,6 @@ async def root():
         "endpoints": {
             "movies": "/api/v1/movies",
             "trending": "/api/v1/trending",
-            "analytics": "/api/v1/analytics",
             "search": "/api/v1/search",
             "recommendations": "/api/v1/recommendations"
         }

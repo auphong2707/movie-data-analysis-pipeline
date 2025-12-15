@@ -1141,29 +1141,8 @@ class ViewMerger:
             comment_velocity = movie_data["total_comments"] / time_span_hours
             award_velocity = movie_data["total_awards"] / time_span_hours
             
-            # Step 3: Get movie intelligence for genre
-            # Try both flat schema (title) and nested schema (data.title)
-            movie_intel = self.batch_views.find_one({
-                "view_type": "movie_intelligence",
-                "$or": [
-                    {"title": movie_title_key},
-                    {"data.title": movie_title_key}
-                ]
-            })
-            
-            # If not found, try fuzzy match (for cases like "Zootopia 2" speed data but "Zootopia" batch data)
-            if not movie_intel and movie_title_key:
-                # Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
-                import re
-                base_title = re.sub(r'\s*\d+\s*$', '', movie_title_key).strip()
-                if base_title != movie_title_key:
-                    movie_intel = self.batch_views.find_one({
-                        "view_type": "movie_intelligence",
-                        "$or": [
-                            {"title": base_title},
-                            {"data.title": base_title}
-                        ]
-                    })
+            # Step 3: Get movie intelligence for genre using fuzzy matching
+            movie_intel = self._find_movie_intelligence(movie_title_key)
             
             if not movie_intel:
                 # Still not found - skip this movie

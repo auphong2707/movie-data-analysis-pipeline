@@ -160,66 +160,6 @@ async def get_movie_sentiment(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/{movie_id}/stats")
-async def get_movie_stats(
-    movie_id: int,
-    hours: int = Query(48, description="Hours of historical stats"),
-    merger: ViewMerger = Depends(get_view_merger)
-):
-    """
-    Get real-time statistics for a movie
-    
-    Provides recent statistics from speed layer:
-    - Vote average and count
-    - Popularity score
-    - Rating velocity
-    
-    Args:
-        movie_id: TMDB movie ID
-        hours: Number of hours to look back
-    
-    Returns:
-        Recent movie statistics
-    """
-    try:
-        from mongodb.queries import MovieQueries
-        from mongodb.client import get_database
-        
-        db = get_database()
-        queries = MovieQueries(db)
-        
-        # Get speed layer stats
-        stats = queries.get_speed_movie_stats(movie_id, hours_back=hours)
-        
-        if not stats:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No recent stats found for movie {movie_id}"
-            )
-        
-        return {
-            'movie_id': movie_id,
-            'hours_back': hours,
-            'stats': [
-                {
-                    'hour': stat['hour'],
-                    'vote_average': stat['stats']['vote_average'],
-                    'vote_count': stat['stats']['vote_count'],
-                    'popularity': stat['stats']['popularity'],
-                    'rating_velocity': stat['stats'].get('rating_velocity', 0)
-                }
-                for stat in stats
-            ],
-            'latest': stats[0]['stats'] if stats else None
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting stats for movie {movie_id}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
 @router.get("/by-title/{title}")
 async def get_movie_by_title(
     title: str,

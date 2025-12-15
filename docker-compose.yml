@@ -20,6 +20,8 @@ volumes:
   # Serving Layer Volumes (Intersection)
   serving-mongodb-data:
   serving-redis-data:
+  serving-prometheus-data:
+  serving-grafana-data:
   
   # Batch Layer Volumes
   batch-minio-data:
@@ -148,6 +150,71 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
+
+  # Prometheus - Metrics Collection
+  serving-prometheus:
+    image: prom/prometheus:latest
+    container_name: serving-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./layers/serving_layer/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./layers/serving_layer/monitoring/alerts.yml:/etc/prometheus/alerts.yml
+      - serving-prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Grafana - Metrics Visualization
+  serving-grafana:
+    image: grafana/grafana:latest
+    container_name: serving-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./layers/serving_layer/visualization/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./layers/serving_layer/visualization/grafana/datasources:/etc/grafana/provisioning/datasources
+      - serving-grafana-data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    depends_on:
+      - serving-prometheus
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # MongoDB Exporter - MongoDB Metrics
+  serving-mongodb-exporter:
+    image: bitnami/mongodb-exporter:latest
+    container_name: serving-mongodb-exporter
+    ports:
+      - "9216:9216"
+    environment:
+      MONGODB_URI: mongodb://admin:password@mongodb:27017
+    networks:
+      - movie-pipeline
+    restart: unless-stopped
+
+  # Redis Exporter - Redis Metrics
+  serving-redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: serving-redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - serving-redis
+    networks:
+      - movie-pipeline
     restart: unless-stopped
 
   # =====================================================================

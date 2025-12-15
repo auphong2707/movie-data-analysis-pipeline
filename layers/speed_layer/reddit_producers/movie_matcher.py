@@ -60,6 +60,7 @@ class MovieMatcher:
         Normalize movie title for comparison.
         
         Removes special characters, converts to lowercase, removes articles.
+        Preserves numbers for sequel matching.
         
         Args:
             title: Original title
@@ -76,8 +77,8 @@ class MovieMatcher:
         # Convert to lowercase
         title = title.lower()
         
-        # Remove special characters except spaces
-        title = re.sub(r'[^\w\s]', '', title)
+        # Remove special characters except spaces and numbers (keep numbers for sequels)
+        title = re.sub(r'[^\w\s\d]', '', title)
         
         # Remove leading articles (the, a, an)
         title = re.sub(r'^(the|a|an)\s+', '', title)
@@ -225,29 +226,57 @@ class MovieMatcher:
                 'reddit_title': reddit_title
             }
         
-        # Fuzzy match
-        best_match = None
-        best_similarity = 0.0
+        # Fuzzy match - find all candidates above threshold
+        candidates = []
         
         for cached_title, (movie_id, tmdb_title, year) in self.movie_cache.items():
             similarity = self._calculate_similarity(normalized_reddit, cached_title)
             
-            # Boost score if years match
-            if reddit_year and year and reddit_year == year:
-                similarity += 0.1
-            
-            if similarity > best_similarity and similarity >= self.similarity_threshold:
-                best_similarity = similarity
-                best_match = {
+            if similarity >= self.similarity_threshold:
+                score = similarity
+                
+                # Boost score if years match
+                if reddit_year and year and reddit_year == year:
+                    score += 0.15
+                
+                # CRITICAL: Penalize if numbers don't match (e.g., "Zootopia" vs "Zootopia 2")
+                # Extract trailing numbers from both titles
+                reddit_num = re.search(r'(\d+)\s*$', normalized_reddit)
+                cached_num = re.search(r'(\d+)\s*$', cached_title)
+                
+                if reddit_num and not cached_num:
+                    # Reddit has number (e.g., "zootopia 2") but cache doesn't (e.g., "zootopia")
+                    score -= 0.3  # Heavy penalty
+                elif not reddit_num and cached_num:
+                    # Reddit doesn't have number but cache does
+                    score -= 0.2  # Medium penalty
+                elif reddit_num and cached_num and reddit_num.group(1) != cached_num.group(1):
+                    # Both have numbers but they don't match
+                    score -= 0.4  # Very heavy penalty
+                
+                # Boost recent releases (within last 2 years)
+                if year:
+                    years_ago = datetime.now().year - year
+                    if years_ago <= 2:
+                        score += 0.05
+                
+                candidates.append({
                     'tmdb_id': movie_id,
                     'tmdb_title': tmdb_title,
                     'year': year,
-                    'similarity': similarity,
+                    'similarity': score,
                     'reddit_title': reddit_title
-                }
+                })
+        
+        if not candidates:
+            return None
+        
+        # Sort by similarity score (highest first)
+        candidates.sort(key=lambda x: x['similarity'], reverse=True)
+        best_match = candidates[0]
         
         if best_match:
-            logger.debug(f"Matched '{reddit_title}' to '{best_match['tmdb_title']}' (score: {best_similarity:.2f})")
+            logger.debug(f"Matched '{reddit_title}' to '{best_match['tmdb_title']}' (score: {best_match['similarity']:.2f})")
         
         return best_match
     

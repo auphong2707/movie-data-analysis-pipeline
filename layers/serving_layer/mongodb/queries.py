@@ -74,6 +74,51 @@ class MovieQueries:
             'view_type': 'movie_details'
         })
     
+    def get_movie_id_by_title(self, title: str) -> Optional[int]:
+        """
+        Get movie ID by exact title match
+        
+        Args:
+            title: Movie title (case-insensitive)
+        
+        Returns:
+            Movie ID or None if not found
+        """
+        # Try exact match first in old schema (case-insensitive)
+        movie = self.batch_views.find_one({
+            'view_type': 'movie_details',
+            'data.title': {'$regex': f'^{title}$', '$options': 'i'}
+        })
+        
+        if movie:
+            return movie.get('movie_id')
+        
+        # Try exact match in new schema (movie_intelligence)
+        movie = self.batch_views.find_one({
+            'view_type': 'movie_intelligence',
+            'title': {'$regex': f'^{title}$', '$options': 'i'}
+        })
+        
+        if movie:
+            return movie.get('movie_id')
+        
+        # Try partial match as fallback in old schema
+        movie = self.batch_views.find_one({
+            'view_type': 'movie_details',
+            'data.title': {'$regex': title, '$options': 'i'}
+        })
+        
+        if movie:
+            return movie.get('movie_id')
+        
+        # Try partial match in new schema
+        movie = self.batch_views.find_one({
+            'view_type': 'movie_intelligence',
+            'title': {'$regex': title, '$options': 'i'}
+        })
+        
+        return movie.get('movie_id') if movie else None
+    
     # --- Speed Layer Queries ---
     
     def get_speed_movie_stats(

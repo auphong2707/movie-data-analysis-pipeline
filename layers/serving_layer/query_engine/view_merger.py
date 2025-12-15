@@ -65,11 +65,18 @@ class ViewMerger:
         """
         cutoff_time = self.get_cutoff_time()
         
-        # Get movie_details from batch layer (static metadata)
+        # Get movie_intelligence from batch layer (static metadata)
+        # Try both 'movie_details' (old schema) and 'movie_intelligence' (new schema)
         batch_details = self.batch_views.find_one({
             'movie_id': movie_id,
             'view_type': 'movie_details'
         })
+        
+        if not batch_details:
+            batch_details = self.batch_views.find_one({
+                'movie_id': movie_id,
+                'view_type': 'movie_intelligence'
+            })
         
         # Get latest stats from speed layer (real-time)
         speed_stats = self.speed_views.find_one(
@@ -93,18 +100,32 @@ class ViewMerger:
         }
         
         # Add metadata from batch layer
-        if batch_details and 'data' in batch_details:
-            data = batch_details['data']
-            result.update({
-                'title': data.get('title'),
-                'release_date': data.get('release_date'),
-                'genres': data.get('genres', []),
-                'runtime': data.get('runtime'),
-                'budget': data.get('budget'),
-                'revenue': data.get('revenue'),
-                'overview': data.get('overview'),
-                'original_language': data.get('original_language')
-            })
+        if batch_details:
+            # Handle both old schema (with 'data' field) and new schema (flat structure)
+            if 'data' in batch_details:
+                data = batch_details['data']
+                result.update({
+                    'title': data.get('title'),
+                    'release_date': data.get('release_date'),
+                    'genres': data.get('genres', []),
+                    'runtime': data.get('runtime'),
+                    'budget': data.get('budget'),
+                    'revenue': data.get('revenue'),
+                    'overview': data.get('overview'),
+                    'original_language': data.get('original_language')
+                })
+            else:
+                # New schema - flat structure (movie_intelligence)
+                result.update({
+                    'title': batch_details.get('title'),
+                    'release_date': batch_details.get('release_date'),
+                    'genres': [batch_details.get('genre')] if batch_details.get('genre') else [],
+                    'runtime': batch_details.get('runtime'),
+                    'budget': batch_details.get('budget'),
+                    'revenue': None,  # not in movie_intelligence schema
+                    'overview': None,  # not in movie_intelligence schema
+                    'original_language': None  # not in movie_intelligence schema
+                })
         
         # Add current stats - prefer speed layer if available
         if speed_stats and 'stats' in speed_stats:
@@ -116,16 +137,26 @@ class ViewMerger:
                 'data_source': 'speed',
                 'last_updated': speed_stats.get('hour')
             })
-        elif batch_details and 'data' in batch_details:
+        elif batch_details:
             # Fallback to batch layer stats
-            data = batch_details['data']
-            result.update({
-                'vote_average': data.get('vote_average'),
-                'vote_count': data.get('vote_count'),
-                'popularity': data.get('popularity'),
-                'data_source': 'batch',
-                'last_updated': batch_details.get('computed_at')
-            })
+            if 'data' in batch_details:
+                data = batch_details['data']
+                result.update({
+                    'vote_average': data.get('vote_average'),
+                    'vote_count': data.get('vote_count'),
+                    'popularity': data.get('popularity'),
+                    'data_source': 'batch',
+                    'last_updated': batch_details.get('computed_at')
+                })
+            else:
+                # New schema - flat structure
+                result.update({
+                    'vote_average': batch_details.get('vote_average'),
+                    'vote_count': batch_details.get('vote_count'),
+                    'popularity': batch_details.get('popularity'),
+                    'data_source': 'batch',
+                    'last_updated': batch_details.get('updated_at')
+                })
         
         return result
     
@@ -150,88 +181,148 @@ class ViewMerger:
         """
         cutoff_time = self.get_cutoff_time()
         
-        # Get movie title from batch layer
+        # Get movie title from batch layer (try both schemas)
         movie_details = self.batch_views.find_one({
             'movie_id': movie_id,
             'view_type': 'movie_details'
         })
         
-        title = movie_details.get('data', {}).get('title') if movie_details else None
+        if not movie_details:
+            movie_details = self.batch_views.find_one({
+                'movie_id': movie_id,
+                'view_type': 'movie_intelligence'
+            })
+        
+        # Extract title from either schema
+        if movie_details:
+            if 'data' in movie_details:
+                title = movie_details['data'].get('title')
+            else:
+                title = movie_details.get('title')
+        else:
+            title = None
         
         # Query batch layer for sentiment (historical > 48h)
+        # Try old schema first
         batch_sentiment = self.batch_views.find_one({
             'movie_id': movie_id,
             'view_type': 'sentiment'
         })
         
+        # If not found, use movie_intelligence as batch sentiment source
+        if not batch_sentiment and movie_details and movie_details.get('view_type') == 'movie_intelligence':
+            batch_sentiment = movie_details
+        
         # Query speed layer for recent sentiment (< 48h)
-        speed_sentiment_docs = list(
-            self.speed_views.find({
-                'movie_id': movie_id,
-                'data_type': 'sentiment',
-                'hour': {'$gte': cutoff_time}
-            }).sort('hour', -1)
-        )
+        # Speed layer uses movie_title, not movie_id
+        speed_sentiment_docs = []
+        if title:
+            speed_sentiment_docs = list(
+                self.speed_views.find({
+                    'movie_title': title,
+                    'data_type': {'$in': ['reddit_post', 'reddit_comment']},
+                    'hour': {'$gte': cutoff_time}
+                }).sort('hour', -1)
+            )
         
         # Calculate overall sentiment
         overall_sentiment = {}
         breakdown = []
         
-        if batch_sentiment and 'data' in batch_sentiment:
-            batch_data = batch_sentiment['data']
-            # Schema: col1=avg_sentiment, col2=review_count, col3=positive_count, col4=negative_count, col5=neutral_count
-            overall_sentiment = {
-                'overall_score': batch_data.get('col1', 0),
-                'label': self._get_sentiment_label(batch_data.get('col1', 0)),
-                'positive_count': batch_data.get('col3', 0),
-                'negative_count': batch_data.get('col4', 0),
-                'neutral_count': batch_data.get('col5', 0),
-                'total_reviews': batch_data.get('col2', 0),
-                'velocity': 0,
-                'confidence': 0.9
-            }
+        if batch_sentiment:
+            # Handle old schema (with 'data' field)
+            if 'data' in batch_sentiment:
+                batch_data = batch_sentiment['data']
+                # Schema: col1=avg_sentiment, col2=review_count, col3=positive_count, col4=negative_count, col5=neutral_count
+                overall_sentiment = {
+                    'overall_score': batch_data.get('col1', 0),
+                    'label': self._get_sentiment_label(batch_data.get('col1', 0)),
+                    'positive_count': batch_data.get('col3', 0),
+                    'negative_count': batch_data.get('col4', 0),
+                    'neutral_count': batch_data.get('col5', 0),
+                    'total_reviews': batch_data.get('col2', 0),
+                    'velocity': 0,
+                    'confidence': 0.9
+                }
+            # Handle new schema (movie_intelligence - flat structure)
+            elif batch_sentiment.get('view_type') == 'movie_intelligence':
+                avg_sent = batch_sentiment.get('avg_sentiment', 0)
+                review_cnt = batch_sentiment.get('review_count', 0)
+                overall_sentiment = {
+                    'overall_score': avg_sent,
+                    'label': self._get_sentiment_label(avg_sent),
+                    'positive_count': 0,  # not in movie_intelligence schema
+                    'negative_count': 0,  # not in movie_intelligence schema
+                    'neutral_count': 0,   # not in movie_intelligence schema
+                    'total_reviews': review_cnt,
+                    'velocity': 0,
+                    'confidence': 0.7 if review_cnt > 0 else 0.3
+                }
         
-        # Add speed layer sentiment (recent updates)
+        # Add speed layer sentiment (recent updates from Reddit)
         if speed_sentiment_docs:
-            latest_speed = speed_sentiment_docs[0]
-            if 'data' in latest_speed:
-                speed_data = latest_speed['data']
-                # Schema: avg_sentiment, review_count, positive_count, negative_count, neutral_count, sentiment_velocity
-                
-                # Update with recent data
-                total_reviews = overall_sentiment.get('total_reviews', 0) + speed_data.get('review_count', 0)
-                
-                # Weighted average of sentiments
-                if overall_sentiment and total_reviews > 0:
-                    batch_weight = overall_sentiment.get('total_reviews', 0) / total_reviews
-                    speed_weight = speed_data.get('review_count', 0) / total_reviews
-                    
-                    overall_score = (
-                        overall_sentiment.get('overall_score', 0) * batch_weight +
-                        speed_data.get('avg_sentiment', 0) * speed_weight
-                    )
-                else:
-                    overall_score = speed_data.get('avg_sentiment', 0)
-                
-                overall_sentiment.update({
-                    'overall_score': overall_score,
-                    'label': self._get_sentiment_label(overall_score),
-                    'positive_count': overall_sentiment.get('positive_count', 0) + speed_data.get('positive_count', 0),
-                    'negative_count': overall_sentiment.get('negative_count', 0) + speed_data.get('negative_count', 0),
-                    'neutral_count': overall_sentiment.get('neutral_count', 0) + speed_data.get('neutral_count', 0),
-                    'total_reviews': total_reviews,
-                    'velocity': speed_data.get('sentiment_velocity', 0),
-                    'confidence': 0.85
-                })
+            # Aggregate Reddit metrics across all recent documents
+            total_post_count = 0
+            total_sentiment_sum = 0
             
-            # Create breakdown from speed layer hourly data
             for doc in speed_sentiment_docs:
-                if 'data' in doc and 'hour' in doc:
-                    breakdown.append({
-                        'date': doc['hour'].strftime('%Y-%m-%d') if isinstance(doc['hour'], datetime) else doc['hour'],
-                        'avg_sentiment': doc['data'].get('avg_sentiment', 0),
-                        'review_count': doc['data'].get('review_count', 0)
+                if 'metrics' in doc:
+                    metrics = doc['metrics']
+                    post_count = metrics.get('post_count', 0)
+                    avg_sentiment = metrics.get('avg_sentiment', 0)
+                    
+                    total_post_count += post_count
+                    total_sentiment_sum += avg_sentiment * post_count
+                    
+                    # Create breakdown from speed layer hourly data
+                    if 'hour' in doc:
+                        breakdown.append({
+                            'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
+                            'avg_sentiment': avg_sentiment,
+                            'post_count': post_count,
+                            'data_type': doc.get('data_type', 'reddit')
+                        })
+            
+            # Calculate weighted average sentiment from speed layer
+            if total_post_count > 0:
+                speed_avg_sentiment = total_sentiment_sum / total_post_count
+                
+                # Merge with batch sentiment
+                if overall_sentiment:
+                    batch_reviews = overall_sentiment.get('total_reviews', 0)
+                    total_reviews = batch_reviews + total_post_count
+                    
+                    if total_reviews > 0:
+                        batch_weight = batch_reviews / total_reviews
+                        speed_weight = total_post_count / total_reviews
+                        
+                        overall_score = (
+                            overall_sentiment.get('overall_score', 0) * batch_weight +
+                            speed_avg_sentiment * speed_weight
+                        )
+                    else:
+                        overall_score = speed_avg_sentiment
+                    
+                    overall_sentiment.update({
+                        'overall_score': overall_score,
+                        'label': self._get_sentiment_label(overall_score),
+                        'total_reviews': total_reviews,
+                        'reddit_mentions': total_post_count,
+                        'confidence': 0.85
                     })
+                else:
+                    # No batch data, use only speed layer
+                    overall_sentiment = {
+                        'overall_score': speed_avg_sentiment,
+                        'label': self._get_sentiment_label(speed_avg_sentiment),
+                        'positive_count': 0,
+                        'negative_count': 0,
+                        'neutral_count': 0,
+                        'total_reviews': 0,
+                        'reddit_mentions': total_post_count,
+                        'velocity': 0,
+                        'confidence': 0.6
+                    }
         
         return {
             'movie_id': movie_id,
@@ -546,9 +637,9 @@ class ViewMerger:
         
         # Note: movie_id and genre filters not available in current schema
         
-        # Get trends from batch layer
+        # Get trends from batch layer (newest first for real-time relevance)
         trends = list(
-            self.batch_views.find(query).sort('data.date', 1).limit(1000)
+            self.batch_views.find(query).sort('data.date', -1).limit(1000)
         )
         
         # Extract data points
@@ -958,8 +1049,8 @@ class ViewMerger:
                             "stddev": round(franchise_baseline.get("sentiment_stddev", 0.15), 3)
                         }
         
-        # Step 6: Create sentiment breakdown (hourly)
-        for hour_key, data in sorted(sentiment_by_hour.items()):
+        # Step 6: Create sentiment breakdown (hourly) - sorted newest first for real-time relevance
+        for hour_key, data in sorted(sentiment_by_hour.items(), reverse=True):
             result["breakdown"].append({
                 "hour": hour_key,
                 "avg_sentiment": round(data["sentiment"] / data["count"], 3),

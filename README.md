@@ -4,6 +4,7 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 
 ## 📋 Table of Contents
 
+- [Quick Start](#-quick-start) ⭐ **Start here!**
 - [Project Overview](#-project-overview)
 - [Lambda Architecture Layer Contributions](#-lambda-architecture-layer-contributions)
 - [Architecture](#-architecture)
@@ -11,7 +12,6 @@ A production-ready big data analytics pipeline implementing **Lambda Architectur
 - [Core Features](#-core-features)
 - [Data Pipeline Architecture](#-data-pipeline-architecture)
 - [Project Structure](#-project-structure)
-- [Quick Start](#-quick-start)
 - [Implementation Status](#-implementation-status)
 - [Documentation](#-documentation)
 - [Deployment](#-deployment)
@@ -671,8 +671,9 @@ movie-data-analysis-pipeline/
 
 ## 🚀 Quick Start
 
-> **✨ NEW: Unified Setup Available!**  
-> The batch and speed layers are now combined into a single setup at the project root with consistent naming conventions.
+> **⚠️ Important: Startup Dependency**  
+> The batch layer MUST run first to populate TMDB baseline data (cold start), then the speed layer processes Reddit data.  
+> The `start.sh` script handles this sequence automatically.
 
 ### Prerequisites
 
@@ -681,54 +682,48 @@ movie-data-analysis-pipeline/
 - **At least 8GB RAM** allocated to Docker
 - **TMDB API Key** (free from [themoviedb.org](https://www.themoviedb.org/settings/api))
 
-### Unified Setup (Recommended)
+### One-Command Startup
 
-The unified setup runs both Batch Layer and Speed Layer with a single command:
+The startup sequence is fully automated:
 
-1. **Clone the Repository**
+1. **Clone and Configure**
    ```bash
    git clone https://github.com/auphong2707/movie-data-analysis-pipeline.git
    cd movie-data-analysis-pipeline
-   ```
-
-2. **Configure Environment Variables**
-   ```bash
-   # Copy template and add your TMDB API key
+   
+   # Add your TMDB API key
    cp .env.example .env
    nano .env  # Set TMDB_API_KEY=your_key_here
    ```
 
-3. **Start All Services**
+2. **Start Everything**
    ```bash
-   # Start complete infrastructure (Batch + Speed layers)
-   docker-compose up -d
-   
-   # Verify all services are running
-   docker-compose ps
+   ./start.sh
    ```
+   
+   The script will:
+   - ✅ Start all infrastructure (MongoDB, Kafka, Cassandra, Airflow, etc.)
+   - ✅ Trigger batch DAG for TMDB baseline data (cold start)
+   - ✅ Wait for batch processing to complete
+   - ✅ Verify speed layer is processing Reddit data
+   - ✅ Display all access URLs
 
-4. **Access Web Interfaces**
-   - **Airflow (Batch Layer)**: http://localhost:8088 (admin/admin)
-   - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
-   - **Schema Registry**: http://localhost:8081
+3. **Access Services**
+   - **API Docs**: http://localhost:8000/docs
+   - **Airflow**: http://localhost:8088 (admin/admin)
+   - **MongoDB UI**: http://localhost:8082 (admin/admin)
+   - **Grafana**: http://localhost:3001 (admin/admin)
 
-For detailed instructions and troubleshooting, see the layer-specific READMEs:
-- **Batch Layer**: See `layers/batch_layer/README.md`
-- **Speed Layer**: See `layers/speed_layer/README.md`
+### Stop Pipeline
 
-### Running the Pipeline
-
-**Batch Layer** (historical data processing):
 ```bash
-# Trigger Airflow DAG manually or wait for scheduled run
-# Access Airflow UI at http://localhost:8088
+docker-compose down
 ```
 
-**Speed Layer** (real-time streaming):
-```bash
-# Automatically starts with docker-compose
-# View logs: docker-compose logs -f speed-tmdb-producer speed-sentiment-stream
-```
+For detailed layer documentation, see:
+- **Batch Layer**: `layers/batch_layer/README.md`
+- **Speed Layer**: `layers/speed_layer/README.md`
+- **Serving Layer**: `layers/serving_layer/README.md`
 
 **Query Results**:
 ```bash

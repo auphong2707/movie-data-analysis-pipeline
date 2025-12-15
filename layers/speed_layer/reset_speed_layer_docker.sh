@@ -58,9 +58,27 @@ echo -e "${BLUE}═════════════════════�
 echo -e "${BLUE}      Speed Layer Docker Compose Reset Script${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo ""
+echo -e "${YELLOW}What this script does:${NC}"
+echo "  • Clears Kafka topics (data lost)"
+echo "  • Drops Cassandra keyspace (data lost)"
+echo "  • Clears checkpoints and logs"
+echo "  • Clears MongoDB speed_views"
+if [ "$REMOVE_VOLUMES" = true ]; then
+    echo -e "  ${RED}• Removes Docker volumes (ALL historical data lost)${NC}"
+else
+    echo -e "  ${YELLOW}• Keeps Docker volumes (use --remove-volumes for complete clean)${NC}"
+fi
+echo ""
 
 if [ "$REMOVE_VOLUMES" = true ]; then
-    echo -e "${RED}⚠ WARNING: Volume removal enabled - ALL DATA WILL BE DELETED${NC}"
+    echo -e "${RED}⚠ WARNING: Volume removal enabled - ALL DATA WILL BE PERMANENTLY DELETED${NC}"
+    echo -e "${YELLOW}Press Ctrl+C within 5 seconds to cancel...${NC}"
+    sleep 5
+else
+    echo -e "${YELLOW}⚠ NOTE: Without --remove-volumes, Kafka/Zookeeper may retain stale metadata${NC}"
+    echo -e "${YELLOW}   This can cause startup issues (NodeExistsException)${NC}"
+    echo -e "${YELLOW}   Recommended: Use --remove-volumes for clean reset${NC}"
+    echo ""
     echo -e "${YELLOW}Press Ctrl+C to cancel, or Enter to continue...${NC}"
     read
 fi
@@ -179,14 +197,36 @@ fi
 echo ""
 
 ################################################################################
-# Step 6: Remove Volumes (Optional)
+# Step 6: Remove Speed Layer Volumes
 ################################################################################
+echo -e "${YELLOW}[6/6] Removing speed layer volumes...${NC}"
+
 if [ "$REMOVE_VOLUMES" = true ]; then
-    echo -e "${YELLOW}[6/6] Removing volumes...${NC}"
-    docker-compose down -v
-    echo -e "${GREEN}✓ Volumes removed${NC}"
+    echo "  → Stopping and removing ALL speed layer containers and volumes..."
+    docker-compose down
+    
+    # Remove specific speed layer volumes
+    SPEED_VOLUMES=(
+        "movie-data-analysis-pipeline_speed-zookeeper-data"
+        "movie-data-analysis-pipeline_speed-zookeeper-logs"
+        "movie-data-analysis-pipeline_speed-kafka-broker1-data"
+        "movie-data-analysis-pipeline_speed-kafka-broker2-data"
+        "movie-data-analysis-pipeline_speed-kafka-broker3-data"
+        "movie-data-analysis-pipeline_speed-cassandra-data"
+        "movie-data-analysis-pipeline_speed-application-logs"
+        "movie-data-analysis-pipeline_speed-spark-checkpoints"
+    )
+    
+    for volume in "${SPEED_VOLUMES[@]}"; do
+        echo "  → Removing volume: $volume"
+        docker volume rm "$volume" 2>/dev/null || echo "    (doesn't exist)"
+    done
+    
+    echo -e "${GREEN}✓ All speed layer volumes removed${NC}"
+    echo -e "${RED}⚠ NOTE: This was a COMPLETE reset - all historical data is lost${NC}"
 else
-    echo -e "${YELLOW}[6/6] Keeping volumes (use --remove-volumes to delete)${NC}"
+    echo -e "${YELLOW}  ℹ Keeping volumes (use --remove-volumes for complete clean)${NC}"
+    echo -e "${YELLOW}  ⚠ WARNING: Kafka/Zookeeper may have stale data - recommended to use --remove-volumes${NC}"
 fi
 echo ""
 

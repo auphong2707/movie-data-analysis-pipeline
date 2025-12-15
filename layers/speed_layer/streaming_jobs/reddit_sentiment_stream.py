@@ -105,18 +105,6 @@ class RedditSentimentStreaming:
         
         logger.info("Spark session initialized")
     
-    def create_sentiment_udf(self):
-        """Create UDF for VADER sentiment analysis."""
-        analyzer = SentimentIntensityAnalyzer()
-        
-        def analyze_sentiment(text: str) -> float:
-            if not text:
-                return 0.0
-            scores = analyzer.polarity_scores(text)
-            return float(scores['compound'])
-        
-        return udf(analyze_sentiment, FloatType())
-    
     def read_reddit_posts_stream(self):
         """Read Reddit posts from Kafka."""
         logger.info("Reading reddit.posts stream from Kafka...")
@@ -165,6 +153,72 @@ class RedditSentimentStreaming:
         
         return comments
     
+    def create_post_sentiment_udf(self):
+        """Create UDF for VADER sentiment analysis for POSTS."""
+        
+        def analyze_sentiment(text):
+            # Import and create analyzer inside UDF for proper serialization
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            import sys
+            
+            # Handle None/null values first
+            if text is None:
+                print(f"WARNING [POST]: None text passed to sentiment UDF", file=sys.stderr)
+                return 0.0
+            
+            # Convert to string and check if empty
+            text_str = str(text).strip()
+            if not text_str or text_str == '':
+                print(f"WARNING [POST]: Empty text passed to sentiment UDF", file=sys.stderr)
+                return 0.0
+            
+            try:
+                analyzer = SentimentIntensityAnalyzer()
+                scores = analyzer.polarity_scores(text_str)
+                sentiment = float(scores['compound'])
+                # Log for debugging
+                print(f"DEBUG [POST]: Text='{text_str[:50]}...' Sentiment={sentiment}", file=sys.stderr)
+                return sentiment
+            except Exception as e:
+                # Log error and return neutral sentiment
+                print(f"ERROR [POST] in sentiment UDF: {e}", file=sys.stderr)
+                return 0.0
+        
+        return udf(analyze_sentiment, FloatType())
+    
+    def create_comment_sentiment_udf(self):
+        """Create UDF for VADER sentiment analysis for COMMENTS."""
+        
+        def analyze_sentiment(text):
+            # Import and create analyzer inside UDF for proper serialization
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            import sys
+            
+            # Handle None/null values first
+            if text is None:
+                print(f"WARNING [COMMENT]: None text passed to sentiment UDF", file=sys.stderr)
+                return 0.0
+            
+            # Convert to string and check if empty
+            text_str = str(text).strip()
+            if not text_str or text_str == '':
+                print(f"WARNING [COMMENT]: Empty text passed to sentiment UDF", file=sys.stderr)
+                return 0.0
+            
+            try:
+                analyzer = SentimentIntensityAnalyzer()
+                scores = analyzer.polarity_scores(text_str)
+                sentiment = float(scores['compound'])
+                # Log for debugging
+                print(f"DEBUG [COMMENT]: Text='{text_str[:50]}...' Sentiment={sentiment}", file=sys.stderr)
+                return sentiment
+            except Exception as e:
+                # Log error and return neutral sentiment
+                print(f"ERROR [COMMENT] in sentiment UDF: {e}", file=sys.stderr)
+                return 0.0
+        
+        return udf(analyze_sentiment, FloatType())
+
     def process_posts_with_sentiment(self, posts_df):
         """
         Process posts: sentiment analysis and viral metrics.
@@ -176,7 +230,7 @@ class RedditSentimentStreaming:
         Returns:
             Processed DataFrame with sentiment and metrics
         """
-        sentiment_udf = self.create_sentiment_udf()
+        sentiment_udf = self.create_post_sentiment_udf()
         
         # Explode potential_movies array to get one row per movie mention
         posts_exploded = posts_df.select(
@@ -184,12 +238,30 @@ class RedditSentimentStreaming:
             col("*")
         )
         
-        # Calculate sentiment on title + selftext
+        # Create a debug UDF that combines text AND logs it (forces execution)
+        def debug_combine_text_udf_func(title, selftext):
+            import sys
+            # Log the raw values we receive
+            print(f"DEBUG [POST-DATA]: title='{title}' (type={type(title).__name__}) selftext='{selftext}' (type={type(selftext).__name__})", file=sys.stderr)
+            
+            # Handle None values
+            if title is None:
+                title_str = ""
+            else:
+                title_str = str(title)
+            
+            if selftext is None or selftext == "":
+                return title_str
+            else:
+                return title_str + " " + str(selftext)
+        
+        from pyspark.sql.types import StringType
+        debug_combine_text_udf = udf(debug_combine_text_udf_func, StringType())
+        
+        # Use the debug UDF to create combined_text (forces it to execute)
         posts_with_sentiment = posts_exploded.withColumn(
             "combined_text",
-            when(col("selftext").isNotNull(), 
-                 col("title") + " " + col("selftext"))
-            .otherwise(col("title"))
+            debug_combine_text_udf(col("title"), col("selftext"))
         ).withColumn(
             "sentiment_score",
             sentiment_udf(col("combined_text"))
@@ -254,7 +326,7 @@ class RedditSentimentStreaming:
         Returns:
             Processed DataFrame with sentiment metrics
         """
-        sentiment_udf = self.create_sentiment_udf()
+        sentiment_udf = self.create_comment_sentiment_udf()
         
         # Explode potential_movies
         comments_exploded = comments_df.select(

@@ -15,6 +15,7 @@
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 ```bash
 # Start all services
 cd /home/veil/Documents/GitHub/movie-data-analysis-pipeline
@@ -32,100 +33,260 @@ curl http://localhost:8000/api/v1/health | jq .status
 
 ---
 
+## 📚 Understanding Old vs New Movies in Lambda Architecture
+
+### The 48-Hour Window
+
+This pipeline uses **Lambda Architecture** with two data layers:
+
+**Batch Layer (Historical Data):**
+- Source: TMDB API metadata + historical reviews
+- Coverage: ~311 movies from TMDB popular/top_rated/now_playing/upcoming
+- Update frequency: Daily batch processing
+- Database: `moviedb.batch_views` collection
+- Data age: Can be months or years old
+
+**Speed Layer (Real-Time Data):**
+- Source: Reddit discussions (r/movies, r/boxoffice, r/TrueFilm)
+- Coverage: Only movies discussed in **last 48 hours**
+- Update frequency: Every 5 minutes (Spark streaming)
+- Database: `moviedb.speed_views` collection (48h TTL)
+- Data age: Maximum 48 hours
+
+### Test Case Categories
+
+| Movie Type | Batch Data | Speed Data | Use Cases |
+|------------|------------|------------|-----------|
+| **Old Movies** (pre-2024) | ✅ Yes | ❌ No | Historical analysis, baseline comparisons |
+| **New Movies** (2024-2025) | ✅ Yes | ✅ Yes (if discussed) | Real-time monitoring, crisis detection, viral trends |
+
+### Key Testing Distinctions
+
+**When Testing Old Movies:**
+- Expect `data_sources.speed = null`
+- Expect empty `breakdown` arrays
+- Expect low `confidence` scores (< 0.5)
+- Expect zero `reddit_mentions`
+- Still useful for: genre baselines, franchise comparisons, historical context
+
+**When Testing New Movies:**
+- Expect `data_sources.speed` with recent timestamp
+- Expect populated `breakdown` arrays (hourly sentiment)
+- Expect high `confidence` scores (≥ 0.7)
+- Expect non-zero `reddit_mentions`
+- Enables: real-time crisis detection, viral identification, velocity tracking
+
+### Movies Available for Testing
+
+**Old Movies (Batch Only):**
+- The Flash (2023, movie_id: 298618)
+- Oppenheimer (2023, movie_id: 872585)
+- Barbie (2023, movie_id: 346698)
+
+**New Movies (Batch + Speed):**
+- Wicked (2024, movie_id: 402431)
+- Nosferatu (2024, movie_id: 748783)
+- Mufasa: The Lion King (2024, movie_id: 762509)
+- Zootopia 2 (2025, movie_id: 1084242)
+
+> **Note:** New movie speed data depends on active Reddit discussions. If Reddit isn't talking about a 2024 movie, it will behave like an old movie (batch only).
+
+---
+
 ## 🎯 Goal #1: PR Crisis Detection & Sentiment Monitoring
 
 ### Purpose
 Detect when current Reddit discussion sentiment drops significantly below historical TMDB baselines to alert PR teams for immediate response.
 
-### API Endpoint
+### API Endpoints
 ```bash
-GET /api/v1/movies/{movie_title}/sentiment
+GET /api/v1/movies/{movie_id}/sentiment        # By TMDB movie ID
+GET /api/v1/movies/by-title/{title}/sentiment  # By movie title
 ```
 
-### Test Case 1: Detect Crisis (Sentiment Drop > 3σ)
+---
 
-**Test a movie with potential negative sentiment:**
+### Test Case 1A: Old Movie (No Real-Time Reddit Data)
+
+**Scenario:** Testing a 2023 movie with no recent Reddit discussions
+
+**Test "The Flash" (2023 release, not currently trending):**
 ```bash
-curl -s "http://localhost:8000/api/v1/movies/The%20Flash/sentiment" | jq .
+curl -s "http://localhost:8000/api/v1/movies/by-title/The%20Flash/sentiment" | jq .
 ```
 
-**What to Verify:**
+**Expected Response:**
 ```json
 {
-  "current_sentiment": {
-    "score": 0.3,           // ✅ Current Reddit sentiment
-    "label": "positive",
-    "sample_size": 120
+  "movie_id": 298618,
+  "title": "The Flash",
+  "sentiment": {
+    "overall_score": 0.0,          // ✅ No recent sentiment data
+    "label": "neutral",
+    "positive_count": 0,
+    "negative_count": 0,
+    "neutral_count": 0,
+    "total_reviews": 0,            // ✅ No Reddit reviews in 48h window
+    "velocity": 0,
+    "confidence": 0.3              // ✅ Low confidence - batch data only
   },
-  "genre_baseline": {
-    "genre": "Action",
-    "avg_sentiment": 0.65,  // ✅ Historical genre baseline
-    "stddev": 0.15
-  },
-  "crisis_detection": {
-    "is_crisis": true,       // ✅ Crisis detected!
-    "severity": "warning",   // ✅ or "critical"
-    "deviation_sigma": 2.3,  // ✅ How many σ below baseline
-    "message": "WARNING: Sentiment 0.35 below baseline..."
-  },
-  "sentiment_velocity": {
-    "value": -0.08,          // ✅ Sentiment dropping
-    "direction": "decreasing"
+  "breakdown": [],                 // ✅ Empty - no speed layer data
+  "data_sources": {
+    "batch": "2025-12-13T01:16:41.221826",  // ✅ Historical batch data only
+    "speed": null                  // ✅ No recent Reddit data
   }
 }
 ```
 
+**What This Tests:**
+- ✅ API handles movies with **no active Reddit discussions**
+- ✅ Returns batch layer data when speed layer is empty
+- ✅ Indicates low confidence when only historical data exists
+- ✅ Empty breakdown array when no hourly data available
+
+**Use Cases:**
+- Older movies (pre-2024)
+- Movies not currently being discussed
+- Movies outside Reddit's popular subreddits
+
 **Success Criteria:**
-- ✅ `is_crisis: true` when sentiment drops > 3σ below genre baseline
-- ✅ `severity` shows "warning" (2-3σ) or "critical" (>3σ)
-- ✅ `sentiment_velocity` shows direction of sentiment change
+- ✅ Returns 200 OK (not 404)
+- ✅ `speed` data source is `null`
+- ✅ `confidence` is low (< 0.5)
 - ✅ Response time < 100ms
 
-### Test Case 2: Normal Sentiment (No Crisis)
+---
 
-**Test a well-received movie:**
+### Test Case 1B: New Movie (Active Reddit Discussions)
+
+**Scenario:** Testing a 2024/2025 movie with current Reddit buzz
+
+**Test "Wicked" (2024 release, currently trending):**
 ```bash
-curl -s "http://localhost:8000/api/v1/movies/Oppenheimer/sentiment" | jq .
+curl -s "http://localhost:8000/api/v1/movies/by-title/Wicked/sentiment" | jq .
 ```
 
-**What to Verify:**
+**Expected Response:**
 ```json
 {
-  "current_sentiment": {"score": 0.85},
-  "genre_baseline": {"avg_sentiment": 0.65},
-  "crisis_detection": {
-    "is_crisis": false,      // ✅ No crisis
-    "severity": "none",
-    "message": "Sentiment within normal range"
+  "movie_id": 402431,
+  "title": "Wicked",
+  "sentiment": {
+    "overall_score": 0.12,         // ✅ Real-time Reddit sentiment
+    "label": "positive",
+    "positive_count": 0,
+    "negative_count": 0,
+    "neutral_count": 0,
+    "total_reviews": 7,            // ✅ Reddit mentions in last 48h
+    "reddit_mentions": 7,          // ✅ Speed layer data
+    "velocity": 0,
+    "confidence": 0.85             // ✅ High confidence - fresh data
+  },
+  "breakdown": [                   // ✅ Hourly breakdown (newest first)
+    {
+      "date": "2025-12-14 18:00",
+      "avg_sentiment": 0.78,
+      "post_count": 0,
+      "data_type": "reddit_comment"
+    },
+    {
+      "date": "2025-12-14 17:00",
+      "avg_sentiment": 0.44,
+      "post_count": 0,
+      "data_type": "reddit_comment"
+    }
+  ],
+  "data_sources": {
+    "batch": "2025-12-13T01:16:17.256024",
+    "speed": "2025-12-15T01:16:17.258475"  // ✅ Recent speed layer update
   }
 }
 ```
 
+**What This Tests:**
+- ✅ API merges **batch + speed layer data**
+- ✅ Returns real-time Reddit sentiment from last 48 hours
+- ✅ Provides hourly breakdown sorted **newest first**
+- ✅ High confidence score with fresh data
+- ✅ Shows both `total_reviews` and `reddit_mentions`
+
+**Use Cases:**
+- New releases (2024-2025)
+- Movies currently trending on Reddit
+- Active marketing campaigns
+
 **Success Criteria:**
-- ✅ `is_crisis: false` when sentiment is normal
-- ✅ Positive deviation shown when movie outperforms baseline
+- ✅ Returns 200 OK
+- ✅ `speed` data source has recent timestamp
+- ✅ `confidence` is high (≥ 0.7)
+- ✅ `breakdown` array contains entries (sorted newest first)
+- ✅ `reddit_mentions` > 0
+- ✅ Response time < 100ms
 
-### Test Case 3: Franchise Comparison
+---
 
-**Test a franchise movie:**
+### Test Case 1C: Compare Old vs New Movie Side-by-Side
+
+**Run both tests and compare:**
 ```bash
-curl -s "http://localhost:8000/api/v1/movies/Dune%20Part%20Two/sentiment" | jq .
+echo "=== OLD MOVIE (The Flash 2023) ===" && \
+curl -s "http://localhost:8000/api/v1/movies/by-title/The%20Flash/sentiment" | jq '{
+  title, 
+  reddit_mentions: .sentiment.reddit_mentions,
+  confidence: .sentiment.confidence,
+  has_speed_data: (.data_sources.speed != null),
+  breakdown_count: (.breakdown | length)
+}'
+
+echo -e "\n=== NEW MOVIE (Wicked 2024) ===" && \
+curl -s "http://localhost:8000/api/v1/movies/by-title/Wicked/sentiment" | jq '{
+  title,
+  reddit_mentions: .sentiment.reddit_mentions, 
+  confidence: .sentiment.confidence,
+  has_speed_data: (.data_sources.speed != null),
+  breakdown_count: (.breakdown | length)
+}'
 ```
 
-**What to Verify:**
-```json
+**Expected Comparison:**
+```
+=== OLD MOVIE (The Flash 2023) ===
 {
-  "genre_baseline": {"genre": "Sci-Fi", "avg_sentiment": 0.70},
-  "franchise_baseline": {
-    "franchise": "Dune",    // ✅ Franchise baseline available
-    "avg_sentiment": 0.78
-  }
+  "title": "The Flash",
+  "reddit_mentions": null,          // ✅ No recent mentions
+  "confidence": 0.3,                // ✅ Low confidence
+  "has_speed_data": false,          // ✅ No speed layer
+  "breakdown_count": 0              // ✅ Empty breakdown
+}
+
+=== NEW MOVIE (Wicked 2024) ===
+{
+  "title": "Wicked",
+  "reddit_mentions": 7,             // ✅ Active discussions
+  "confidence": 0.85,               // ✅ High confidence
+  "has_speed_data": true,           // ✅ Speed layer present
+  "breakdown_count": 17             // ✅ Hourly breakdown
 }
 ```
 
+---
+
+### Test Case 1D: Title vs ID Access
+
+**Both endpoints should work:**
+```bash
+# Access by title (user-friendly)
+curl -s "http://localhost:8000/api/v1/movies/by-title/Zootopia/sentiment" | jq '.movie_id'
+
+# Access by ID (programmatic)
+curl -s "http://localhost:8000/api/v1/movies/269149/sentiment" | jq '.title'
+```
+
 **Success Criteria:**
-- ✅ Both genre AND franchise baselines shown
-- ✅ Crisis detection compares against genre baseline
+- ✅ Both return same movie data
+- ✅ Title lookup handles URL encoding
+- ✅ ID lookup handles numeric input
+- ✅ Both endpoints have same response schema
 
 ### Automated Test
 ```bash
@@ -148,9 +309,30 @@ TestCrisisDetection::test_genre_baseline_comparison PASSED
 Identify breakout content by comparing real-time Reddit engagement velocity against historical viral thresholds to enable marketing amplification.
 
 ### API Endpoint
+
 ```bash
 GET /api/v1/trending/movies
 ```
+
+### 📊 Understanding Viral Detection: Old vs New Movies
+
+**Old Movies (No Speed Layer Data):**
+- Will NOT appear in trending endpoint
+- No real-time Reddit velocity metrics available
+- Historical viral thresholds exist but no current comparison possible
+
+**New Movies (With Speed Layer Data):**
+- Appear in trending endpoint if Reddit activity detected
+- Real-time upvote/comment/award velocity calculated from 48h window
+- Viral coefficient shows current activity vs historical thresholds
+- Updated every 5 minutes as Spark processes Reddit streams
+
+**Why This Matters:**
+- Trending endpoint only returns movies with **recent Reddit activity**
+- Old movies like "The Flash" (2023) won't show up unless Reddit discusses them again
+- New releases like "Wicked" (2024) will appear if they have current buzz
+
+---
 
 ### Test Case 1: Identify Viral Movies (Coefficient > 1.0)
 

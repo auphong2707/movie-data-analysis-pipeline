@@ -15,6 +15,7 @@ from mongodb.client import get_database
 from query_engine.view_merger import ViewMerger
 from query_engine.recommendation_engine import RecommendationEngine
 from query_engine.cache_manager import get_cache_manager
+from api.metrics import record_recommendation_request, record_dual_success_score
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,9 @@ async def get_similar_movies(
                 detail=f"Movie {movie_id} not found or no similar movies available"
             )
         
+        # Record recommendation request
+        record_recommendation_request(recommendation_type="similar")
+        
         response = {
             'source_movie_id': movie_id,
             'recommendations': recommendations,
@@ -146,6 +150,9 @@ async def get_genre_recommendations(
             min_rating=min_rating,
             sort_by=sort_by
         )
+        
+        # Record recommendation request
+        record_recommendation_request(recommendation_type="genre")
         
         response = {
             'genre': genre,

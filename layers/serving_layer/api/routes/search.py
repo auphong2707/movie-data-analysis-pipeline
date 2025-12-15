@@ -93,16 +93,17 @@ async def search_movies(
             offset=offset
         )
         
-        # Format results
+        # Format results for movie_intelligence schema
         formatted_results = {
             'results': [
                 {
-                    'genre': r.get('genre'),
-                    'year': r.get('year'),
-                    'month': r.get('month'),
-                    'total_movies': r.get('total_movies', 0),
-                    'avg_rating': round(r.get('avg_rating', 0), 2),
-                    'avg_popularity': round(r.get('avg_popularity', 0), 2)
+                    'movie_id': r.get('movie_id'),
+                    'title': r.get('title', 'Unknown'),
+                    'genre': r.get('genre', r.get('genres', [])),
+                    'release_year': r.get('release_year'),
+                    'vote_average': round(r.get('vote_average', 0), 2) if r.get('vote_average') is not None else 0.0,
+                    'vote_count': r.get('vote_count', 0),
+                    'popularity': round(r.get('popularity', 0), 2) if r.get('popularity') is not None else 0.0
                 }
                 for r in results['results']
             ],
@@ -154,21 +155,34 @@ async def search_genres(
         if cached:
             return cached
         
-        # Get all genre analytics
-        all_genres = queries.get_batch_genre_analytics()
+        # Extract unique genres from movie_intelligence view
+        db = get_database()
+        pipeline = [
+            {"$match": {"view_type": "movie_intelligence"}},
+            {"$project": {
+                "genre": 1,
+                "vote_average": 1
+            }},
+            {"$group": {
+                "_id": "$genre",
+                "total_movies": {"$sum": 1},
+                "avg_rating": {"$avg": "$vote_average"}
+            }},
+            {"$sort": {"total_movies": -1}}
+        ]
         
-        # Extract unique genres with counts
+        all_genres = list(db.batch_views.aggregate(pipeline))
+        
+        # Format genre stats
         genre_stats = {}
         for g in all_genres:
-            genre_name = g.get('genre')
+            genre_name = g.get('_id')
             if genre_name:
-                if genre_name not in genre_stats:
-                    genre_stats[genre_name] = {
-                        'genre': genre_name,
-                        'total_movies': 0,
-                        'avg_rating': 0
-                    }
-                genre_stats[genre_name]['total_movies'] += g.get('total_movies', 0)
+                genre_stats[genre_name] = {
+                    'genre': genre_name,
+                    'total_movies': g.get('total_movies', 0),
+                    'avg_rating': round(g.get('avg_rating', 0), 2)
+                }
         
         # Filter by query if provided
         if q:

@@ -645,6 +645,11 @@ cd visualization/grafana
 4. **Movie Analytics Overview** - Overall analytics
 5. **Trending Movies Dashboard** - Viral content trends
 
+**⚠️ Missing Business-Focused Dashboards:**
+- **PR Crisis Detection Dashboard** - Real-time sentiment drops, crisis alerts by severity, genre baselines
+- **Viral Content Dashboard** - Viral coefficient tracking, cross-subreddit spread, engagement velocity
+- **Recommendation Performance Dashboard** - Dual-success score distribution, recommendation click-through, A/B test results
+
 ---
 
 ## 🔍 Troubleshooting

@@ -10,6 +10,7 @@ import logging
 from mongodb.client import get_database
 from query_engine.view_merger import ViewMerger
 from query_engine.cache_manager import get_cache_manager, cache_response
+from api.metrics import record_crisis_alert
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,17 @@ async def get_movie_sentiment(
                 status_code=404,
                 detail=f"Sentiment data for movie {movie_id} not found"
             )
+        
+        # Check for PR crisis (sentiment drop)
+        sentiment_data = result['sentiment']
+        overall_score = sentiment_data.get('overall_score', 0)
+        sentiment_label = sentiment_data.get('label', 'neutral')
+        
+        # Record crisis alert if sentiment is negative or very low
+        if sentiment_label == 'negative' or overall_score < 0.3:
+            record_crisis_alert(severity="warning")
+        elif sentiment_label == 'very_negative' or overall_score < 0.1:
+            record_crisis_alert(severity="critical")
         
         # Format response per README
         response = {

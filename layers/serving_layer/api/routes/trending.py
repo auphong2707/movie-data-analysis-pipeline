@@ -9,6 +9,7 @@ import logging
 from mongodb.client import get_database
 from query_engine.view_merger import ViewMerger
 from query_engine.cache_manager import get_cache_manager
+from api.metrics import record_viral_detection
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ async def get_trending_movies(
                 'timestamp': None,
                 'message': 'No viral content found in time window'
             }
+        
+        # Record viral detection metric
+        viral_count = len(response.get('viral_movies', []))
+        if viral_count > 0:
+            record_viral_detection(genre=genre or "all")
         
         # Cache result (short TTL - viral trends change fast)
         cache.set(cache_key, response, ttl_seconds=300)  # 5 minutes

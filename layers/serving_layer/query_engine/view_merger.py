@@ -11,6 +11,8 @@ from pymongo.database import Database
 import logging
 import math
 
+from .utils import normalize_title, fuzzy_match_title, extract_base_title
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,74 @@ class ViewMerger:
             Cutoff datetime (UTC)
         """
         return datetime.utcnow() - timedelta(hours=self.cutoff_hours)
+    
+    def _find_movie_intelligence(self, movie_title_key: str) -> Optional[Dict]:
+        """
+        Find movie intelligence with fuzzy matching fallback
+        
+        Strategy:
+        1. Try exact match on title field
+        2. Try exact match on data.title field (nested schema)
+        3. Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
+        4. Try fuzzy matching against all movie_intelligence docs
+        
+        Args:
+            movie_title_key: Movie title from speed layer
+            
+        Returns:
+            Movie intelligence document or None if not found
+        """
+        # Try exact match first (flat schema)
+        movie_intel = self.batch_views.find_one({
+            "view_type": "movie_intelligence",
+            "title": movie_title_key
+        })
+        
+        if movie_intel:
+            logger.debug(f"Exact match found for '{movie_title_key}'")
+            return movie_intel
+        
+        # Try nested schema
+        movie_intel = self.batch_views.find_one({
+            "view_type": "movie_intelligence",
+            "data.title": movie_title_key
+        })
+        
+        if movie_intel:
+            logger.debug(f"Exact match found in nested schema for '{movie_title_key}'")
+            return movie_intel
+        
+        # Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
+        base_title = extract_base_title(movie_title_key)
+        if base_title != movie_title_key:
+            movie_intel = self.batch_views.find_one({
+                "view_type": "movie_intelligence",
+                "$or": [
+                    {"title": base_title},
+                    {"data.title": base_title}
+                ]
+            })
+            
+            if movie_intel:
+                logger.info(f"Base title match: '{movie_title_key}' -> '{base_title}'")
+                return movie_intel
+        
+        # Try fuzzy matching (more expensive, limit results)
+        normalized_search = normalize_title(movie_title_key)
+        
+        # Get all movie_intelligence docs and fuzzy match
+        candidates = self.batch_views.find(
+            {"view_type": "movie_intelligence"}
+        ).limit(1000)  # Limit to avoid performance issues
+        
+        for candidate in candidates:
+            candidate_title = candidate.get("title") or candidate.get("data", {}).get("title")
+            if candidate_title and fuzzy_match_title(movie_title_key, candidate_title, threshold=0.85):
+                logger.info(f"Fuzzy matched '{movie_title_key}' -> '{candidate_title}'")
+                return candidate
+        
+        logger.warning(f"No match found for movie_title: '{movie_title_key}'")
+        return None
     
     def merge_movie_views(
         self,
@@ -276,12 +346,22 @@ class ViewMerger:
                     
                     # Create breakdown from speed layer hourly data
                     if 'hour' in doc:
-                        breakdown.append({
-                            'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
-                            'avg_sentiment': avg_sentiment,
-                            'post_count': post_count,
-                            'data_type': doc.get('data_type', 'reddit')
-                        })
+                        data_type = doc.get('data_type', 'reddit')
+                        # Use appropriate field name based on data type
+                        if data_type == 'reddit_comment':
+                            breakdown.append({
+                                'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
+                                'avg_sentiment': avg_sentiment,
+                                'comment_count': post_count,
+                                'data_type': data_type
+                            })
+                        else:
+                            breakdown.append({
+                                'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
+                                'avg_sentiment': avg_sentiment,
+                                'post_count': post_count,
+                                'data_type': data_type
+                            })
             
             # Calculate weighted average sentiment from speed layer
             if total_post_count > 0:
@@ -1106,12 +1186,11 @@ class ViewMerger:
             {
                 "$group": {
                     "_id": "$movie_title",
-                    "total_upvotes": {"$sum": "$metrics.upvotes"},
-                    "total_comments": {"$sum": "$metrics.num_comments"},
-                    "total_awards": {"$sum": "$metrics.awards"},
-                    "avg_sentiment": {"$avg": "$metrics.sentiment_score"},
-                    "post_count": {"$sum": 1},
-                    "subreddits": {"$addToSet": "$subreddit"},
+                    "total_upvotes": {"$sum": "$metrics.total_upvotes"},
+                    "total_comments": {"$sum": "$metrics.total_comments"},
+                    "total_awards": {"$sum": "$metrics.total_awards"},
+                    "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
+                    "post_count": {"$sum": "$metrics.post_count"},
                     "earliest_hour": {"$min": "$hour"},
                     "latest_hour": {"$max": "$hour"}
                 }
@@ -1133,7 +1212,18 @@ class ViewMerger:
             # Calculate time span in hours
             earliest = movie_data["earliest_hour"]
             latest = movie_data["latest_hour"]
-            time_span_hours = (latest - earliest).total_seconds() / 3600 if isinstance(earliest, datetime) else 1
+            
+            # Calculate time span - if earliest == latest, use cutoff window
+            if isinstance(earliest, datetime) and isinstance(latest, datetime):
+                time_span_hours = (latest - earliest).total_seconds() / 3600
+                if time_span_hours == 0:
+                    # All data has same timestamp - use cutoff window (48h default)
+                    time_span_hours = self.cutoff_hours
+                    # Adjust latest to reflect actual window
+                    latest = earliest + timedelta(hours=self.cutoff_hours)
+            else:
+                time_span_hours = self.cutoff_hours
+            
             time_span_hours = max(time_span_hours, 1)  # Avoid division by zero
             
             # Calculate velocities (per hour)
@@ -1145,7 +1235,7 @@ class ViewMerger:
             movie_intel = self._find_movie_intelligence(movie_title_key)
             
             if not movie_intel:
-                # Still not found - skip this movie
+                # No match found - skip this movie
                 continue
             
             # Handle both flat and nested schema for genres
@@ -1176,22 +1266,24 @@ class ViewMerger:
             
             # Step 5: Calculate viral coefficient
             # Viral coefficient = current velocity / threshold velocity
-            upvote_threshold = viral_threshold.get("vote_velocity_p99", 300)
-            comment_threshold = viral_threshold.get("comment_velocity_p99", 50)
-            engagement_threshold = viral_threshold.get("engagement_velocity_p99", 400)
+            upvote_threshold = viral_threshold.get("vote_velocity_p99", 300) or 300
+            comment_threshold = viral_threshold.get("comment_velocity_p99", 50) or 50
+            engagement_threshold = viral_threshold.get("engagement_velocity_p99", 400) or 400
             
-            # Calculate combined engagement velocity
-            engagement_velocity = upvote_velocity + comment_velocity
+            # Calculate combined engagement velocity (with null safety)
+            engagement_velocity = (upvote_velocity or 0) + (comment_velocity or 0)
             
-            # Viral coefficient (how many times above threshold)
-            viral_coefficient = engagement_velocity / engagement_threshold if engagement_threshold > 0 else 0
+            # Viral coefficient (how many times above threshold) - with null safety
+            if engagement_threshold and engagement_threshold > 0:
+                viral_coefficient = engagement_velocity / engagement_threshold
+            else:
+                viral_coefficient = 0.0
             
-            # Step 6: Calculate percentile ranking
-            percentile = min(99.9, 50 + (viral_coefficient - 1) * 20)  # Rough percentile estimate
-            
-            # Step 7: Track cross-subreddit spread
-            subreddit_count = len(movie_data["subreddits"])
-            cross_subreddit_spread = subreddit_count > 3  # Viral if spreading across 4+ subreddits
+            # Step 6: Calculate percentile ranking (with null safety)
+            if viral_coefficient is not None:
+                percentile = min(99.9, 50 + (viral_coefficient - 1) * 20)  # Rough percentile estimate
+            else:
+                percentile = 0.0
             
             # Only include if above viral threshold
             if viral_coefficient >= viral_coefficient_threshold:
@@ -1199,12 +1291,12 @@ class ViewMerger:
                     "movie_title": movie_title_key,
                     "genre": primary_genre,
                     "viral_metrics": {
-                        "viral_coefficient": round(viral_coefficient, 2),
-                        "percentile_rank": round(percentile, 1),
-                        "upvote_velocity": round(upvote_velocity, 1),
-                        "comment_velocity": round(comment_velocity, 1),
-                        "award_velocity": round(award_velocity, 2),
-                        "engagement_velocity": round(engagement_velocity, 1)
+                        "viral_coefficient": round(viral_coefficient, 2) if viral_coefficient is not None else 0.0,
+                        "percentile_rank": round(percentile, 1) if percentile is not None else 0.0,
+                        "upvote_velocity": round(upvote_velocity, 1) if upvote_velocity is not None else 0.0,
+                        "comment_velocity": round(comment_velocity, 1) if comment_velocity is not None else 0.0,
+                        "award_velocity": round(award_velocity, 2) if award_velocity is not None else 0.0,
+                        "engagement_velocity": round(engagement_velocity, 1) if engagement_velocity is not None else 0.0
                     },
                     "thresholds": {
                         "upvote_p99": upvote_threshold,
@@ -1216,10 +1308,7 @@ class ViewMerger:
                         "total_comments": movie_data["total_comments"],
                         "total_awards": movie_data["total_awards"],
                         "avg_sentiment": round(movie_data["avg_sentiment"], 3),
-                        "post_count": movie_data["post_count"],
-                        "subreddit_count": subreddit_count,
-                        "cross_subreddit_spread": cross_subreddit_spread,
-                        "subreddits": movie_data["subreddits"]
+                        "post_count": movie_data["post_count"]
                     },
                     "viral_status": "viral" if viral_coefficient >= 1.0 else "trending",
                     "time_window": {

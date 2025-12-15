@@ -121,31 +121,6 @@ class MovieQueries:
     
     # --- Speed Layer Queries ---
     
-    def get_speed_movie_stats(
-        self,
-        movie_id: int,
-        hours_back: int = 48
-    ) -> List[Dict]:
-        """
-        Get real-time movie statistics from speed layer
-        
-        Args:
-            movie_id: TMDB movie ID
-            hours_back: How many hours back to query
-        
-        Returns:
-            List of speed view documents
-        """
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours_back)
-        
-        query = {
-            'movie_id': movie_id,
-            'data_type': 'stats',
-            'hour': {'$gte': cutoff_time}
-        }
-        
-        return list(self.speed_views.find(query).sort('hour', DESCENDING))
-    
     def get_speed_sentiment(
         self,
         movie_id: Optional[int] = None,
@@ -287,34 +262,46 @@ class MovieQueries:
         Returns:
             Search results with pagination info
         """
-        # Build query
-        search_query = {'view_type': 'genre_analytics'}
+        # Build query for movie_intelligence view
+        search_query = {'view_type': 'movie_intelligence'}
         
+        # Text search on title
+        if query:
+            search_query['title'] = {'$regex': query, '$options': 'i'}
+        
+        # Genre filter (handle both flat 'genre' and array 'genres')
         if genre:
-            search_query['genre'] = genre
+            search_query['$or'] = [
+                {'genre': genre},
+                {'genres': genre}
+            ]
         
+        # Year filter (extract from release_year or release_date)
         if year_from or year_to:
-            search_query['year'] = {}
+            year_query = {}
             if year_from:
-                search_query['year']['$gte'] = year_from
+                year_query['$gte'] = year_from
             if year_to:
-                search_query['year']['$lte'] = year_to
+                year_query['$lte'] = year_to
+            search_query['release_year'] = year_query
         
+        # Rating filter
         if rating_min or rating_max:
-            search_query['avg_rating'] = {}
+            rating_query = {}
             if rating_min:
-                search_query['avg_rating']['$gte'] = rating_min
+                rating_query['$gte'] = rating_min
             if rating_max:
-                search_query['avg_rating']['$lte'] = rating_max
+                rating_query['$lte'] = rating_max
+            search_query['vote_average'] = rating_query
         
-        # Sort mapping (aligned with actual batch_views schema)
+        # Sort mapping for movie_intelligence view
         sort_map = {
-            'rating': ('avg_rating', DESCENDING),
+            'rating': ('vote_average', DESCENDING),
             'sentiment': ('avg_sentiment', DESCENDING),
-            'viral_score': ('viral_coefficient', DESCENDING),
-            'release_date': ('year', DESCENDING)
+            'viral_score': ('popularity', DESCENDING),  # Use popularity as proxy
+            'release_date': ('release_year', DESCENDING)
         }
-        sort_field, sort_order = sort_map.get(sort_by, ('avg_rating', DESCENDING))
+        sort_field, sort_order = sort_map.get(sort_by, ('vote_average', DESCENDING))
         
         # Execute query
         cursor = self.batch_views.find(search_query).sort(sort_field, sort_order)

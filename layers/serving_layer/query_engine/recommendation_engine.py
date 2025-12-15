@@ -43,34 +43,53 @@ class RecommendationEngine:
         
         Then re-ranked by trending and sentiment
         """
-        # Get source movie
+        # Get source movie from movie_intelligence view
         source = self.batch_views.find_one({
             'movie_id': movie_id,
-            'view_type': 'movie_details'
+            'view_type': 'movie_intelligence'
         })
         
-        if not source or 'data' not in source:
+        if not source:
             logger.warning(f"Movie {movie_id} not found in database")
             return []
         
-        source_data = source['data']
-        source_genres = self._extract_genres(source_data.get('genres', []))
+        # Handle both flat and nested schema
+        source_data = source.get('data', source)
+        
+        # Extract genres - check both 'genre' (string) and 'genres' (array)
+        genres_field = source_data.get('genres', [])
+        genre_field = source_data.get('genre')
+        if genre_field and not genres_field:
+            genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
+        
+        source_genres = self._extract_genres(genres_field)
         source_year = self._extract_year(source_data.get('release_date'))
         source_rating = source_data.get('vote_average', 0)
         
-        # Find candidates with genre overlap
+        # Find candidates with genre overlap from movie_intelligence view
         candidates = []
-        for movie in self.batch_views.find({
-            'view_type': 'movie_details',
+        
+        # Query both flat and nested genre fields
+        query = {
+            'view_type': 'movie_intelligence',
             'movie_id': {'$ne': movie_id},
-            'data.genres': {'$in': list(source_genres)}
-        }).limit(200):
+            '$or': [
+                {'genres': {'$in': list(source_genres)}},
+                {'genre': {'$in': list(source_genres)}}
+            ]
+        }
+        
+        for movie in self.batch_views.find(query).limit(200):
+            # Handle both flat and nested schema
+            data = movie.get('data', movie)
             
-            if 'data' not in movie:
-                continue
+            # Extract genres - check both 'genre' (string) and 'genres' (array)
+            genres_field = data.get('genres', [])
+            genre_field = data.get('genre')
+            if genre_field and not genres_field:
+                genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
             
-            data = movie['data']
-            movie_genres = self._extract_genres(data.get('genres', []))
+            movie_genres = self._extract_genres(genres_field)
             movie_year = self._extract_year(data.get('release_date'))
             movie_rating = data.get('vote_average', 0)
             
@@ -147,25 +166,44 @@ class RecommendationEngine:
         sort_by: str = 'hybrid'
     ) -> List[Dict[str, Any]]:
         """
-        Get top movies in genre with hybrid ranking
+        Get top movies in genre with hybrid ranking (real-time from movie_intelligence)
         """
-        # Get movies in genre
-        movies = list(self.batch_views.find({
-            'view_type': 'movie_details',
-            'data.genres': genre,
-            'data.vote_average': {'$gte': min_rating}
-        }).limit(100))
+        # Query movie_intelligence view - handle both flat and nested schema
+        query = {
+            'view_type': 'movie_intelligence',
+            '$and': [
+                {
+                    '$or': [
+                        {'genres': genre},  # Nested schema (array)
+                        {'genre': genre}    # Flat schema (string)
+                    ]
+                },
+                {
+                    '$or': [
+                        {'vote_average': {'$gte': min_rating}},  # Flat schema
+                        {'data.vote_average': {'$gte': min_rating}}  # Nested schema
+                    ]
+                }
+            ]
+        }
+        
+        movies = list(self.batch_views.find(query).limit(100))
         
         candidates = []
         for movie in movies:
-            if 'data' not in movie:
-                continue
+            # Handle both flat and nested schema
+            data = movie.get('data', movie)
             
-            data = movie['data']
+            # Extract genres - check both 'genre' (string) and 'genres' (array)
+            genres_field = data.get('genres', [])
+            genre_field = data.get('genre')
+            if genre_field and not genres_field:
+                genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
+            
             candidates.append({
                 'movie_id': movie['movie_id'],
                 'title': data.get('title', 'Unknown'),
-                'genres': data.get('genres', []),
+                'genres': genres_field,
                 'release_date': data.get('release_date'),
                 'vote_average': data.get('vote_average', 0),
                 'vote_count': data.get('vote_count', 0),

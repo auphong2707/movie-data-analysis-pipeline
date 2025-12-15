@@ -481,10 +481,10 @@ services:
       - movie-pipeline
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 2>&1 | grep -q ApiVersion || exit 1"]
-      interval: 20s
-      timeout: 15s
-      retries: 15
-      start_period: 60s
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
   # Kafka Broker 2
@@ -523,10 +523,10 @@ services:
       - movie-pipeline
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9093 2>&1 | grep -q ApiVersion || exit 1"]
-      interval: 20s
-      timeout: 15s
-      retries: 15
-      start_period: 60s
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
   # Kafka Broker 3
@@ -565,10 +565,10 @@ services:
       - movie-pipeline
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9094 2>&1 | grep -q ApiVersion || exit 1"]
-      interval: 20s
-      timeout: 15s
-      retries: 15
-      start_period: 60s
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
     restart: unless-stopped
 
   # Schema Registry - Avro Schema Management
@@ -578,11 +578,11 @@ services:
     container_name: speed-schema-registry
     depends_on:
       speed-kafka-1:
-        condition: service_healthy
+        condition: service_started
       speed-kafka-2:
-        condition: service_healthy
+        condition: service_started
       speed-kafka-3:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "8081:8081"
     environment:
@@ -595,7 +595,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8081/"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
     restart: unless-stopped
 
   # Apache Cassandra - Speed Layer Storage (48h TTL)
@@ -667,7 +668,7 @@ services:
       speed-kafka-3:
         condition: service_healthy
       speed-schema-registry:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - .env
     environment:
@@ -678,7 +679,7 @@ services:
       - ./layers/speed_layer:/app
     networks:
       - movie-pipeline
-    restart: "no"
+    restart: on-failure
 
   # Reddit Stream Producer - JSON scraping (no auth needed)
   speed-reddit-producer:

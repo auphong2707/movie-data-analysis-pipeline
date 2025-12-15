@@ -90,7 +90,7 @@ cd "$PROJECT_ROOT"
 ################################################################################
 echo -e "${YELLOW}[1/6] Stopping speed layer containers...${NC}"
 
-docker-compose stop speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync 2>/dev/null || echo "  (containers not running)"
+docker compose stop speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync 2>/dev/null || echo "  (containers not running)"
 echo -e "${GREEN}✓ Containers stopped${NC}"
 echo ""
 
@@ -99,34 +99,52 @@ echo ""
 ################################################################################
 echo -e "${YELLOW}[2/6] Clearing Kafka topics...${NC}"
 
-# Ensure Kafka is running
-if ! docker-compose ps speed-kafka-1 | grep -q "Up"; then
+# Check if Kafka is running
+if ! docker compose ps speed-kafka-1 | grep -q "Up"; then
     echo "  → Starting Kafka cluster..."
-    docker-compose up -d speed-zookeeper speed-kafka-1 speed-kafka-2 speed-kafka-3
-    echo "  → Waiting for Kafka to be ready (30s)..."
-    sleep 30
+    docker compose up -d speed-zookeeper speed-kafka-1 speed-kafka-2 speed-kafka-3
+    echo "  → Waiting for Kafka to be ready (60s)..."
+    sleep 60
+else
+    echo "  → Kafka cluster already running"
+    # Still wait a bit to ensure it's fully ready
+    sleep 5
 fi
+
+# Verify Kafka is healthy
+echo "  → Verifying Kafka health..."
+for i in {1..30}; do
+    if docker compose exec -T speed-kafka-1 kafka-broker-api-versions --bootstrap-server kafka-1:29092 2>&1 | grep -q "ApiVersion"; then
+        echo "  ✓ Kafka is ready"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo -e "${RED}  ✗ Kafka did not become ready in time${NC}"
+        echo -e "${YELLOW}  Continuing anyway...${NC}"
+    fi
+    sleep 2
+done
 
 TOPICS=("reddit.posts" "reddit.comments")
 
 for topic in "${TOPICS[@]}"; do
     echo "  → Resetting topic: $topic"
     
-    # Delete topic
-    docker-compose exec -T speed-kafka-1 kafka-topics \
-        --bootstrap-server localhost:9092 \
+    # Delete topic (use internal network address)
+    docker compose exec -T speed-kafka-1 kafka-topics \
+        --bootstrap-server kafka-1:29092 \
         --delete --topic "$topic" 2>/dev/null || echo "    (doesn't exist)"
     
-    sleep 1
+    sleep 2
     
-    # Recreate topic
-    docker-compose exec -T speed-kafka-1 kafka-topics \
-        --bootstrap-server localhost:9092 \
+    # Recreate topic (use internal network address)
+    docker compose exec -T speed-kafka-1 kafka-topics \
+        --bootstrap-server kafka-1:29092 \
         --create --topic "$topic" \
         --partitions 3 \
         --replication-factor 3 \
         --config retention.ms=172800000 \
-        --config segment.ms=3600000
+        --config segment.ms=3600000 || echo "    (failed to create)"
 done
 
 echo -e "${GREEN}✓ Kafka topics reset${NC}"
@@ -138,22 +156,22 @@ echo ""
 echo -e "${YELLOW}[3/6] Resetting Cassandra keyspace...${NC}"
 
 # Ensure Cassandra is running
-if ! docker-compose ps speed-cassandra | grep -q "Up"; then
+if ! docker compose ps speed-cassandra | grep -q "Up"; then
     echo "  → Starting Cassandra..."
-    docker-compose up -d speed-cassandra
-    echo "  → Waiting for Cassandra to be ready (45s)..."
-    sleep 45
+    docker compose up -d speed-cassandra
+    echo "  → Waiting for Cassandra to be ready (60s)..."
+    sleep 60
 fi
 
 # Drop keyspace
 echo "  → Dropping speed_layer keyspace..."
-docker-compose exec -T speed-cassandra cqlsh -e "DROP KEYSPACE IF EXISTS speed_layer;" 2>/dev/null || echo "    (doesn't exist)"
+docker compose exec -T speed-cassandra cqlsh -e "DROP KEYSPACE IF EXISTS speed_layer;" 2>/dev/null || echo "    (doesn't exist)"
 
 sleep 2
 
 # Recreate from schema
 echo "  → Recreating keyspace and tables..."
-docker-compose exec -T speed-cassandra cqlsh < "$SCRIPT_DIR/cassandra_views/reddit_schema.cql"
+docker compose exec -T speed-cassandra cqlsh < "$SCRIPT_DIR/cassandra_views/reddit_schema.cql"
 
 echo -e "${GREEN}✓ Cassandra keyspace reset${NC}"
 echo ""
@@ -176,7 +194,7 @@ if [ -d "$SCRIPT_DIR/logs" ]; then
 fi
 
 # Clear container checkpoints (if volume is mounted)
-docker-compose exec -T speed-reddit-sentiment-stream bash -c 'rm -rf /opt/spark/checkpoints/* 2>/dev/null' || echo "  (container checkpoints cleared)"
+docker compose exec -T speed-reddit-sentiment-stream bash -c 'rm -rf /opt/spark/checkpoints/* 2>/dev/null' || echo "  (container checkpoints cleared)"
 
 echo -e "${GREEN}✓ Checkpoints and logs cleared${NC}"
 echo ""
@@ -186,9 +204,9 @@ echo ""
 ################################################################################
 echo -e "${YELLOW}[5/6] Clearing MongoDB speed_views...${NC}"
 
-if docker-compose ps serving-mongodb | grep -q "Up"; then
+if docker compose ps serving-mongodb | grep -q "Up"; then
     echo "  → Dropping speed_views collection..."
-    docker-compose exec -T serving-mongodb mongosh movie_data_pipeline \
+    docker compose exec -T serving-mongodb mongosh moviedb \
         --eval "db.speed_views.drop()" 2>/dev/null || echo "    (collection doesn't exist)"
     echo -e "${GREEN}✓ MongoDB speed_views cleared${NC}"
 else
@@ -202,19 +220,28 @@ echo ""
 echo -e "${YELLOW}[6/6] Removing speed layer volumes...${NC}"
 
 if [ "$REMOVE_VOLUMES" = true ]; then
-    echo "  → Stopping and removing ALL speed layer containers and volumes..."
-    docker-compose down
+    echo "  → Stopping speed layer containers..."
+    docker compose stop speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync \
+        speed-kafka-topics-init speed-schema-registry speed-cassandra speed-kafka-1 speed-kafka-2 speed-kafka-3 speed-zookeeper 2>/dev/null
+    
+    echo "  → Removing speed layer containers..."
+    docker compose rm -f speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync \
+        speed-kafka-topics-init speed-cassandra-init speed-schema-registry \
+        speed-cassandra speed-kafka-1 speed-kafka-2 speed-kafka-3 speed-zookeeper 2>/dev/null
+    
+    # Get the actual volume prefix (project directory name)
+    PROJECT_NAME=$(basename "$PROJECT_ROOT")
     
     # Remove specific speed layer volumes
     SPEED_VOLUMES=(
-        "movie-data-analysis-pipeline_speed-zookeeper-data"
-        "movie-data-analysis-pipeline_speed-zookeeper-logs"
-        "movie-data-analysis-pipeline_speed-kafka-broker1-data"
-        "movie-data-analysis-pipeline_speed-kafka-broker2-data"
-        "movie-data-analysis-pipeline_speed-kafka-broker3-data"
-        "movie-data-analysis-pipeline_speed-cassandra-data"
-        "movie-data-analysis-pipeline_speed-application-logs"
-        "movie-data-analysis-pipeline_speed-spark-checkpoints"
+        "${PROJECT_NAME}_speed-zookeeper-data"
+        "${PROJECT_NAME}_speed-zookeeper-logs"
+        "${PROJECT_NAME}_speed-kafka-broker1-data"
+        "${PROJECT_NAME}_speed-kafka-broker2-data"
+        "${PROJECT_NAME}_speed-kafka-broker3-data"
+        "${PROJECT_NAME}_speed-cassandra-data"
+        "${PROJECT_NAME}_speed-application-logs"
+        "${PROJECT_NAME}_speed-spark-checkpoints"
     )
     
     for volume in "${SPEED_VOLUMES[@]}"; do
@@ -235,7 +262,7 @@ echo ""
 ################################################################################
 if [ "$REBUILD_IMAGES" = true ]; then
     echo -e "${YELLOW}Rebuilding speed layer image...${NC}"
-    docker-compose build speed-layer
+    docker compose build speed-reddit-producer
     echo -e "${GREEN}✓ Image rebuilt${NC}"
     echo ""
 fi
@@ -245,7 +272,7 @@ fi
 ################################################################################
 echo -e "${YELLOW}Restarting speed layer services...${NC}"
 
-docker-compose up -d speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync
+docker compose up -d speed-reddit-producer speed-reddit-sentiment-stream speed-cassandra-mongo-sync
 
 echo ""
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"

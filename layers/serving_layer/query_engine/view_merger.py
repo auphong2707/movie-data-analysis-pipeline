@@ -1239,37 +1239,72 @@ class ViewMerger:
                 continue
             
             # Handle both flat and nested schema for genres
-            if "genres" in movie_intel:
-                movie_genres = movie_intel.get("genres", [])
+            # New schema: single "genre" field (string) - convert to array for consistency
+            # Old schema: "genres" field (array) or nested in "data"
+            if "genre" in movie_intel:
+                primary_genre = movie_intel.get("genre", "Unknown")
+                genres = [primary_genre] if primary_genre else ["Unknown"]
+            elif "genres" in movie_intel:
+                genres = movie_intel.get("genres", [])
+                if isinstance(genres, list) and genres:
+                    primary_genre = genres[0]
+                else:
+                    genres = ["Unknown"]
+                    primary_genre = "Unknown"
             else:
-                movie_genres = movie_intel.get("data", {}).get("genres", [])
-            
-            primary_genre = movie_genres[0] if isinstance(movie_genres, list) and movie_genres else "Unknown"
+                genres = movie_intel.get("data", {}).get("genres", [])
+                if isinstance(genres, list) and genres:
+                    primary_genre = genres[0]
+                else:
+                    genres = ["Unknown"]
+                    primary_genre = "Unknown"
             
             # Apply genre filter if specified
-            if genre and primary_genre != genre:
+            # Empty string or None means "All Genres" - no filtering
+            if genre and genre.strip() and primary_genre != genre:
                 continue
             
             # Step 4: Lookup viral threshold from batch layer
-            viral_threshold = self.batch_views.find_one({
+            # NOTE: Current batch layer viral_threshold represents TMDB vote_count p99,
+            # NOT Reddit engagement velocity. This is a schema mismatch.
+            # For now, we use reasonable Reddit-specific defaults until batch layer
+            # is updated to calculate Reddit velocity thresholds.
+            
+            viral_threshold_doc = self.batch_views.find_one({
                 "view_type": "viral_threshold",
                 "genre": primary_genre
             })
             
-            if not viral_threshold:
-                # Use default thresholds if no genre-specific threshold found
-                viral_threshold = {
-                    "vote_velocity_p99": 300,  # Default threshold
-                    "comment_velocity_p99": 50,
-                    "engagement_velocity_p99": 400
-                }
+            if not viral_threshold_doc:
+                # Try to get global threshold (genre=null)
+                viral_threshold_doc = self.batch_views.find_one({
+                    "view_type": "viral_threshold",
+                    "genre": None
+                })
+            
+            # Use Reddit-specific velocity thresholds (per hour)
+            # Based on typical Reddit engagement patterns for movie discussions
+            if viral_threshold_doc:
+                # Use genre as indicator of baseline engagement, scaled appropriately
+                # Higher vote_count genres typically have higher Reddit engagement
+                base_vote_count = viral_threshold_doc.get("viral_threshold", 1000)
+                # Scale down from vote_count (thousands) to hourly velocity (tens)
+                # Assumption: viral movies get ~1% of their total votes per hour during viral period
+                scale_factor = 0.01
+                base_velocity = max(base_vote_count * scale_factor, 10.0)
+                
+                upvote_threshold = base_velocity * 0.7  # 70% upvotes
+                comment_threshold = base_velocity * 0.3  # 30% comments
+                engagement_threshold = base_velocity
+            else:
+                # Use default thresholds for Reddit hourly velocity
+                # These represent typical "viral" thresholds for movie subreddits
+                upvote_threshold = 50.0  # 50 upvotes per hour
+                comment_threshold = 20.0  # 20 comments per hour
+                engagement_threshold = 70.0  # 70 total engagements per hour
             
             # Step 5: Calculate viral coefficient
             # Viral coefficient = current velocity / threshold velocity
-            upvote_threshold = viral_threshold.get("vote_velocity_p99", 300) or 300
-            comment_threshold = viral_threshold.get("comment_velocity_p99", 50) or 50
-            engagement_threshold = viral_threshold.get("engagement_velocity_p99", 400) or 400
-            
             # Calculate combined engagement velocity (with null safety)
             engagement_velocity = (upvote_velocity or 0) + (comment_velocity or 0)
             
@@ -1287,9 +1322,22 @@ class ViewMerger:
             
             # Only include if above viral threshold
             if viral_coefficient >= viral_coefficient_threshold:
+                # Get TMDB data from movie intelligence
+                vote_average = movie_intel.get("vote_average")
+                popularity = movie_intel.get("popularity")
+                
+                # Create Grafana-compatible flat structure
                 viral_entry = {
-                    "movie_title": movie_title_key,
-                    "genre": primary_genre,
+                    # Grafana table fields (flat structure for easy mapping)
+                    "title": movie_title_key,
+                    "genre": primary_genre,  # Singular for Grafana compatibility
+                    "genres": genres,  # Array for programmatic access
+                    "trending_score": round(viral_coefficient, 2) if viral_coefficient is not None else 0.0,
+                    "velocity": round(engagement_velocity, 1) if engagement_velocity is not None else 0.0,
+                    "vote_average": vote_average,
+                    "popularity": popularity,
+                    
+                    # Detailed metrics (nested for API consumers)
                     "viral_metrics": {
                         "viral_coefficient": round(viral_coefficient, 2) if viral_coefficient is not None else 0.0,
                         "percentile_rank": round(percentile, 1) if percentile is not None else 0.0,
@@ -1323,7 +1371,12 @@ class ViewMerger:
         # Step 8: Sort by viral coefficient (descending)
         viral_movies.sort(key=lambda x: x["viral_metrics"]["viral_coefficient"], reverse=True)
         
+        # Add rank to each movie (1-indexed)
+        for idx, movie in enumerate(viral_movies[:limit], start=1):
+            movie["rank"] = idx
+        
         result["viral_movies"] = viral_movies[:limit]
+        result["trending_movies"] = viral_movies[:limit]  # Grafana compatibility
         result["total_trending"] = len(viral_movies)
         
         return result

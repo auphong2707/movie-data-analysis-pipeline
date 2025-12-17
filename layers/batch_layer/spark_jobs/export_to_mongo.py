@@ -1,11 +1,12 @@
 """
-Export Gold Layer Unified Batch Views to MongoDB
+Export Gold Layer to 3 Separate MongoDB Collections
 
-Reads unified batch_views dataset from Gold layer and exports to MongoDB batch_views collection.
-The collection contains three view types distinguished by view_type field:
-1. sentiment_baseline: Genre/franchise/yearly sentiment patterns
-2. viral_threshold: Genre/budget-tier/seasonal viral cutoffs
-3. movie_intelligence: Individual movie competitive data
+Reads three separate Gold layer datasets and exports to 3 MongoDB collections:
+1. sentiment_baselines: Genre/franchise/yearly sentiment patterns (Business Goal #1: PR Crisis Detection)
+2. viral_thresholds: Genre/budget-tier/seasonal viral cutoffs (Business Goal #2: Viral Content Detection)
+3. movie_intelligence: Individual movie competitive data (Business Goal #3: Content Recommendation)
+
+Each collection maintains its own clean schema without null pollution from other view types.
 
 Usage:
     python export_to_mongo.py
@@ -31,47 +32,53 @@ logger = get_logger(__name__)
 
 class MongoDBExporter:
     """
-    Export Gold layer unified batch_views to MongoDB.
+    Export Gold layer to 3 separate MongoDB collections.
     
     Features:
-    - Single batch_views collection with view_type discriminator
-    - Compound indexes for efficient querying by view_type + dimensions
-    - Bulk upsert operations with proper filtering
+    - 3 separate collections: sentiment_baselines, viral_thresholds, movie_intelligence
+    - Custom indexes per collection (no view_type field needed)
+    - Bulk upsert operations with collection-specific filter keys
     - Error handling and retry
     """
     
-    # Unified batch_views collection configuration
-    BATCH_VIEWS_CONFIG = {
-        "indexes": [
-            # view_type queries
-            ([("view_type", 1)], {}),
-            
-            # Sentiment baseline queries (view_type + dimension)
-            ([("view_type", 1), ("genre", 1)], {}),
-            ([("view_type", 1), ("franchise", 1)], {}),
-            ([("view_type", 1), ("year", 1)], {}),
-            
-            # Viral threshold queries (view_type + dimension)
-            ([("view_type", 1), ("genre", 1), ("budget_tier", 1), ("season", 1)], {}),
-            ([("view_type", 1), ("budget_tier", 1)], {}),
-            ([("view_type", 1), ("season", 1)], {}),
-            
-            # Movie intelligence queries (view_type + movie_id)
-            ([("view_type", 1), ("movie_id", 1)], {}),
-            ([("view_type", 1), ("genre", 1), ("release_year", 1)], {}),
-            ([("view_type", 1), ("franchise", 1)], {}),
-            
-            # Temporal metadata queries
-            ([("batch_run_timestamp", -1)], {}),
-            ([("aggregation_granularity", 1), ("view_type", 1)], {}),
-        ],
-        # Filter keys depend on view_type
-        "filter_keys_by_view_type": {
-            "sentiment_baseline": ["view_type", "genre", "franchise", "year"],
-            "viral_threshold": ["view_type", "genre", "budget_tier", "season"],
-            "movie_intelligence": ["view_type", "movie_id"]
+    # Configuration for 3 separate collections
+    COLLECTIONS_CONFIG = {
+        "sentiment_baselines": {
+            "indexes": [
+                ([("genre", 1)], {}),
+                ([("franchise", 1)], {}),
+                ([("year", 1)], {}),
+                ([("genre", 1), ("year", 1)], {}),
+                ([("franchise", 1), ("year", 1)], {}),
+                ([("batch_run_timestamp", -1)], {}),
+            ],
+            "filter_keys": ["genre", "franchise", "year"]
+        },
+        "viral_thresholds": {
+            "indexes": [
+                ([("genre", 1)], {}),
+                ([("budget_tier", 1)], {}),
+                ([("season", 1)], {}),
+                ([("genre", 1), ("budget_tier", 1), ("season", 1)], {}),
+                ([("batch_run_timestamp", -1)], {}),
+            ],
+            "filter_keys": ["genre", "budget_tier", "season"]
+        },
+        "movie_intelligence": {
+            "indexes": [
+                ([("movie_id", 1)], {"unique": True}),
+                ([("genre", 1)], {}),
+                ([("release_year", 1)], {}),
+                ([("franchise", 1)], {}),
+                ([("genre", 1), ("release_year", 1)], {}),
+                ([("budget_tier", 1)], {}),
+                ([("batch_run_timestamp", -1)], {}),
+            ],
+            "filter_keys": ["movie_id"]
         }
     }
+    
+    DATASETS = ["sentiment_baselines", "viral_thresholds", "movie_intelligence"]
     
     def __init__(self, connection_string: str, database: str = "moviedb"):
         """
@@ -93,22 +100,27 @@ class MongoDBExporter:
             self.client.close()
             logger.info("Closed MongoDB connection")
     
-    def create_indexes(self):
-        """Create indexes on batch_views collection."""
-        collection = self.db["batch_views"]
+    def create_indexes(self, collection_name: str):
+        """Create indexes on a specific collection."""
+        collection = self.db[collection_name]
         
-        logger.info("Creating indexes on batch_views collection")
+        logger.info(f"Creating indexes on {collection_name} collection")
         
-        indexes = self.BATCH_VIEWS_CONFIG["indexes"]
+        config = self.COLLECTIONS_CONFIG.get(collection_name)
+        if not config:
+            logger.warning(f"No configuration found for collection: {collection_name}")
+            return
+        
+        indexes = config["indexes"]
         
         for keys, options in indexes:
             try:
                 collection.create_index(keys, **options)
-                logger.info(f"Created index on batch_views: {keys}")
+                logger.info(f"Created index on {collection_name}: {keys}")
             except Exception as e:
-                logger.warning(f"Failed to create index {keys} on batch_views: {str(e)}")
+                logger.warning(f"Failed to create index {keys} on {collection_name}: {str(e)}")
         
-        self.metrics.add_metric("batch_views_indexes_created", len(indexes))
+        self.metrics.add_metric(f"{collection_name}_indexes_created", len(indexes))
     
     def _row_to_dict(self, row):
         """
@@ -133,34 +145,42 @@ class MongoDBExporter:
         
         return result
     
-    def export_batch_views(
+    def export_collection(
         self,
         df,
+        collection_name: str,
         batch_size: int = 1000
     ) -> int:
         """
-        Export unified batch_views DataFrame to MongoDB.
-        
-        Uses view_type field to determine appropriate filter keys for upserts.
+        Export DataFrame to a specific MongoDB collection.
         
         Args:
-            df: Spark DataFrame with unified batch_views data
+            df: Spark DataFrame with collection data
+            collection_name: Name of the MongoDB collection
             batch_size: Batch size for bulk writes
         
         Returns:
             Number of documents exported
         """
-        logger.info("Exporting to MongoDB collection: batch_views")
+        logger.info(f"Exporting to MongoDB collection: {collection_name}")
         
         # Convert DataFrame to list of dictionaries (preserving nested structures)
         records = df.collect()
         documents = [self._row_to_dict(row) for row in records]
         
         total_count = len(documents)
-        logger.info(f"Prepared {total_count} documents for batch_views")
+        logger.info(f"Prepared {total_count} documents for {collection_name}")
+        
+        # Get collection config
+        config = self.COLLECTIONS_CONFIG.get(collection_name)
+        if not config:
+            logger.error(f"No configuration found for collection: {collection_name}")
+            return 0
+        
+        filter_keys = config["filter_keys"]
         
         # Bulk upsert in batches
-        collection = self.db["batch_views"]
+        collection = self.db[collection_name]
         exported_count = 0
         
         for i in range(0, total_count, batch_size):
@@ -169,13 +189,6 @@ class MongoDBExporter:
             # Create bulk operations
             operations = []
             for doc in batch:
-                # Determine filter keys based on view_type
-                view_type = doc.get("view_type")
-                filter_keys = self.BATCH_VIEWS_CONFIG["filter_keys_by_view_type"].get(
-                    view_type, 
-                    ["view_type"]  # Fallback: at least filter by view_type
-                )
-                
                 # Build filter from configured keys (skip None values)
                 filter_doc = {
                     key: doc.get(key)
@@ -203,24 +216,24 @@ class MongoDBExporter:
                 
             except BulkWriteError as bwe:
                 # Log errors but continue
-                logger.error(f"Bulk write error in batch_views: {bwe.details}", exc_info=True)
+                logger.error(f"Bulk write error in {collection_name}: {bwe.details}", exc_info=True)
                 # Count successful operations
                 exported_count += len(batch) - len(bwe.details.get('writeErrors', []))
         
-        logger.info(f"Exported {exported_count}/{total_count} documents to batch_views")
-        self.metrics.add_metric("batch_views_exported", exported_count)
+        logger.info(f"Exported {exported_count}/{total_count} documents to {collection_name}")
+        self.metrics.add_metric(f"{collection_name}_exported", exported_count)
         
         return exported_count
 
 
 class MongoExportJob:
     """
-    Job to export unified batch_views from Gold layer to MongoDB.
+    Job to export 3 separate collections from Gold layer to MongoDB.
     
-    Exports single unified batch_views dataset containing:
-    1. sentiment_baseline (view_type discriminator)
-    2. viral_threshold (view_type discriminator)
-    3. movie_intelligence (view_type discriminator)
+    Exports 3 collections for 3 business goals:
+    1. sentiment_baselines: For PR Crisis Detection (Business Goal #1)
+    2. viral_thresholds: For Viral Content Detection (Business Goal #2)
+    3. movie_intelligence: For Content Recommendation (Business Goal #3)
     """
     
     def __init__(self, spark, mongo_exporter: MongoDBExporter):
@@ -230,55 +243,57 @@ class MongoExportJob:
     @log_execution(logger, "mongo_export")
     def run(self):
         """
-        Run MongoDB export for unified batch_views.
+        Run MongoDB export for all 3 collections.
         """
-        logger.info("Starting MongoDB unified batch_views export")
+        logger.info("Starting MongoDB 3-collection export (for 3 business goals)")
         
-        # Create indexes for batch_views collection
-        self.mongo_exporter.create_indexes()
-        
-        # Export unified batch_views
-        self._export_batch_views()
+        # Export each collection separately
+        for collection_name in self.mongo_exporter.DATASETS:
+            try:
+                # Create indexes
+                self.mongo_exporter.create_indexes(collection_name)
+                
+                # Export data
+                self._export_collection(collection_name)
+                
+            except Exception as e:
+                logger.error(f"Failed to export {collection_name}: {str(e)}", exc_info=True)
+                # Continue with next collection
         
         # Log final metrics
         self.mongo_exporter.metrics.log(logger)
-        logger.info("MongoDB unified batch_views export completed")
+        logger.info("MongoDB 3-collection export completed")
     
-    def _export_batch_views(self):
-        """Export unified batch_views from Gold to MongoDB."""
-        logger.info("Exporting batch_views")
+    def _export_collection(self, collection_name: str):
+        """Export a single collection from Gold to MongoDB."""
+        logger.info(f"Exporting {collection_name}")
         
-        # Read unified batch_views from Gold layer
-        gold_path = get_gold_path("batch_views", None).rstrip('/')
+        # Read from Gold layer (separate path for each collection)
+        gold_path = get_gold_path(collection_name, None).rstrip('/')
         
         try:
             df = self.spark.read.parquet(gold_path)
             count = df.count()
             
             if count == 0:
-                logger.warning("No data found in Gold layer for batch_views")
+                logger.warning(f"No data found in Gold layer for {collection_name}")
                 return
             
             logger.info(f"Read {count} records from {gold_path}")
             
-            # Show view_type distribution
-            view_type_counts = df.groupBy("view_type").count().collect()
-            for row in view_type_counts:
-                logger.info(f"  view_type={row['view_type']}: {row['count']} documents")
+            # Export to MongoDB
+            exported = self.mongo_exporter.export_collection(df, collection_name)
             
-            # Export to MongoDB batch_views collection
-            exported = self.mongo_exporter.export_batch_views(df)
-            
-            logger.info(f"Successfully exported {exported} records to batch_views")
+            logger.info(f"Successfully exported {exported} records to {collection_name}")
             
         except Exception as e:
-            logger.error(f"Failed to export batch_views: {str(e)}", exc_info=True)
+            logger.error(f"Failed to export {collection_name}: {str(e)}", exc_info=True)
             raise
 
 
 def main():
-    """Main entry point for MongoDB unified batch_views export job."""
-    parser = argparse.ArgumentParser(description="Export Gold Layer Unified Batch Views to MongoDB")
+    """Main entry point for MongoDB 3-collection export job."""
+    parser = argparse.ArgumentParser(description="Export Gold Layer to 3 MongoDB Collections (3 Business Goals)")
     parser.add_argument("--mongo-uri", type=str,
                        default=None,
                        help="MongoDB connection string (default: from env)")

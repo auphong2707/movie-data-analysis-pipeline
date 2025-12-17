@@ -143,7 +143,7 @@
           "root_selector": "statistics",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url": "http://serving-api:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -272,7 +272,7 @@
           "root_selector": "trending_movies",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/trending/movies",
+          "url": "http://serving-api:8000/api/v1/trending/movies",
           "url_options": {
             "data": "",
             "method": "GET",
@@ -390,7 +390,7 @@
           "root_selector": "top_movies",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url": "http://serving-api:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
           "url_options": {
             "data": "",
             "method": "GET",
@@ -505,7 +505,7 @@
           "root_selector": "top_movies",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url": "http://serving-api:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -540,17 +540,17 @@
                 "decreasing": {
                   "color": "red",
                   "index": 2,
-                  "text": "↓ Decreasing"
+                  "text": "\u2193 Decreasing"
                 },
                 "increasing": {
                   "color": "green",
                   "index": 0,
-                  "text": "↑ Increasing"
+                  "text": "\u2191 Increasing"
                 },
                 "stable": {
                   "color": "blue",
                   "index": 1,
-                  "text": "→ Stable"
+                  "text": "\u2192 Stable"
                 }
               },
               "type": "value"
@@ -616,7 +616,7 @@
           "root_selector": "trends",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
+          "url": "http://serving-api:8000/api/v1/analytics/genre/${genre}?year=${year}&month=${month}",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -876,7 +876,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Genre Analytics Dashboard 1",
+  "title": "[ARCHIVED] Genre Analytics Dashboard 1",
   "uid": "genre-analytics-1",
-  "version": 0
+  "version": 0,
+  "archived_date": "2025-12-17T14:58:46.079768"
 }

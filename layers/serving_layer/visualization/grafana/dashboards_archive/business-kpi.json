@@ -19,7 +19,10 @@
   "links": [],
   "panels": [
     {
-      "datasource": "Movie Analytics API",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -61,11 +64,17 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "columns": [],
+          "columns": [
+            {
+              "selector": "services.batch_layer.document_count",
+              "text": "Movies",
+              "type": "number"
+            }
+          ],
           "data": "",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "Movie Analytics API"
+            "uid": "infinity"
           },
           "filters": [],
           "format": "table",
@@ -74,7 +83,7 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -82,24 +91,14 @@
         }
       ],
       "title": "Total Movies (Batch)",
-      "transformations": [
-        {
-          "id": "extractFields",
-          "options": {
-            "format": "json",
-            "jsonPaths": [
-              {
-                "path": "services.batch_layer.document_count"
-              }
-            ],
-            "source": "services"
-          }
-        }
-      ],
+      "transformations": [],
       "type": "stat"
     },
     {
-      "datasource": "Movie Analytics API",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -141,11 +140,17 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "columns": [],
+          "columns": [
+            {
+              "selector": "services.speed_layer.recent_documents",
+              "text": "Documents",
+              "type": "number"
+            }
+          ],
           "data": "",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "Movie Analytics API"
+            "uid": "infinity"
           },
           "filters": [],
           "format": "table",
@@ -154,7 +159,7 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -162,24 +167,14 @@
         }
       ],
       "title": "Speed Layer Documents",
-      "transformations": [
-        {
-          "id": "extractFields",
-          "options": {
-            "format": "json",
-            "jsonPaths": [
-              {
-                "path": "services.speed_layer.recent_documents"
-              }
-            ],
-            "source": "services"
-          }
-        }
-      ],
+      "transformations": [],
       "type": "stat"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -241,7 +236,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "up{job=\"serving-api\"}",
+          "expr": "up{job=\"fastapi\"}",
           "refId": "A"
         }
       ],
@@ -249,7 +244,10 @@
       "type": "stat"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -308,7 +306,10 @@
       "type": "stat"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -388,7 +389,10 @@
       "type": "timeseries"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -458,7 +462,10 @@
       "type": "timeseries"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -538,7 +545,10 @@
       "type": "table"
     },
     {
-      "datasource": "Prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -634,7 +644,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Business KPI Dashboard",
+  "title": "[ARCHIVED] Business KPI Dashboard",
   "uid": "business-kpi",
-  "version": 0
+  "version": 0,
+  "archived_date": "2025-12-17T14:58:46.076741"
 }

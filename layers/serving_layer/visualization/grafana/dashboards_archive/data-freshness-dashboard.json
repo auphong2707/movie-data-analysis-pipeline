@@ -97,7 +97,7 @@
           "root_selector": "services.batch_layer",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -180,7 +180,7 @@
           "root_selector": "services.speed_layer",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "method": "GET"
           }
@@ -257,7 +257,7 @@
           "root_selector": "data_freshness",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "method": "GET"
           }
@@ -333,7 +333,7 @@
           "root_selector": "data_freshness",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "data": "",
             "method": "GET"
@@ -447,7 +447,7 @@
           "root_selector": "services.batch_layer",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "method": "GET"
           }
@@ -565,7 +565,7 @@
           "root_selector": "services.speed_layer",
           "source": "url",
           "type": "json",
-          "url": "http://host.docker.internal:8000/api/v1/health",
+          "url": "http://serving-api:8000/api/v1/health",
           "url_options": {
             "method": "GET"
           }
@@ -593,7 +593,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "# Data Routing Strategy\n\n## 48-Hour Cutoff Rule\n\n```\nCurrent Time: ${__from}\nCutoff Time: ${__from:date:subtract:48:hours}\n\n┌────────────────────────────────────────────────┐\n│           DATA ROUTING DIAGRAM                  │\n├────────────────────────────────────────────────┤\n│                                                │\n│  ┌──────────────┐        ┌──────────────┐    │\n│  │ Batch Layer  │        │ Speed Layer  │    │\n│  │  (> 48h)     │        │  (<= 48h)    │    │\n│  └──────┬───────┘        └──────┬───────┘    │\n│         │                       │             │\n│         └───────────┬───────────┘             │\n│                     ↓                         │\n│            ┌─────────────────┐                │\n│            │  Query Router   │                │\n│            │   & Merger      │                │\n│            └────────┬────────┘                │\n│                     ↓                         │\n│            ┌─────────────────┐                │\n│            │   Unified API   │                │\n│            └─────────────────┘                │\n│                                                │\n└────────────────────────────────────────────────┘\n\nQueries for data OLDER than cutoff → Batch Layer\nQueries for data NEWER than cutoff → Speed Layer\nOverlapping data → Speed Layer takes precedence\n```\n\n## Current Status\n- **Batch Layer**: Historical data (accurate, updated daily)\n- **Speed Layer**: Real-time data (fresh, updated every 5 minutes)\n- **Merge Point**: 48 hours before current time",
+        "content": "# Data Routing Strategy\n\n## 48-Hour Cutoff Rule\n\n```\nCurrent Time: ${__from}\nCutoff Time: ${__from:date:subtract:48:hours}\n\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502           DATA ROUTING DIAGRAM                  \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502                                                \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510        \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502 Batch Layer  \u2502        \u2502 Speed Layer  \u2502    \u2502\n\u2502  \u2502  (> 48h)     \u2502        \u2502  (<= 48h)    \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518        \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2502         \u2502                       \u2502             \u2502\n\u2502         \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518             \u2502\n\u2502                     \u2193                         \u2502\n\u2502            \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510                \u2502\n\u2502            \u2502  Query Router   \u2502                \u2502\n\u2502            \u2502   & Merger      \u2502                \u2502\n\u2502            \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                \u2502\n\u2502                     \u2193                         \u2502\n\u2502            \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510                \u2502\n\u2502            \u2502   Unified API   \u2502                \u2502\n\u2502            \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                \u2502\n\u2502                                                \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nQueries for data OLDER than cutoff \u2192 Batch Layer\nQueries for data NEWER than cutoff \u2192 Speed Layer\nOverlapping data \u2192 Speed Layer takes precedence\n```\n\n## Current Status\n- **Batch Layer**: Historical data (accurate, updated daily)\n- **Speed Layer**: Real-time data (fresh, updated every 5 minutes)\n- **Merge Point**: 48 hours before current time",
         "mode": "markdown"
       },
       "pluginVersion": "12.2.1",
@@ -618,7 +618,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Data Freshness Dashboard 1",
+  "title": "[ARCHIVED] Data Freshness Dashboard 1",
   "uid": "data-freshness-1",
-  "version": 0
+  "version": 0,
+  "archived_date": "2025-12-17T14:58:46.078265"
 }

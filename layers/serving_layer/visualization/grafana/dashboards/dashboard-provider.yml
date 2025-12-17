@@ -1,12 +1,13 @@
 apiVersion: 1
 
 providers:
-  - name: 'Business Dashboards'
+  - name: 'Business Goal Dashboards'
     orgId: 1
-    folder: ''
+    folder: 'Business Goals'
     type: file
     disableDeletion: false
     updateIntervalSeconds: 10
     allowUiUpdates: true
     options:
       path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

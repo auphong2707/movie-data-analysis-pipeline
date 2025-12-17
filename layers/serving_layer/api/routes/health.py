@@ -48,7 +48,7 @@ async def health_check():
         # Get latest updates
         batch_latest = db.batch_views.find_one(
             {},
-            sort=[('computed_at', -1)]
+            sort=[('batch_run_timestamp', -1)]
         )
         
         speed_latest = db.speed_views.find_one(
@@ -77,7 +77,7 @@ async def health_check():
                 },
                 'batch_layer': {
                     'status': 'up' if batch_latest else 'no_data',
-                    'last_update': batch_latest.get('computed_at') if batch_latest else None,
+                    'last_update': batch_latest.get('batch_run_timestamp') if batch_latest else None,
                     'document_count': routing_stats['batch_layer']['total_documents']
                 },
                 'speed_layer': {

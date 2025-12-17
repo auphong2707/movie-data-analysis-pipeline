@@ -94,12 +94,13 @@ def check_mongodb_health() -> dict:
         dict: Health status and metrics
     """
     try:
+        import time
         client = get_mongodb_client()
         
-        # Ping server
-        start_time = os.times().elapsed
+        # Ping server and measure latency
+        start_time = time.time()
         client.admin.command('ping')
-        end_time = os.times().elapsed
+        end_time = time.time()
         latency_ms = (end_time - start_time) * 1000
         
         # Get server info

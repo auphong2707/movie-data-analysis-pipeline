@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 class IndexManager:
     """
     Manages MongoDB indexes for serving layer collections
+    
+    Updated to work with 3 separate batch collections:
+    - sentiment_baselines: Genre/franchise/yearly sentiment patterns
+    - viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+    - movie_intelligence: Individual movie competitive data
     """
     
     def __init__(self, db: Database):
@@ -25,7 +30,11 @@ class IndexManager:
             db: MongoDB database instance
         """
         self.db = db
-        self.batch_views = db.batch_views
+        # 3 separate batch collections
+        self.sentiment_baselines = db.sentiment_baselines
+        self.viral_thresholds = db.viral_thresholds
+        self.movie_intelligence = db.movie_intelligence
+        # Other collections
         self.speed_views = db.speed_views
         self.cache_metadata = db.cache_metadata
     
@@ -36,7 +45,9 @@ class IndexManager:
         logger.info("Creating indexes for serving layer collections...")
         
         try:
-            self.create_batch_views_indexes()
+            self.create_sentiment_baselines_indexes()
+            self.create_viral_thresholds_indexes()
+            self.create_movie_intelligence_indexes()
             self.create_speed_views_indexes()
             self.create_cache_metadata_indexes()
             
@@ -46,74 +57,197 @@ class IndexManager:
             logger.error(f"Error creating indexes: {e}")
             raise
     
-    def create_batch_views_indexes(self):
+    def create_sentiment_baselines_indexes(self):
         """
-        Create indexes for batch_views collection
+        Create indexes for sentiment_baselines collection
         """
-        logger.info("Creating indexes for batch_views collection...")
+        logger.info("Creating indexes for sentiment_baselines collection...")
         
-        # Index 1: movie_id + view_type (most common query)
-        self.batch_views.create_index(
-            [("movie_id", ASCENDING), ("view_type", ASCENDING)],
-            name="idx_movie_view_type"
+        # Index 1: genre (for genre-based queries)
+        self.sentiment_baselines.create_index(
+            [("genre", ASCENDING)],
+            name="idx_genre"
         )
-        logger.info("✓ Created index: idx_movie_view_type")
+        logger.info("✓ Created index: idx_genre")
         
-        # Index 2: view_type + computed_at (for time-based queries)
-        self.batch_views.create_index(
-            [("view_type", ASCENDING), ("computed_at", DESCENDING)],
-            name="idx_view_type_time"
+        # Index 2: franchise (for franchise-based queries)
+        self.sentiment_baselines.create_index(
+            [("franchise", ASCENDING)],
+            name="idx_franchise"
         )
-        logger.info("✓ Created index: idx_view_type_time")
+        logger.info("✓ Created index: idx_franchise")
         
-        # Index 3: genre analytics
-        self.batch_views.create_index(
-            [
-                ("view_type", ASCENDING),
-                ("data.genre", ASCENDING),
-                ("data.year", DESCENDING),
-                ("data.month", DESCENDING)
-            ],
-            name="idx_genre_analytics"
+        # Index 3: year (for temporal queries)
+        self.sentiment_baselines.create_index(
+            [("year", DESCENDING)],
+            name="idx_year"
         )
-        logger.info("✓ Created index: idx_genre_analytics")
+        logger.info("✓ Created index: idx_year")
         
-        # Index 4: temporal queries
-        self.batch_views.create_index(
-            [
-                ("view_type", ASCENDING),
-                ("data.release_year", DESCENDING),
-                ("computed_at", DESCENDING)
-            ],
-            name="idx_temporal_queries"
+        # Index 4: genre + year (composite for common queries)
+        self.sentiment_baselines.create_index(
+            [("genre", ASCENDING), ("year", DESCENDING)],
+            name="idx_genre_year"
         )
-        logger.info("✓ Created index: idx_temporal_queries")
+        logger.info("✓ Created index: idx_genre_year")
         
-        # Index 5: computed_at for cutoff queries
-        self.batch_views.create_index(
-            [("computed_at", DESCENDING)],
-            name="idx_computed_at"
+        # Index 5: franchise + year
+        self.sentiment_baselines.create_index(
+            [("franchise", ASCENDING), ("year", DESCENDING)],
+            name="idx_franchise_year"
         )
-        logger.info("✓ Created index: idx_computed_at")
+        logger.info("✓ Created index: idx_franchise_year")
         
-        # Index 6: batch_run_id for batch tracking
-        self.batch_views.create_index(
-            [("batch_run_id", ASCENDING)],
-            name="idx_batch_run_id"
+        # Index 6: batch_run_timestamp (for latest data)
+        self.sentiment_baselines.create_index(
+            [("batch_run_timestamp", DESCENDING)],
+            name="idx_batch_run_timestamp"
         )
-        logger.info("✓ Created index: idx_batch_run_id")
+        logger.info("✓ Created index: idx_batch_run_timestamp")
         
-        # Index 7: Full-text search on movie titles
+        logger.info("Sentiment baselines indexes created")
+    
+    def create_viral_thresholds_indexes(self):
+        """
+        Create indexes for viral_thresholds collection
+        """
+        logger.info("Creating indexes for viral_thresholds collection...")
+        
+        # Index 1: genre (for genre-based queries)
+        self.viral_thresholds.create_index(
+            [("genre", ASCENDING)],
+            name="idx_genre"
+        )
+        logger.info("✓ Created index: idx_genre")
+        
+        # Index 2: budget_tier (for budget-based queries)
+        self.viral_thresholds.create_index(
+            [("budget_tier", ASCENDING)],
+            name="idx_budget_tier"
+        )
+        logger.info("✓ Created index: idx_budget_tier")
+        
+        # Index 3: season (for seasonal queries)
+        self.viral_thresholds.create_index(
+            [("season", ASCENDING)],
+            name="idx_season"
+        )
+        logger.info("✓ Created index: idx_season")
+        
+        # Index 4: genre + budget_tier + season (composite)
+        self.viral_thresholds.create_index(
+            [("genre", ASCENDING), ("budget_tier", ASCENDING), ("season", ASCENDING)],
+            name="idx_genre_budget_season"
+        )
+        logger.info("✓ Created index: idx_genre_budget_season")
+        
+        # Index 5: batch_run_timestamp (for latest data)
+        self.viral_thresholds.create_index(
+            [("batch_run_timestamp", DESCENDING)],
+            name="idx_batch_run_timestamp"
+        )
+        logger.info("✓ Created index: idx_batch_run_timestamp")
+        
+        logger.info("Viral thresholds indexes created")
+    
+    def create_movie_intelligence_indexes(self):
+        """
+        Create indexes for movie_intelligence collection
+        """
+        logger.info("Creating indexes for movie_intelligence collection...")
+        
+        # Index 1: movie_id (unique, most common query)
+        self.movie_intelligence.create_index(
+            [("movie_id", ASCENDING)],
+            name="idx_movie_id",
+            unique=True
+        )
+        logger.info("✓ Created unique index: idx_movie_id")
+        
+        # Index 2: genre (for genre filtering)
+        self.movie_intelligence.create_index(
+            [("genre", ASCENDING)],
+            name="idx_genre"
+        )
+        logger.info("✓ Created index: idx_genre")
+        
+        # Index 3: genres array (for multi-genre queries)
+        self.movie_intelligence.create_index(
+            [("genres", ASCENDING)],
+            name="idx_genres"
+        )
+        logger.info("✓ Created index: idx_genres")
+        
+        # Index 4: release_year (for temporal queries)
+        self.movie_intelligence.create_index(
+            [("release_year", DESCENDING)],
+            name="idx_release_year"
+        )
+        logger.info("✓ Created index: idx_release_year")
+        
+        # Index 5: franchise (for franchise queries)
+        self.movie_intelligence.create_index(
+            [("franchise", ASCENDING)],
+            name="idx_franchise"
+        )
+        logger.info("✓ Created index: idx_franchise")
+        
+        # Index 6: genre + release_year (composite)
+        self.movie_intelligence.create_index(
+            [("genre", ASCENDING), ("release_year", DESCENDING)],
+            name="idx_genre_year"
+        )
+        logger.info("✓ Created index: idx_genre_year")
+        
+        # Index 7: budget_tier (for budget-based queries)
+        self.movie_intelligence.create_index(
+            [("budget_tier", ASCENDING)],
+            name="idx_budget_tier"
+        )
+        logger.info("✓ Created index: idx_budget_tier")
+        
+        # Index 8: vote_average (for rating queries)
+        self.movie_intelligence.create_index(
+            [("vote_average", DESCENDING)],
+            name="idx_vote_average"
+        )
+        logger.info("✓ Created index: idx_vote_average")
+        
+        # Index 9: popularity (for trending queries)
+        self.movie_intelligence.create_index(
+            [("popularity", DESCENDING)],
+            name="idx_popularity"
+        )
+        logger.info("✓ Created index: idx_popularity")
+        
+        # Index 10: batch_run_timestamp (for latest data)
+        self.movie_intelligence.create_index(
+            [("batch_run_timestamp", DESCENDING)],
+            name="idx_batch_run_timestamp"
+        )
+        logger.info("✓ Created index: idx_batch_run_timestamp")
+        
+        # Index 11: Full-text search on title
         try:
-            self.batch_views.create_index(
-                [("data.title", TEXT)],
+            self.movie_intelligence.create_index(
+                [("title", TEXT)],
                 name="idx_title_text"
             )
             logger.info("✓ Created text index: idx_title_text")
         except OperationFailure as e:
             logger.warning(f"Text index creation failed (may already exist): {e}")
         
-        logger.info("Batch views indexes created")
+        logger.info("Movie intelligence indexes created")
+    
+    def create_batch_views_indexes(self):
+        """
+        DEPRECATED: Legacy method for backward compatibility
+        Now creates indexes on the 3 separate collections
+        """
+        logger.warning("create_batch_views_indexes is deprecated - use create_all_indexes instead")
+        self.create_sentiment_baselines_indexes()
+        self.create_viral_thresholds_indexes()
+        self.create_movie_intelligence_indexes()
     
     def create_speed_views_indexes(self):
         """
@@ -212,7 +346,9 @@ class IndexManager:
             Dictionary with collection names and their indexes
         """
         return {
-            "batch_views": list(self.batch_views.list_indexes()),
+            "sentiment_baselines": list(self.sentiment_baselines.list_indexes()),
+            "viral_thresholds": list(self.viral_thresholds.list_indexes()),
+            "movie_intelligence": list(self.movie_intelligence.list_indexes()),
             "speed_views": list(self.speed_views.list_indexes()),
             "cache_metadata": list(self.cache_metadata.list_indexes())
         }
@@ -231,7 +367,9 @@ class IndexManager:
         logger.warning("Dropping all indexes...")
         
         try:
-            self.batch_views.drop_indexes()
+            self.sentiment_baselines.drop_indexes()
+            self.viral_thresholds.drop_indexes()
+            self.movie_intelligence.drop_indexes()
             self.speed_views.drop_indexes()
             self.cache_metadata.drop_indexes()
             
@@ -250,7 +388,7 @@ class IndexManager:
         """
         stats = {}
         
-        for collection_name in ["batch_views", "speed_views", "cache_metadata"]:
+        for collection_name in ["sentiment_baselines", "viral_thresholds", "movie_intelligence", "speed_views", "cache_metadata"]:
             collection = self.db[collection_name]
             
             # Get index stats

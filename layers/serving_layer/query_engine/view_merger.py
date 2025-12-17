@@ -20,6 +20,11 @@ class ViewMerger:
     """
     Merges batch and speed layer views with 48-hour cutoff strategy
     
+    Updated to work with 3 separate batch collections:
+    - sentiment_baselines: Genre/franchise/yearly sentiment patterns
+    - viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+    - movie_intelligence: Individual movie competitive data
+    
     Strategy:
     - Data older than 48 hours: Use batch layer (accurate, complete)
     - Data within 48 hours: Use speed layer (fresh, approximate)
@@ -35,7 +40,11 @@ class ViewMerger:
             cutoff_hours: Cutoff time in hours (default: 48)
         """
         self.db = db
-        self.batch_views = db.batch_views
+        # 3 separate batch collections
+        self.sentiment_baselines = db.sentiment_baselines
+        self.viral_thresholds = db.viral_thresholds
+        self.movie_intelligence = db.movie_intelligence
+        # Speed layer collection
         self.speed_views = db.speed_views
         self.cutoff_hours = cutoff_hours
     
@@ -54,9 +63,8 @@ class ViewMerger:
         
         Strategy:
         1. Try exact match on title field
-        2. Try exact match on data.title field (nested schema)
-        3. Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
-        4. Try fuzzy matching against all movie_intelligence docs
+        2. Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
+        3. Try fuzzy matching against all movie_intelligence docs
         
         Args:
             movie_title_key: Movie title from speed layer
@@ -64,9 +72,8 @@ class ViewMerger:
         Returns:
             Movie intelligence document or None if not found
         """
-        # Try exact match first (flat schema)
-        movie_intel = self.batch_views.find_one({
-            "view_type": "movie_intelligence",
+        # Try exact match first (movie_intelligence collection)
+        movie_intel = self.movie_intelligence.find_one({
             "title": movie_title_key
         })
         
@@ -74,25 +81,11 @@ class ViewMerger:
             logger.debug(f"Exact match found for '{movie_title_key}'")
             return movie_intel
         
-        # Try nested schema
-        movie_intel = self.batch_views.find_one({
-            "view_type": "movie_intelligence",
-            "data.title": movie_title_key
-        })
-        
-        if movie_intel:
-            logger.debug(f"Exact match found in nested schema for '{movie_title_key}'")
-            return movie_intel
-        
         # Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
         base_title = extract_base_title(movie_title_key)
         if base_title != movie_title_key:
-            movie_intel = self.batch_views.find_one({
-                "view_type": "movie_intelligence",
-                "$or": [
-                    {"title": base_title},
-                    {"data.title": base_title}
-                ]
+            movie_intel = self.movie_intelligence.find_one({
+                "title": base_title
             })
             
             if movie_intel:
@@ -103,12 +96,10 @@ class ViewMerger:
         normalized_search = normalize_title(movie_title_key)
         
         # Get all movie_intelligence docs and fuzzy match
-        candidates = self.batch_views.find(
-            {"view_type": "movie_intelligence"}
-        ).limit(1000)  # Limit to avoid performance issues
+        candidates = self.movie_intelligence.find({}).limit(1000)  # Limit to avoid performance issues
         
         for candidate in candidates:
-            candidate_title = candidate.get("title") or candidate.get("data", {}).get("title")
+            candidate_title = candidate.get("title")
             if candidate_title and fuzzy_match_title(movie_title_key, candidate_title, threshold=0.85):
                 logger.info(f"Fuzzy matched '{movie_title_key}' -> '{candidate_title}'")
                 return candidate
@@ -124,7 +115,7 @@ class ViewMerger:
         Merge batch and speed views for a specific movie
         
         Returns complete movie information by merging:
-        - Batch: movie_details view (static metadata)
+        - Batch: movie_intelligence collection (static metadata)
         - Speed: stats data_type (real-time stats)
         
         Args:
@@ -136,17 +127,9 @@ class ViewMerger:
         cutoff_time = self.get_cutoff_time()
         
         # Get movie_intelligence from batch layer (static metadata)
-        # Try both 'movie_details' (old schema) and 'movie_intelligence' (new schema)
-        batch_details = self.batch_views.find_one({
-            'movie_id': movie_id,
-            'view_type': 'movie_details'
+        batch_details = self.movie_intelligence.find_one({
+            'movie_id': movie_id
         })
-        
-        if not batch_details:
-            batch_details = self.batch_views.find_one({
-                'movie_id': movie_id,
-                'view_type': 'movie_intelligence'
-            })
         
         # Get latest stats from speed layer (real-time)
         speed_stats = self.speed_views.find_one(
@@ -238,8 +221,9 @@ class ViewMerger:
         """
         Merge sentiment data from batch and speed layers
         
-        Schema:
-        - Batch: view_type='sentiment', data={avg_sentiment, review_count, positive_count, ...}
+        Updated schema:
+        - Batch: sentiment_baselines collection (genre/franchise/yearly patterns)
+        - Batch: movie_intelligence collection (per-movie avg_sentiment)
         - Speed: data_type='sentiment', data={avg_sentiment, review_count, sentiment_velocity, ...}
         
         Args:
@@ -251,37 +235,19 @@ class ViewMerger:
         """
         cutoff_time = self.get_cutoff_time()
         
-        # Get movie title from batch layer (try both schemas)
-        movie_details = self.batch_views.find_one({
-            'movie_id': movie_id,
-            'view_type': 'movie_details'
+        # Get movie details from movie_intelligence collection
+        movie_details = self.movie_intelligence.find_one({
+            'movie_id': movie_id
         })
         
-        if not movie_details:
-            movie_details = self.batch_views.find_one({
-                'movie_id': movie_id,
-                'view_type': 'movie_intelligence'
-            })
-        
-        # Extract title from either schema
+        # Extract title
         if movie_details:
-            if 'data' in movie_details:
-                title = movie_details['data'].get('title')
-            else:
-                title = movie_details.get('title')
+            title = movie_details.get('title')
         else:
             title = None
         
-        # Query batch layer for sentiment (historical > 48h)
-        # Try old schema first
-        batch_sentiment = self.batch_views.find_one({
-            'movie_id': movie_id,
-            'view_type': 'sentiment'
-        })
-        
-        # If not found, use movie_intelligence as batch sentiment source
-        if not batch_sentiment and movie_details and movie_details.get('view_type') == 'movie_intelligence':
-            batch_sentiment = movie_details
+        # Get batch sentiment from movie_intelligence collection
+        batch_sentiment = movie_details  # movie_intelligence has avg_sentiment field
         
         # Query speed layer for recent sentiment (< 48h)
         # Speed layer uses movie_title, not movie_id
@@ -300,34 +266,19 @@ class ViewMerger:
         breakdown = []
         
         if batch_sentiment:
-            # Handle old schema (with 'data' field)
-            if 'data' in batch_sentiment:
-                batch_data = batch_sentiment['data']
-                # Schema: col1=avg_sentiment, col2=review_count, col3=positive_count, col4=negative_count, col5=neutral_count
-                overall_sentiment = {
-                    'overall_score': batch_data.get('col1', 0),
-                    'label': self._get_sentiment_label(batch_data.get('col1', 0)),
-                    'positive_count': batch_data.get('col3', 0),
-                    'negative_count': batch_data.get('col4', 0),
-                    'neutral_count': batch_data.get('col5', 0),
-                    'total_reviews': batch_data.get('col2', 0),
-                    'velocity': 0,
-                    'confidence': 0.9
-                }
-            # Handle new schema (movie_intelligence - flat structure)
-            elif batch_sentiment.get('view_type') == 'movie_intelligence':
-                avg_sent = batch_sentiment.get('avg_sentiment', 0)
-                review_cnt = batch_sentiment.get('review_count', 0)
-                overall_sentiment = {
-                    'overall_score': avg_sent,
-                    'label': self._get_sentiment_label(avg_sent),
-                    'positive_count': 0,  # not in movie_intelligence schema
-                    'negative_count': 0,  # not in movie_intelligence schema
-                    'neutral_count': 0,   # not in movie_intelligence schema
-                    'total_reviews': review_cnt,
-                    'velocity': 0,
-                    'confidence': 0.7 if review_cnt > 0 else 0.3
-                }
+            # Use movie_intelligence schema (flat structure)
+            avg_sent = batch_sentiment.get('avg_sentiment', 0)
+            review_cnt = batch_sentiment.get('review_count', 0)
+            overall_sentiment = {
+                'overall_score': avg_sent,
+                'label': self._get_sentiment_label(avg_sent),
+                'positive_count': 0,  # not in movie_intelligence schema
+                'negative_count': 0,  # not in movie_intelligence schema
+                'neutral_count': 0,   # not in movie_intelligence schema
+                'total_reviews': review_cnt,
+                'velocity': 0,
+                'confidence': 0.7 if review_cnt > 0 else 0.3
+            }
         
         # Add speed layer sentiment (recent updates from Reddit)
         if speed_sentiment_docs:
@@ -404,9 +355,23 @@ class ViewMerger:
                         'confidence': 0.6
                     }
         
+        # Get genres from batch movie intelligence view
+        genres = []
+        try:
+            batch_movie = self.db['batch_views'].find_one({
+                'movie_id': movie_id,
+                'view_type': 'movie_intelligence'
+            }, {'genre': 1})
+            if batch_movie and batch_movie.get('genre'):
+                # batch_views stores single genre string, convert to array for consistency
+                genres = [batch_movie.get('genre')]
+        except Exception as e:
+            self.logger.warning(f"Could not fetch genres for movie {movie_id}: {e}")
+        
         return {
             'movie_id': movie_id,
             'title': title,
+            'genres': genres,
             'sentiment': overall_sentiment,
             'breakdown': breakdown,
             'data_sources': {
@@ -515,12 +480,11 @@ class ViewMerger:
         
         trending_movies = list(self.speed_views.aggregate(pipeline))
         
-        # Enrich with metadata from batch layer
+        # Enrich with metadata from movie_intelligence collection
         enriched_movies = []
         for rank, movie in enumerate(trending_movies, 1):
-            batch_metadata = self.batch_views.find_one({
-                'movie_id': movie['movie_id'],
-                'view_type': 'movie_details'
+            batch_metadata = self.movie_intelligence.find_one({
+                'movie_id': movie['movie_id']
             })
             
             enriched = {
@@ -536,10 +500,14 @@ class ViewMerger:
                 'vote_count': movie.get('vote_count', 0)
             }
             
-            if batch_metadata and 'data' in batch_metadata:
-                data = batch_metadata['data']
-                enriched['title'] = data.get('title', 'Unknown')
-                enriched['genres'] = data.get('genres', [])
+            if batch_metadata:
+                enriched['title'] = batch_metadata.get('title', 'Unknown')
+                # Handle both flat genre and genres array
+                genres = batch_metadata.get('genres', [])
+                if not genres:
+                    genre_field = batch_metadata.get('genre')
+                    genres = [genre_field] if genre_field else []
+                enriched['genres'] = genres
                 
                 # Apply genre filter if specified
                 if genre and genre not in enriched['genres']:
@@ -563,9 +531,7 @@ class ViewMerger:
         """
         Get genre analytics from batch layer
         
-        Schema: view_type='genre_analytics'
-        Fields: genre, year, month, total_movies, avg_rating, avg_sentiment, 
-                avg_popularity, total_revenue, top_movies
+        Updated to aggregate from movie_intelligence and sentiment_baselines collections
         
         Args:
             genre: Genre to analyze
@@ -575,23 +541,22 @@ class ViewMerger:
         Returns:
             Genre analytics with statistics and top movies
         """
-        # Get batch layer analytics
+        # Build query for movie_intelligence collection
         query = {
-            'view_type': 'genre_analytics',
-            'genre': {'$regex': f'^{genre}$', '$options': 'i'}
+            '$or': [
+                {'genre': genre},
+                {'genres': genre}
+            ]
         }
         
+        # Apply year filter if specified
         if year:
-            query['year'] = year
-        if month:
-            query['month'] = month
+            query['release_year'] = year
         
-        batch_analytics = self.batch_views.find_one(
-            query,
-            sort=[('computed_at', -1)]
-        )
+        # Get movies from movie_intelligence collection
+        movies = list(self.movie_intelligence.find(query))
         
-        if not batch_analytics:
+        if not movies:
             return {
                 'genre': genre,
                 'year': year,
@@ -603,73 +568,47 @@ class ViewMerger:
                 'found': False
             }
         
-        # Calculate avg_sentiment from sentiment collection
-        genre_movies_query = {
-            'view_type': 'movie_details',
-            'data.genres': genre
-        }
+        # Calculate statistics from movie_intelligence
+        total_movies = len(movies)
+        avg_rating = sum(m.get('vote_average', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_sentiment = sum(m.get('avg_sentiment', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_popularity = sum(m.get('popularity', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        total_revenue = sum(m.get('revenue', 0) for m in movies)
+        avg_budget = sum(m.get('budget', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_runtime = sum(m.get('runtime', 0) for m in movies) / total_movies if total_movies > 0 else 0
         
-        # Apply year and month filters to release_date
-        if year and month:
-            # Filter by YYYY-MM format
-            month_str = f"{year}-{month:02d}"
-            genre_movies_query['data.release_date'] = {'$regex': f'^{month_str}'}
-        elif year:
-            # Filter by YYYY format only
-            genre_movies_query['data.release_date'] = {'$regex': f'^{year}'}
+        # Get sentiment baseline for this genre
+        sentiment_baseline = self.sentiment_baselines.find_one({
+            'genre': genre,
+            'year': year
+        }) if year else self.sentiment_baselines.find_one({'genre': genre})
         
-        genre_movie_ids = [m['movie_id'] for m in self.batch_views.find(genre_movies_query, {'movie_id': 1})]
-        
-        # Aggregate sentiment: col1 = avg_sentiment, col2 = review_count
-        sentiment_pipeline = [
-            {'$match': {
-                'view_type': 'sentiment',
-                'movie_id': {'$in': genre_movie_ids},
-                'data.col1': {'$ne': None, '$exists': True}
-            }},
-            {'$group': {
-                '_id': None,
-                'avg_sentiment': {'$avg': '$data.col1'},
-                'total_reviews': {'$sum': '$data.col2'}
-            }}
-        ]
-        
-        sentiment_result = list(self.batch_views.aggregate(sentiment_pipeline))
-        calculated_avg_sentiment = sentiment_result[0]['avg_sentiment'] if sentiment_result else None
-        
-        # Get ALL movies matching filters (remove limit to get complete list)
-        top_movies_cursor = self.batch_views.find(
-            genre_movies_query
-        ).sort('data.vote_average', -1)
-        
+        # Build top movies list
+        sorted_movies = sorted(movies, key=lambda x: x.get('vote_average', 0), reverse=True)
         top_movies = []
-        for movie in top_movies_cursor:
-            data = movie.get('data', {})
+        for movie in sorted_movies:
             top_movies.append({
                 'movie_id': movie.get('movie_id'),
-                'title': data.get('title', 'Unknown'),
-                'vote_average': round(data.get('vote_average', 0), 2),
-                'popularity': round(data.get('popularity', 0), 2),
-                'vote_count': data.get('vote_count', 0),
-                'release_date': data.get('release_date')
+                'title': movie.get('title', 'Unknown'),
+                'vote_average': round(movie.get('vote_average', 0), 2),
+                'popularity': round(movie.get('popularity', 0), 2),
+                'vote_count': movie.get('vote_count', 0),
+                'release_date': movie.get('release_date')
             })
-        
-        # Extract statistics
-        # total_movies always equals actual count of movies in top_movies
-        total_movies_count = len(top_movies)
         
         result = {
             'genre': genre,
-            'year': batch_analytics.get('year'),
-            'month': batch_analytics.get('month'),
+            'year': year,
+            'month': month,
             'statistics': {
-                'total_movies': total_movies_count,
-                'avg_rating': round(batch_analytics.get('avg_rating', 0), 2),
-                'avg_sentiment': round(calculated_avg_sentiment, 3) if calculated_avg_sentiment is not None else None,
-                'avg_popularity': round(batch_analytics.get('avg_popularity', 0), 2),
-                'total_revenue': batch_analytics.get('total_revenue'),
-                'avg_budget': batch_analytics.get('avg_budget'),
-                'avg_runtime': batch_analytics.get('avg_runtime')
+                'total_movies': total_movies,
+                'avg_rating': round(avg_rating, 2),
+                'avg_sentiment': round(avg_sentiment, 3),
+                'avg_popularity': round(avg_popularity, 2),
+                'total_revenue': total_revenue,
+                'avg_budget': round(avg_budget, 2),
+                'avg_runtime': round(avg_runtime, 2),
+                'sentiment_baseline': sentiment_baseline.get('avg_sentiment') if sentiment_baseline else None
             },
             'top_movies': top_movies,
             'trends': {

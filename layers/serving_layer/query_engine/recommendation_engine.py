@@ -19,11 +19,20 @@ logger = logging.getLogger(__name__)
 class RecommendationEngine:
     """
     Content-based recommendation engine with real-time adjustments
+    
+    Updated to work with 3 separate batch collections:
+    - sentiment_baselines: Genre/franchise/yearly sentiment patterns
+    - viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+    - movie_intelligence: Individual movie competitive data
     """
     
     def __init__(self, db: Database):
         self.db = db
-        self.batch_views = db.batch_views
+        # 3 separate batch collections
+        self.sentiment_baselines = db.sentiment_baselines
+        self.viral_thresholds = db.viral_thresholds
+        self.movie_intelligence = db.movie_intelligence
+        # Speed layer collection
         self.speed_views = db.speed_views
     
     def get_similar_movies(
@@ -43,35 +52,30 @@ class RecommendationEngine:
         
         Then re-ranked by trending and sentiment
         """
-        # Get source movie from movie_intelligence view
-        source = self.batch_views.find_one({
-            'movie_id': movie_id,
-            'view_type': 'movie_intelligence'
+        # Get source movie from movie_intelligence collection
+        source = self.movie_intelligence.find_one({
+            'movie_id': movie_id
         })
         
         if not source:
             logger.warning(f"Movie {movie_id} not found in database")
             return []
         
-        # Handle both flat and nested schema
-        source_data = source.get('data', source)
-        
         # Extract genres - check both 'genre' (string) and 'genres' (array)
-        genres_field = source_data.get('genres', [])
-        genre_field = source_data.get('genre')
+        genres_field = source.get('genres', [])
+        genre_field = source.get('genre')
         if genre_field and not genres_field:
             genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
         
         source_genres = self._extract_genres(genres_field)
-        source_year = self._extract_year(source_data.get('release_date'))
-        source_rating = source_data.get('vote_average', 0)
+        source_year = self._extract_year(source.get('release_date'))
+        source_rating = source.get('vote_average', 0)
         
-        # Find candidates with genre overlap from movie_intelligence view
+        # Find candidates with genre overlap from movie_intelligence collection
         candidates = []
         
         # Query both flat and nested genre fields
         query = {
-            'view_type': 'movie_intelligence',
             'movie_id': {'$ne': movie_id},
             '$or': [
                 {'genres': {'$in': list(source_genres)}},
@@ -79,19 +83,16 @@ class RecommendationEngine:
             ]
         }
         
-        for movie in self.batch_views.find(query).limit(200):
-            # Handle both flat and nested schema
-            data = movie.get('data', movie)
-            
+        for movie in self.movie_intelligence.find(query).limit(200):
             # Extract genres - check both 'genre' (string) and 'genres' (array)
-            genres_field = data.get('genres', [])
-            genre_field = data.get('genre')
+            genres_field = movie.get('genres', [])
+            genre_field = movie.get('genre')
             if genre_field and not genres_field:
                 genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
             
             movie_genres = self._extract_genres(genres_field)
-            movie_year = self._extract_year(data.get('release_date'))
-            movie_rating = data.get('vote_average', 0)
+            movie_year = self._extract_year(movie.get('release_date'))
+            movie_rating = movie.get('vote_average', 0)
             
             # Calculate content similarity
             genre_sim = len(source_genres & movie_genres) / len(source_genres | movie_genres) if source_genres | movie_genres else 0
@@ -106,11 +107,11 @@ class RecommendationEngine:
             
             candidates.append({
                 'movie_id': movie['movie_id'],
-                'title': data.get('title', 'Unknown'),
+                'title': movie.get('title', 'Unknown'),
                 'genres': list(movie_genres),
-                'release_date': data.get('release_date'),
+                'release_date': movie.get('release_date'),
                 'vote_average': movie_rating,
-                'popularity': data.get('popularity', 0),
+                'popularity': movie.get('popularity', 0),
                 'content_score': content_score
             })
         
@@ -166,48 +167,39 @@ class RecommendationEngine:
         sort_by: str = 'hybrid'
     ) -> List[Dict[str, Any]]:
         """
-        Get top movies in genre with hybrid ranking (real-time from movie_intelligence)
+        Get top movies in genre with hybrid ranking from movie_intelligence collection
         """
-        # Query movie_intelligence view - handle both flat and nested schema
+        # Query movie_intelligence collection
         query = {
-            'view_type': 'movie_intelligence',
             '$and': [
                 {
                     '$or': [
-                        {'genres': genre},  # Nested schema (array)
-                        {'genre': genre}    # Flat schema (string)
+                        {'genres': genre},  # Array field
+                        {'genre': genre}    # String field
                     ]
                 },
-                {
-                    '$or': [
-                        {'vote_average': {'$gte': min_rating}},  # Flat schema
-                        {'data.vote_average': {'$gte': min_rating}}  # Nested schema
-                    ]
-                }
+                {'vote_average': {'$gte': min_rating}}
             ]
         }
         
-        movies = list(self.batch_views.find(query).limit(100))
+        movies = list(self.movie_intelligence.find(query).limit(100))
         
         candidates = []
         for movie in movies:
-            # Handle both flat and nested schema
-            data = movie.get('data', movie)
-            
             # Extract genres - check both 'genre' (string) and 'genres' (array)
-            genres_field = data.get('genres', [])
-            genre_field = data.get('genre')
+            genres_field = movie.get('genres', [])
+            genre_field = movie.get('genre')
             if genre_field and not genres_field:
                 genres_field = [genre_field] if isinstance(genre_field, str) else genre_field
             
             candidates.append({
                 'movie_id': movie['movie_id'],
-                'title': data.get('title', 'Unknown'),
+                'title': movie.get('title', 'Unknown'),
                 'genres': genres_field,
-                'release_date': data.get('release_date'),
-                'vote_average': data.get('vote_average', 0),
-                'vote_count': data.get('vote_count', 0),
-                'popularity': data.get('popularity', 0)
+                'release_date': movie.get('release_date'),
+                'vote_average': movie.get('vote_average', 0),
+                'vote_count': movie.get('vote_count', 0),
+                'popularity': movie.get('popularity', 0)
             })
         
         # Apply boosts based on sort strategy
@@ -295,15 +287,11 @@ class RecommendationEngine:
             if movie_id not in sentiment_data:
                 sentiment_data[movie_id] = sentiment
         
-        # From batch layer (historical)
-        for doc in self.batch_views.find({
-            'view_type': 'sentiment'
-        }):
-            movie_id = doc.get('movie_id')
+        # Get sentiment from movie_intelligence collection
+        for movie in self.movie_intelligence.find():
+            movie_id = movie.get('movie_id')
             if movie_id not in sentiment_data:
-                data = doc.get('data', {})
-                # Schema: col1=avg_sentiment
-                sentiment_data[movie_id] = data.get('col1', 0)
+                sentiment_data[movie_id] = movie.get('avg_sentiment', 0)
         
         # Normalize sentiment scores (-1 to 1) -> (0 to 1)
         for c in candidates:
@@ -419,26 +407,25 @@ class RecommendationEngine:
                 "post_count": reddit_item["post_count"]
             }
         
-        # Step 2: Get TMDB quality scores from batch layer
-        match_criteria = {"view_type": "movie_intelligence"}
+        # Step 2: Get TMDB quality scores from movie_intelligence collection
+        match_criteria = {}
         if genre:
-            match_criteria["data.genres"] = genre
+            match_criteria["$or"] = [
+                {"genres": genre},
+                {"genre": genre}
+            ]
         
         candidates = []
-        for movie in self.batch_views.find(match_criteria).limit(500):
-            if "data" not in movie:
-                continue
-            
-            data = movie["data"]
-            movie_title = data.get("title")
+        for movie in self.movie_intelligence.find(match_criteria).limit(500):
+            movie_title = movie.get("title")
             
             if not movie_title:
                 continue
             
             # Get TMDB quality metrics
-            tmdb_rating = data.get("vote_average", 0)
-            tmdb_vote_count = data.get("vote_count", 0)
-            tmdb_popularity = data.get("popularity", 0)
+            tmdb_rating = movie.get("vote_average", 0)
+            tmdb_vote_count = movie.get("vote_count", 0)
+            tmdb_popularity = movie.get("popularity", 0)
             
             # Skip if below minimum TMDB rating
             if tmdb_rating < min_tmdb_rating:
@@ -469,11 +456,17 @@ class RecommendationEngine:
                 tmdb_quality_score * tmdb_weight
             )
             
+            # Handle both genres array and genre string
+            genres = movie.get("genres", [])
+            if not genres:
+                genre_field = movie.get("genre")
+                genres = [genre_field] if genre_field else []
+            
             candidates.append({
                 "movie_id": movie.get("movie_id"),
                 "title": movie_title,
-                "genres": data.get("genres", []),
-                "release_date": data.get("release_date"),
+                "genres": genres,
+                "release_date": movie.get("release_date"),
                 "dual_success_score": dual_success_score,
                 "reddit_buzz": {
                     "score": round(reddit_score, 3),

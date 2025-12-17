@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 class MovieQueries:
     """
     Query builder for movie-related operations
+    
+    Updated to work with 3 separate batch collections:
+    - sentiment_baselines: Genre/franchise/yearly sentiment patterns
+    - viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+    - movie_intelligence: Individual movie competitive data
     """
     
     def __init__(self, db: Database):
@@ -26,42 +31,74 @@ class MovieQueries:
             db: MongoDB database instance
         """
         self.db = db
-        self.batch_views = db.batch_views
+        # 3 separate batch collections (no more view_type discriminator)
+        self.sentiment_baselines = db.sentiment_baselines
+        self.viral_thresholds = db.viral_thresholds
+        self.movie_intelligence = db.movie_intelligence
+        # Speed layer collection
         self.speed_views = db.speed_views
     
     # --- Batch Layer Queries ---
     
-    def get_batch_genre_analytics(
+    def get_sentiment_baselines(
         self,
         genre: Optional[str] = None,
-        year: Optional[int] = None,
-        month: Optional[int] = None
+        franchise: Optional[str] = None,
+        year: Optional[int] = None
     ) -> List[Dict]:
         """
-        Get genre analytics from batch layer
+        Get sentiment baselines from batch layer (for PR Crisis Detection)
         
         Args:
             genre: Filter by genre
+            franchise: Filter by franchise
             year: Filter by year
-            month: Filter by month
         
         Returns:
-            List of genre analytics documents
+            List of sentiment baseline documents
         """
-        query = {'view_type': 'genre_analytics'}
+        query = {}
         
         if genre:
             query['genre'] = genre
+        if franchise:
+            query['franchise'] = franchise
         if year:
             query['year'] = year
-        if month:
-            query['month'] = month
         
-        return list(self.batch_views.find(query).sort('computed_at', DESCENDING))
+        return list(self.sentiment_baselines.find(query).sort('batch_run_timestamp', DESCENDING))
+    
+    def get_viral_thresholds(
+        self,
+        genre: Optional[str] = None,
+        budget_tier: Optional[str] = None,
+        season: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Get viral thresholds from batch layer (for Viral Content Detection)
+        
+        Args:
+            genre: Filter by genre
+            budget_tier: Filter by budget tier (low, medium, high)
+            season: Filter by season (winter, spring, summer, fall)
+        
+        Returns:
+            List of viral threshold documents
+        """
+        query = {}
+        
+        if genre:
+            query['genre'] = genre
+        if budget_tier:
+            query['budget_tier'] = budget_tier
+        if season:
+            query['season'] = season
+        
+        return list(self.viral_thresholds.find(query).sort('batch_run_timestamp', DESCENDING))
     
     def get_batch_movie_by_id(self, movie_id: int) -> Optional[Dict]:
         """
-        Get movie from batch layer by ID
+        Get movie from movie_intelligence collection by ID
         
         Args:
             movie_id: TMDB movie ID
@@ -69,14 +106,11 @@ class MovieQueries:
         Returns:
             Movie document or None
         """
-        return self.batch_views.find_one({
-            'movie_id': movie_id,
-            'view_type': 'movie_details'
-        })
+        return self.movie_intelligence.find_one({'movie_id': movie_id})
     
     def get_movie_id_by_title(self, title: str) -> Optional[int]:
         """
-        Get movie ID by exact title match
+        Get movie ID by exact title match from movie_intelligence collection
         
         Args:
             title: Movie title (case-insensitive)
@@ -84,36 +118,16 @@ class MovieQueries:
         Returns:
             Movie ID or None if not found
         """
-        # Try exact match first in old schema (case-insensitive)
-        movie = self.batch_views.find_one({
-            'view_type': 'movie_details',
-            'data.title': {'$regex': f'^{title}$', '$options': 'i'}
-        })
-        
-        if movie:
-            return movie.get('movie_id')
-        
-        # Try exact match in new schema (movie_intelligence)
-        movie = self.batch_views.find_one({
-            'view_type': 'movie_intelligence',
+        # Try exact match (case-insensitive)
+        movie = self.movie_intelligence.find_one({
             'title': {'$regex': f'^{title}$', '$options': 'i'}
         })
         
         if movie:
             return movie.get('movie_id')
         
-        # Try partial match as fallback in old schema
-        movie = self.batch_views.find_one({
-            'view_type': 'movie_details',
-            'data.title': {'$regex': title, '$options': 'i'}
-        })
-        
-        if movie:
-            return movie.get('movie_id')
-        
-        # Try partial match in new schema
-        movie = self.batch_views.find_one({
-            'view_type': 'movie_intelligence',
+        # Try partial match as fallback
+        movie = self.movie_intelligence.find_one({
             'title': {'$regex': title, '$options': 'i'}
         })
         
@@ -212,10 +226,10 @@ class MovieQueries:
         """
         cutoff_time = datetime.utcnow() - timedelta(hours=cutoff_hours)
         
-        # Get from batch layer (historical)
-        batch_data = self.batch_views.find_one({
+        # Get from movie_intelligence collection (no view_type filter needed)
+        batch_data = self.movie_intelligence.find_one({
             'movie_id': movie_id,
-            'computed_at': {'$lt': cutoff_time}
+            'batch_run_timestamp': {'$exists': True}
         })
         
         # Get from speed layer (recent)
@@ -246,7 +260,7 @@ class MovieQueries:
         offset: int = 0
     ) -> Dict[str, Any]:
         """
-        Search movies with multiple filters (aligned with actual data schema)
+        Search movies with multiple filters from movie_intelligence collection
         
         Args:
             query: Text search query
@@ -262,8 +276,8 @@ class MovieQueries:
         Returns:
             Search results with pagination info
         """
-        # Build query for movie_intelligence view
-        search_query = {'view_type': 'movie_intelligence'}
+        # Build query for movie_intelligence collection
+        search_query = {}
         
         # Text search on title
         if query:
@@ -276,7 +290,7 @@ class MovieQueries:
                 {'genres': genre}
             ]
         
-        # Year filter (extract from release_year or release_date)
+        # Year filter
         if year_from or year_to:
             year_query = {}
             if year_from:
@@ -294,18 +308,18 @@ class MovieQueries:
                 rating_query['$lte'] = rating_max
             search_query['vote_average'] = rating_query
         
-        # Sort mapping for movie_intelligence view
+        # Sort mapping for movie_intelligence collection
         sort_map = {
             'rating': ('vote_average', DESCENDING),
             'sentiment': ('avg_sentiment', DESCENDING),
-            'viral_score': ('popularity', DESCENDING),  # Use popularity as proxy
+            'viral_score': ('popularity', DESCENDING),
             'release_date': ('release_year', DESCENDING)
         }
         sort_field, sort_order = sort_map.get(sort_by, ('vote_average', DESCENDING))
         
-        # Execute query
-        cursor = self.batch_views.find(search_query).sort(sort_field, sort_order)
-        total = self.batch_views.count_documents(search_query)
+        # Execute query on movie_intelligence collection
+        cursor = self.movie_intelligence.find(search_query).sort(sort_field, sort_order)
+        total = self.movie_intelligence.count_documents(search_query)
         
         results = list(cursor.skip(offset).limit(limit))
         

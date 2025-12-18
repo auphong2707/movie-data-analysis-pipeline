@@ -19,7 +19,10 @@ from api.schemas.crisis_detection import (
     CrisisAlertsResponse,
     Percentiles,
     DateRange,
-    BaselineStatsResponse
+    BaselineStatsResponse,
+    SeverityCounts,
+    SentimentVelocity,
+    MonitoringDashboardResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -628,8 +631,153 @@ async def get_year_baseline(year: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/monitoring")
+@router.get("/monitoring", response_model=MonitoringDashboardResponse)
 async def get_monitoring_data():
-    """Get real-time monitoring dashboard data"""
-    # TODO: Implement monitoring dashboard
-    pass
+    """
+    Get real-time monitoring dashboard data
+    
+    Returns aggregated statistics for crisis detection monitoring:
+    - Counts by severity level
+    - Top declining movies by sentiment velocity
+    - Overall sentiment trends
+    """
+    try:
+        client = get_mongodb_client()
+        db = client.get_database("moviedb")
+        queries = MovieQueries(db)
+        
+        # Get recent speed layer data (last 48 hours)
+        cutoff_time = datetime.utcnow() - timedelta(hours=48)
+        speed_movies = list(db.speed_views.find({
+            "window_start": {"$gte": cutoff_time}
+        }).sort("window_start", -1))
+        
+        # Initialize counters
+        severity_counts = {
+            "critical": 0,
+            "high": 0,
+            "warning": 0,
+            "normal": 0
+        }
+        
+        total_movies_tracked = 0
+        crisis_movies = 0
+        sentiment_sum = 0.0
+        sentiment_velocities = []
+        processed_titles = set()
+        
+        # Process each speed layer movie
+        for speed_movie in speed_movies:
+            movie_title = speed_movie.get('movie_title', '')
+            normalized_title = normalize_movie_title(movie_title)
+            
+            # Skip duplicates
+            if normalized_title in processed_titles:
+                continue
+            processed_titles.add(normalized_title)
+            
+            # Find matching batch movie
+            batch_movie = db.movie_intelligence.find_one({
+                "title": {"$regex": f"^{re.escape(normalized_title)}$", "$options": "i"}
+            })
+            
+            if not batch_movie:
+                continue
+            
+            total_movies_tracked += 1
+            
+            # Get current sentiment
+            S_current = speed_movie.get('metrics', {}).get('avg_sentiment')
+            if S_current is None:
+                continue
+            
+            sentiment_sum += S_current
+            
+            # Get baseline (try franchise → genre → year)
+            baseline = None
+            if batch_movie.get("franchise"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "franchise")
+            if not baseline and batch_movie.get("genre"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "genre")
+            if not baseline and batch_movie.get("release_year"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "year")
+            
+            if not baseline:
+                continue
+            
+            # Calculate deviation
+            S_baseline = baseline.get("avg_sentiment")
+            σ_baseline = baseline.get("sentiment_stddev")
+            
+            if not σ_baseline or σ_baseline == 0:
+                continue
+            
+            σ = (S_current - S_baseline) / σ_baseline
+            severity = get_severity(σ)
+            
+            # Count by severity
+            if σ < -4.0:
+                severity_counts["critical"] += 1
+                crisis_movies += 1
+            elif σ < -3.0:
+                severity_counts["high"] += 1
+                crisis_movies += 1
+            elif σ < -2.0:
+                severity_counts["warning"] += 1
+            else:
+                severity_counts["normal"] += 1
+            
+            # Calculate sentiment velocity (rate of change)
+            # Get sentiment from 1 hour ago
+            time_1h_ago = datetime.utcnow() - timedelta(hours=1)
+            older_window = db.speed_views.find_one({
+                "movie_title": movie_title,
+                "window_start": {
+                    "$gte": time_1h_ago - timedelta(minutes=30),
+                    "$lt": time_1h_ago + timedelta(minutes=30)
+                }
+            })
+            
+            S_1h_ago = None
+            velocity = 0.0
+            
+            if older_window:
+                S_1h_ago = older_window.get('metrics', {}).get('avg_sentiment')
+                if S_1h_ago is not None:
+                    # Calculate velocity: (S_current - S_1h_ago) / 1h
+                    velocity = S_current - S_1h_ago
+            
+            sentiment_velocities.append(SentimentVelocity(
+                movie_id=batch_movie.get("movie_id"),
+                movie_title=batch_movie.get("title"),
+                current_sentiment=round(S_current, 3),
+                sentiment_1h_ago=round(S_1h_ago, 3) if S_1h_ago is not None else None,
+                velocity=round(velocity, 4),
+                is_accelerating=velocity < 0  # Negative velocity = declining sentiment
+            ))
+        
+        # Sort by velocity (most declining first - most negative velocity)
+        sentiment_velocities.sort(key=lambda x: x.velocity)
+        top_declining = sentiment_velocities[:10]  # Top 10 most declining
+        
+        # Calculate average sentiment
+        avg_sentiment = sentiment_sum / total_movies_tracked if total_movies_tracked > 0 else 0.0
+        
+        response = MonitoringDashboardResponse(
+            severity_counts=SeverityCounts(**severity_counts),
+            total_movies_tracked=total_movies_tracked,
+            crisis_movies=crisis_movies,
+            top_declining_movies=top_declining,
+            average_sentiment=round(avg_sentiment, 3),
+            last_updated=datetime.utcnow().isoformat()
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error getting monitoring data: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+

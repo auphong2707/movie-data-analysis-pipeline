@@ -11,7 +11,10 @@ from api.schemas.crisis_detection import (
     CrisisAlertsResponse,
     Percentiles,
     DateRange,
-    BaselineStatsResponse
+    BaselineStatsResponse,
+    SeverityCounts,
+    SentimentVelocity,
+    MonitoringDashboardResponse
 )
 
 __all__ = [
@@ -25,4 +28,7 @@ __all__ = [
     "Percentiles",
     "DateRange",
     "BaselineStatsResponse",
+    "SeverityCounts",
+    "SentimentVelocity",
+    "MonitoringDashboardResponse",
 ]

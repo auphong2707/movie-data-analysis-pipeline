@@ -700,6 +700,199 @@ class TestBaselineEndpoints:
             pytest.skip("API is not running")
 
 
+class TestMonitoringEndpoint:
+    """Test monitoring dashboard endpoint (1.6)"""
+    
+    def test_monitoring_endpoint_returns_200(self):
+        """Test monitoring endpoint returns valid dashboard data"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/monitoring",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check top-level structure
+            assert "severity_counts" in data
+            assert "total_movies_tracked" in data
+            assert "crisis_movies" in data
+            assert "top_declining_movies" in data
+            assert "average_sentiment" in data
+            assert "last_updated" in data
+            
+            # Validate severity_counts
+            severity = data["severity_counts"]
+            assert "critical" in severity and severity["critical"] is not None
+            assert "high" in severity and severity["high"] is not None
+            assert "warning" in severity and severity["warning"] is not None
+            assert "normal" in severity and severity["normal"] is not None
+            
+            # All counts should be non-negative integers
+            assert isinstance(severity["critical"], int) and severity["critical"] >= 0
+            assert isinstance(severity["high"], int) and severity["high"] >= 0
+            assert isinstance(severity["warning"], int) and severity["warning"] >= 0
+            assert isinstance(severity["normal"], int) and severity["normal"] >= 0
+            
+            # Validate metrics
+            assert isinstance(data["total_movies_tracked"], int)
+            assert data["total_movies_tracked"] >= 0
+            assert isinstance(data["crisis_movies"], int)
+            assert data["crisis_movies"] >= 0
+            
+            # Crisis movies should be sum of critical + high
+            expected_crisis = severity["critical"] + severity["high"]
+            assert data["crisis_movies"] == expected_crisis, \
+                f"Crisis count mismatch: expected {expected_crisis}, got {data['crisis_movies']}"
+            
+            # Average sentiment should be in valid range
+            assert -1.0 <= data["average_sentiment"] <= 1.0
+            
+            # Validate last_updated is ISO format datetime
+            assert "T" in data["last_updated"]
+            
+            print(f"\n✓ Monitoring dashboard: {data['total_movies_tracked']} movies tracked, "
+                  f"{data['crisis_movies']} in crisis")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_monitoring_top_declining_movies(self):
+        """Test top declining movies list structure"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/monitoring",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Validate top_declining_movies list
+            declining = data["top_declining_movies"]
+            assert isinstance(declining, list)
+            
+            # If there are declining movies, validate structure
+            if len(declining) > 0:
+                # Check first movie structure
+                movie = declining[0]
+                assert "movie_id" in movie and movie["movie_id"] is not None
+                assert "movie_title" in movie and movie["movie_title"] is not None
+                assert "current_sentiment" in movie and movie["current_sentiment"] is not None
+                assert "velocity" in movie and movie["velocity"] is not None
+                assert "is_accelerating" in movie
+                
+                # Type validation
+                assert isinstance(movie["movie_id"], int)
+                assert isinstance(movie["movie_title"], str)
+                assert len(movie["movie_title"]) > 0
+                assert isinstance(movie["is_accelerating"], bool)
+                
+                # Sentiment range validation
+                assert -1.0 <= movie["current_sentiment"] <= 1.0
+                
+                # If sentiment_1h_ago exists, validate it
+                if movie.get("sentiment_1h_ago") is not None:
+                    assert -1.0 <= movie["sentiment_1h_ago"] <= 1.0
+                
+                # Validate all movies in the list
+                for m in declining:
+                    assert m["movie_id"] is not None
+                    assert m["movie_title"] is not None and len(m["movie_title"]) > 0
+                    assert -1.0 <= m["current_sentiment"] <= 1.0
+                    assert m["velocity"] is not None
+                    assert isinstance(m["is_accelerating"], bool)
+                
+                # List should be sorted by velocity (most negative first)
+                velocities = [m["velocity"] for m in declining]
+                assert velocities == sorted(velocities), \
+                    "Declining movies should be sorted by velocity (most negative first)"
+                
+                print(f"\n✓ Top declining movies: {len(declining)} movies with velocity tracking")
+            else:
+                print(f"\n✓ No declining movies currently (system stable)")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_monitoring_severity_distribution(self):
+        """Test that severity counts are valid and crisis count is correct"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/monitoring",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            severity = data["severity_counts"]
+            total = data["total_movies_tracked"]
+            
+            # Sum of all severity levels
+            severity_sum = (
+                severity["critical"] + 
+                severity["high"] + 
+                severity["warning"] + 
+                severity["normal"]
+            )
+            
+            # Severity sum should be <= total tracked
+            # (Some movies might not have baselines, so they won't be classified)
+            assert severity_sum <= total, \
+                f"Severity counts ({severity_sum}) should not exceed total tracked ({total})"
+            
+            # Crisis movies should equal critical + high
+            expected_crisis = severity["critical"] + severity["high"]
+            assert data["crisis_movies"] == expected_crisis, \
+                f"Crisis count ({data['crisis_movies']}) should equal critical + high ({expected_crisis})"
+            
+            print(f"\n✓ Severity distribution: Critical={severity['critical']}, "
+                  f"High={severity['high']}, Warning={severity['warning']}, "
+                  f"Normal={severity['normal']} (Total classified: {severity_sum}/{total})")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_monitoring_data_consistency(self):
+        """Test monitoring data is internally consistent"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/monitoring",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # If we have tracked movies, we should have some severity counts
+            if data["total_movies_tracked"] > 0:
+                severity = data["severity_counts"]
+                total_with_severity = sum([
+                    severity["critical"],
+                    severity["high"],
+                    severity["warning"],
+                    severity["normal"]
+                ])
+                assert total_with_severity > 0, "Should have movies with severity classification"
+            
+            # If we have crisis movies, critical + high should be > 0
+            if data["crisis_movies"] > 0:
+                severity = data["severity_counts"]
+                assert (severity["critical"] + severity["high"]) > 0, \
+                    "Crisis movies should have critical or high severity"
+            
+            # Top declining list should not exceed total tracked
+            assert len(data["top_declining_movies"]) <= data["total_movies_tracked"], \
+                "Top declining list cannot exceed total movies tracked"
+            
+            print(f"\n✓ Monitoring data is internally consistent")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Crisis Detection API Integration Tests")
@@ -708,4 +901,5 @@ if __name__ == "__main__":
     print("="*60 + "\n")
     
     pytest.main([__file__, "-v", "-s"])
+
 

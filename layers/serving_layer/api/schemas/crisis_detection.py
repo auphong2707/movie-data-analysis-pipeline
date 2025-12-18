@@ -97,3 +97,31 @@ class BaselineStatsResponse(BaseModel):
     crisis_threshold: float
     data_range: Optional[DateRange] = None
 
+
+class SeverityCounts(BaseModel):
+    """Counts of movies by severity level"""
+    critical: int
+    high: int
+    warning: int
+    normal: int
+
+
+class SentimentVelocity(BaseModel):
+    """Sentiment velocity for a movie"""
+    movie_id: int
+    movie_title: str
+    current_sentiment: float
+    sentiment_1h_ago: Optional[float]
+    velocity: float  # sentiment change per hour
+    is_accelerating: bool
+
+
+class MonitoringDashboardResponse(BaseModel):
+    """Response for real-time monitoring dashboard"""
+    severity_counts: SeverityCounts
+    total_movies_tracked: int
+    crisis_movies: int
+    top_declining_movies: list[SentimentVelocity]
+    average_sentiment: float
+    last_updated: str
+

@@ -815,10 +815,12 @@ recommendations = []
 
 # Get movies from both layers
 batch_movies = movie_intelligence.find({"vote_average": {"$gte": min_rating}})
-speed_movies = speed_layer.find({"last_discussion_time": {"$gte": now - 30d}})
+# Query speed_views collection with correct field name
+cutoff_time = datetime.utcnow() - timedelta(days=30)
+speed_movies = db.speed_views.find({"window_start": {"$gte": cutoff_time}})
 
-# Merge on movie_id
-merged_movies = merge_on_movie_id(batch_movies, speed_movies)
+# Merge on movie_title (speed_views uses movie_title, not movie_id)
+merged_movies = merge_on_movie_title(batch_movies, speed_movies)
 
 for movie in merged_movies:
     # Calculate Reddit Score
@@ -926,10 +928,11 @@ Sentiment-Aware Boost (optional):
   final_score = sim * sentiment_boost
   where:
     sentiment_boost = {
-      1.2 if both movies have positive sentiment (>7.0)
+      1.2 if both movies have positive sentiment (>0.3)
       1.0 if neutral
-      0.8 if either has negative sentiment (<5.0)
+      0.8 if either has negative sentiment (<-0.3)
     }
+    Note: avg_sentiment range is -1.0 to 1.0, not TMDB rating scale
 ```
 
 **Implementation:**
@@ -968,7 +971,7 @@ def get_similar_movies(movie_id, limit=10):
             "movie_id": candidate.movie_id,
             "movie_title": candidate.title,
             "similarity_score": round(final_score, 3),
-            "shared_genres": list(set(target.genre) & set(candidate.genre)),  # ✅ Use 'genre'
+            "shared_genre": target.genre if target.genre == candidate.genre else None,
             "release_year_diff": abs(target.release_year - candidate.release_year),
             "vote_average": candidate.vote_average
         })
@@ -1286,8 +1289,7 @@ grafana/dashboards/
 ├── 1-crisis-detection.json           # 🚨 GOAL #1: PR Crisis Detection
 ├── 2-viral-content.json              # 🔥 GOAL #2: Viral Content  
 ├── 3-recommendation-performance.json # 🎯 GOAL #3: Recommendations
-├── 4-system-health.json              # System monitoring
-└── 5-analytics-overview.json         # Executive summary (optional)
+└── 4-system-health.json              # System monitoring
 ```
 
 ---
@@ -2012,296 +2014,6 @@ grafana/dashboards/
 
 ---
 
-## 📋 Dashboard #5: Analytics Overview (Optional Executive Summary)
-
-**File:** `5-analytics-overview.json`  
-**Purpose:** High-level KPIs for executives
-
-### API Endpoints Used
-
-| Endpoint | Purpose | Panel(s) |
-|----------|---------|----------|
-| `GET /crisis-detection/alerts` | Crisis summary | Crisis Overview |
-| `GET /viral-detection/trending` | Viral summary | Viral Overview |
-| `GET /recommendations/dual-success` | Rec summary | Recommendation Overview |
-| `GET /health` | System summary | Health Overview |
-
-### Dashboard Panels
-
-#### Single Row: Business Goal KPIs
-```json
-[
-  {
-    "title": "🚨 Crisis Alerts (7d)",
-    "type": "stat",
-    "datasource": "Prometheus",
-    "query": "increase(crisis_alerts_total[7d])",
-    "link": "d/1-crisis-detection"
-  },
-  {
-    "title": "🔥 Viral Movies (7d)",
-    "type": "stat",
-    "datasource": "Prometheus",
-    "query": "increase(viral_detections_total[7d])",
-    "link": "d/2-viral-content"
-  },
-  {
-    "title": "🎯 Recommendations (7d)",
-    "type": "stat",
-    "datasource": "Prometheus",
-    "query": "increase(recommendation_requests_total[7d])",
-    "link": "d/3-recommendation-performance"
-  },
-  {
-    "title": "⚙️ API Uptime",
-    "type": "stat",
-    "datasource": "Prometheus",
-    "query": "avg_over_time(up{job='fastapi'}[7d]) * 100",
-    "unit": "percent",
-    "link": "d/4-system-health"
-  }
-]
-```
-
----
-
-## �️ Schema Validation & Critical Fixes
-
-### Overview
-
-Based on comprehensive schema validation (see `SCHEMA_VALIDATION.md`), we identified **2 critical schema issues** that must be handled in the API implementation to prevent data inconsistencies.
-
-**Status:** ✅ Schemas validated across batch & speed layers  
-**Risk Level:** LOW (issues are manageable with API-layer fixes)
-
----
-
-### Critical Issue #1: Genre Type - No Mismatch ✅
-
-**Actual Schema (from MONGODB_SCHEMAS.md):**
-- `movie_intelligence.genre` = **String** (e.g., `"Action"`)
-- `sentiment_baselines.genre` = **String or null** (e.g., `"Action"` or `null`)
-- `viral_thresholds.genre` = **String or null** (e.g., `"Action"` or `null`)
-
-**Conclusion:**
-All collections use the same type (String) for genre field. No array-to-string conversion needed.
-
-**API Implementation:**
-Direct string comparison can be used when joining collections:
-
-```python
-# No special handling needed - direct comparison works
-def get_sentiment_baseline(movie):
-    """
-    Get sentiment baseline for a movie using priority fallback.
-    Priority: franchise > genre > yearly > global
-    """
-    genre = movie.get("genre")  # Already a string
-    franchise = movie.get("franchise")
-    year = movie.get("release_year")
-    
-    # Priority 1: Franchise baseline
-    if franchise:
-        baseline = db.sentiment_baselines.find_one({
-            "franchise": franchise,
-            "genre": None,
-            "year": None
-        })
-        if baseline:
-            return baseline
-    
-    # Priority 2: Genre baseline  
-    if genre:
-        baseline = db.sentiment_baselines.find_one({
-            "genre": genre,
-            "franchise": None,
-            "year": None
-        })
-        if baseline:
-            return baseline
-    
-    # Priority 3: Yearly baseline
-    if year:
-        baseline = db.sentiment_baselines.find_one({
-            "year": year,
-            "genre": None,
-            "franchise": None
-        })
-        if baseline:
-            return baseline
-    
-    # Priority 4: Global baseline (all nulls)
-    return db.sentiment_baselines.find_one({
-        "genre": None,
-        "franchise": None,
-        "year": None
-    })
-```
-
-**Where to Apply:**
-- ✅ `/crisis-detection/movies/{id}/sentiment` - Genre baseline lookup (direct comparison)
-- ✅ `/crisis-detection/alerts` - Multi-movie genre grouping (direct comparison)
-- ✅ `/viral-detection/trending/genre/{genre}` - Genre filtering (direct comparison)
-- ✅ `/recommendations/dual-success/genre/{genre}` - Genre-based recommendations (direct comparison)
-
----
-
-### Critical Issue #2: Movie Identification Mismatch ⚠️
-
-**Problem:**
-- **Batch Layer** uses `movie_id` (Long, TMDB numeric ID)
-- **Speed Layer** uses `movie_title` (TEXT, extracted from Reddit posts)
-
-**Root Cause:**
-- Batch layer has access to TMDB API with movie IDs
-- Speed layer extracts movie titles from Reddit post text (no IDs available)
-
-**Impact on API:**
-Cannot directly JOIN batch + speed data by ID. Must use **title-based matching** with normalization to handle edge cases.
-
-**Edge Cases:**
-- "The Flash" vs "The Flash (2023)" vs "Flash, The"
-- "Spider-Man: No Way Home" vs "Spider-Man No Way Home"
-- Special characters: "!!!", "?", ":"
-
-**Fix Required:**
-
-```python
-# File: layers/serving_layer/query_engine/utils.py
-
-import re
-
-def normalize_movie_title(title):
-    """
-    Normalize movie title for cross-layer matching.
-    
-    Handles:
-    - Case sensitivity
-    - Special characters (!?:)
-    - Year suffixes (2023)
-    - Extra whitespace
-    
-    Args:
-        title: Raw movie title string
-        
-    Returns:
-        str: Normalized title for matching
-    """
-    if not title:
-        return None
-    
-    # Convert to lowercase
-    normalized = title.lower().strip()
-    
-    # Remove special characters
-    normalized = re.sub(r'[!?:;]', '', normalized)
-    
-    # Remove year suffix (e.g., "The Flash (2023)" -> "The Flash")
-    normalized = re.sub(r'\s*\(\d{4}\)\s*$', '', normalized)
-    
-    # Handle "Title, The" -> "The Title"
-    if normalized.endswith(', the'):
-        normalized = 'the ' + normalized[:-5]
-    elif normalized.endswith(', a'):
-        normalized = 'a ' + normalized[:-3]
-    
-    # Remove extra whitespace
-    normalized = re.sub(r'\s+', ' ', normalized)
-    
-    return normalized.strip()
-
-
-# Example Usage in Batch-Speed Merge
-def merge_batch_speed_data(movie_id, window_hours=48):
-    """
-    Merge batch layer movie data with speed layer real-time metrics.
-    
-    Uses 48-hour cutoff:
-    - If speed data exists (< 48h old): Use speed layer sentiment
-    - If speed data missing/stale: Use batch layer sentiment
-    
-    Args:
-        movie_id: TMDB movie ID
-        window_hours: Time window for speed layer data (default 48h)
-        
-    Returns:
-        dict: Merged movie data with metadata about source
-    """
-    # Get batch layer data (authoritative movie info)
-    movie = movie_intelligence.find_one({"movie_id": movie_id})
-    if not movie:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    
-    # Normalize title for speed layer lookup
-    normalized_title = normalize_movie_title(movie.get("title"))  # ✅ Handle edge cases
-    
-    # Query speed layer (Cassandra)
-    cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
-    
-    try:
-        speed_data = cassandra_session.execute(
-            \"\"\"
-            SELECT * FROM speed_views 
-            WHERE movie_title = ? 
-              AND window_start >= ?
-            LIMIT 1
-            \"\"\",
-            [normalized_title, cutoff_time]
-        ).one()
-    except Exception as e:
-        logger.warning(f"Speed layer lookup failed for '{normalized_title}': {e}")
-        speed_data = None
-    
-    # Decide sentiment source based on recency
-    if speed_data:
-        # Use speed layer sentiment (fresh Reddit data)
-        current_sentiment = speed_data.combined_sentiment
-        sentiment_source = "speed_layer"
-        data_age_hours = (datetime.utcnow() - speed_data.window_start).total_seconds() / 3600
-    else:
-        # Fallback to batch layer sentiment
-        current_sentiment = movie.get("avg_sentiment", 0.0)
-        sentiment_source = "batch_layer"
-        data_age_hours = None
-    
-    return {
-        "movie_id": movie_id,
-        "title": movie.get("title"),
-        "normalized_title": normalized_title,  # For debugging
-        
-        # Sentiment (from whichever layer is fresher)
-        "current_sentiment": current_sentiment,
-        "sentiment_source": sentiment_source,  # "speed_layer" or "batch_layer"
-        "sentiment_age_hours": data_age_hours,
-        
-        # Batch layer data (always present)
-        "batch_data": {
-            "genre": movie.get("genre"),
-            "release_year": movie.get("release_year"),
-            "vote_average": movie.get("vote_average"),
-            "vote_count": movie.get("vote_count"),
-            "batch_sentiment": movie.get("avg_sentiment")  # For comparison
-        },
-        
-        # Speed layer data (only if available)
-        "speed_data": {
-            "viral_score": speed_data.viral_score,
-            "post_count": speed_data.post_count,
-            "comment_count": speed_data.comment_count,
-            "speed_sentiment": speed_data.combined_sentiment,  # For comparison
-            "window_start": speed_data.window_start
-        } if speed_data else None
-    }
-```
-
-**Where to Apply:**
-- ✅ `/utilities/movies/{id}` - Batch-speed merge for movie details
-- ✅ `/crisis-detection/movies/{id}/sentiment` - Real-time sentiment with fallback
-- ✅ `/viral-detection/movies/{id}/viral-score` - Speed layer viral score lookup
-- ✅ All endpoints that combine batch + speed data
-
----
-
 ### Additional Schema Notes
 
 #### ✅ Compatible Fields (No Action Needed)
@@ -2668,8 +2380,7 @@ layers/serving_layer/visualization/grafana/dashboards/
 ├── 1-crisis-detection.json
 ├── 2-viral-content.json
 ├── 3-recommendation-performance.json
-├── 4-system-health.json
-└── 5-analytics-overview.json (optional)
+└── 4-system-health.json
 
 # Archive old dashboards
 layers/serving_layer/visualization/grafana/dashboards_archive/

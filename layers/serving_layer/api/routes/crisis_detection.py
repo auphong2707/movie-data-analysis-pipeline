@@ -34,12 +34,20 @@ router = APIRouter(
 
 
 def get_severity(deviation_sigma: float) -> str:
-    """Calculate severity level from deviation sigma"""
-    if deviation_sigma < -4.0:
+    """
+    Calculate severity level from deviation sigma
+    
+    Thresholds calibrated from analysis of 58 movies (Strategy 3 - Conservative):
+    - Critical: σ < -76.94 (bottom 2% of negative deviations)
+    - High: σ < -31.27 (bottom 10% of negative deviations)
+    - Warning: σ < -24.09 (bottom 25% of negative deviations)
+    - Normal: σ >= -24.09
+    """
+    if deviation_sigma < -76.94:
         return "critical"
-    elif deviation_sigma < -3.0:
+    elif deviation_sigma < -31.27:
         return "high"
-    elif deviation_sigma < -2.0:
+    elif deviation_sigma < -24.09:
         return "warning"
     else:
         return "normal"
@@ -757,14 +765,18 @@ async def get_monitoring_data():
             σ = (S_current - S_baseline) / σ_baseline
             severity = get_severity(σ)
             
-            # Count by severity
-            if σ < -4.0:
+            # Count by severity (data-driven thresholds from calibration)
+            # Based on analysis of 58 movies: Strategy 3 (Conservative)
+            # - Critical: bottom 2% of negative deviations (σ < -76.94)
+            # - High: bottom 10% of negative deviations (σ < -31.27)
+            # - Warning: bottom 25% of negative deviations (σ < -24.09)
+            if σ < -75:
                 severity_counts["critical"] += 1
                 crisis_movies += 1
-            elif σ < -3.0:
+            elif σ < -30:
                 severity_counts["high"] += 1
                 crisis_movies += 1
-            elif σ < -2.0:
+            elif σ < -20:
                 severity_counts["warning"] += 1
             else:
                 severity_counts["normal"] += 1

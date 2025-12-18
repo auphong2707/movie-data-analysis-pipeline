@@ -78,15 +78,24 @@ class DualSuccessResponse(BaseModel):
         }
 
 
+class InputMovie(BaseModel):
+    """Input movie for similarity search"""
+    movie_id: int = Field(..., description="TMDB movie ID")
+    movie_title: str = Field(..., description="Movie title")
+
+
 class SimilarMovieRecommendation(BaseModel):
     """Single similar movie recommendation"""
     rank: int = Field(..., description="Ranking position (1-based)")
     movie_id: int = Field(..., description="TMDB movie ID")
     movie_title: str = Field(..., description="Movie title")
-    similarity_score: float = Field(..., description="Cosine similarity score", ge=-1, le=1)
-    genre: Optional[str] = Field(None, description="Primary genre")
+    similarity_score: float = Field(..., description="Cosine similarity score", ge=0, le=1.2)
+    shared_genre: Optional[str] = Field(None, description="Genre shared with input movie(s)")
+    release_year_diff: Optional[int] = Field(None, description="Year difference from closest input movie", ge=0)
+    popularity: float = Field(..., description="TMDB popularity score", ge=0)
     vote_average: float = Field(..., description="TMDB vote average", ge=0, le=10)
     vote_count: int = Field(..., description="TMDB vote count", ge=0)
+    matched_with: Optional[int] = Field(None, description="How many input movies it matches (for multi-movie input)")
     
     class Config:
         json_schema_extra = {
@@ -95,20 +104,50 @@ class SimilarMovieRecommendation(BaseModel):
                 "movie_id": 12346,
                 "movie_title": "The Matrix Reloaded",
                 "similarity_score": 0.95,
-                "genre": "Science Fiction",
+                "shared_genre": "Science Fiction",
+                "release_year_diff": 0,
+                "popularity": 95.2,
                 "vote_average": 7.2,
-                "vote_count": 18000
+                "vote_count": 18000,
+                "matched_with": 2
             }
         }
 
 
 class SimilarMoviesResponse(BaseModel):
     """Response for similar movies endpoint"""
-    source_movie_id: int = Field(..., description="ID of the source movie")
-    source_movie_title: str = Field(..., description="Title of the source movie")
+    input_movies: List[InputMovie] = Field(..., description="Input movie(s) used for similarity search")
+    strategy: str = Field(..., description="Strategy used for multi-movie input")
     similar_movies: List[SimilarMovieRecommendation]
     total_count: int = Field(..., description="Total number of similar movies found")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "input_movies": [
+                    {"movie_id": 299534, "movie_title": "Avengers: Endgame"},
+                    {"movie_id": 299536, "movie_title": "Avengers: Infinity War"}
+                ],
+                "strategy": "average",
+                "similar_movies": [
+                    {
+                        "rank": 1,
+                        "movie_id": 271110,
+                        "movie_title": "Captain America: Civil War",
+                        "similarity_score": 0.892,
+                        "shared_genre": "Action",
+                        "release_year_diff": 3,
+                        "popularity": 82.5,
+                        "vote_average": 7.4,
+                        "vote_count": 18500,
+                        "matched_with": 2
+                    }
+                ],
+                "total_count": 1,
+                "timestamp": "2025-12-19T10:30:00Z"
+            }
+        }
 
 
 class RedditBuzzRecommendation(BaseModel):

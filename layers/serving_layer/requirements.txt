@@ -19,6 +19,7 @@ hiredis==3.0.0  # C parser for better performance
 
 # Data processing
 python-dateutil==2.9.0
+numpy==1.26.4  # For cosine similarity calculations
 
 # YAML configuration
 PyYAML==6.0.2

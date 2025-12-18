@@ -434,3 +434,90 @@ class MovieQueries:
             }
         
         return engagement_map
+    
+    def get_movies_by_ids(self, movie_ids: List[int]) -> List[Dict]:
+        """
+        Get movies by their IDs from movie_intelligence collection
+        
+        Args:
+            movie_ids: List of TMDB movie IDs
+        
+        Returns:
+            List of movie documents
+        """
+        projection = {
+            'movie_id': 1,
+            'title': 1,
+            'genre': 1,
+            'director': 1,
+            'franchise': 1,
+            'budget_tier': 1,
+            'release_year': 1,
+            'vote_average': 1,
+            'vote_count': 1,
+            'popularity': 1,
+            'avg_sentiment': 1,
+            '_id': 0
+        }
+        
+        return list(self.movie_intelligence.find(
+            {'movie_id': {'$in': movie_ids}},
+            projection
+        ))
+    
+    def get_candidate_movies_for_similarity(
+        self,
+        exclude_ids: List[int],
+        genres: Optional[List[str]] = None,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
+        limit: int = 500
+    ) -> List[Dict]:
+        """
+        Get candidate movies for similarity comparison
+        
+        Args:
+            exclude_ids: Movie IDs to exclude (the input movies)
+            genres: Optional list of genres to filter by
+            year_min: Optional minimum release year
+            year_max: Optional maximum release year
+            limit: Maximum number of candidates to return
+        
+        Returns:
+            List of candidate movie documents
+        """
+        query = {'movie_id': {'$nin': exclude_ids}}
+        
+        # Build OR conditions for genre/year filtering
+        or_conditions = []
+        
+        if genres:
+            or_conditions.append({'genre': {'$in': genres}})
+        
+        if year_min is not None and year_max is not None:
+            or_conditions.append({
+                'release_year': {
+                    '$gte': year_min,
+                    '$lte': year_max
+                }
+            })
+        
+        if or_conditions:
+            query['$or'] = or_conditions
+        
+        projection = {
+            'movie_id': 1,
+            'title': 1,
+            'genre': 1,
+            'director': 1,
+            'franchise': 1,
+            'budget_tier': 1,
+            'release_year': 1,
+            'vote_average': 1,
+            'vote_count': 1,
+            'popularity': 1,
+            'avg_sentiment': 1,
+            '_id': 0
+        }
+        
+        return list(self.movie_intelligence.find(query, projection).limit(limit))

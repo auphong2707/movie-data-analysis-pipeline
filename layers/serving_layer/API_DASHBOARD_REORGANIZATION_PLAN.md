@@ -86,7 +86,8 @@
 ├── /recommendations/                # 🎯 GOAL #3: Content Recommendation
 │   ├── /dual-success                # Dual-success recommendations (main)
 │   ├── /dual-success/genre/{genre}  # Filtered by genre
-│   ├── /similar/{id}                # Content-based similar movies
+│   ├── /similar/{id}                # Content-based similar movies (single)
+│   ├── /similar?ids=1,2,3           # Content-based similar movies (multiple)
 │   ├── /reddit-buzz                 # Top Reddit buzz movies
 │   ├── /tmdb-quality                # Top TMDB quality movies
 │   └── /personalized                # Personalized recommendations (future)
@@ -1207,9 +1208,21 @@ for i, rec in enumerate(sorted_recs):
 return sorted_recs[:limit]
 ```
 
-#### 3.2 `GET /recommendations/similar/{id}`
+#### 3.2 `GET /recommendations/similar/{id}` or `GET /recommendations/similar?ids=123,456,789`
 
-**Purpose:** Content-based similarity using cosine similarity
+**Purpose:** Content-based similarity using cosine similarity (supports single or multiple input movies)
+
+**URL Formats:**
+- Single movie: `/recommendations/similar/299534`
+- Multiple movies: `/recommendations/similar?ids=299534,299536,299537`
+
+**Query Parameters:**
+- `ids` (optional): Comma-separated list of movie IDs (alternative to path parameter)
+- `limit` (optional, default=10): Number of recommendations to return
+- `strategy` (optional, default="average"): How to combine multiple movies
+  - `"average"`: Average feature vectors (balanced preferences)
+  - `"union"`: Find movies similar to ANY input movie (diverse)
+  - `"intersection"`: Find movies similar to ALL input movies (focused)
 
 **Cosine Similarity Formula:**
 ```
@@ -1245,7 +1258,29 @@ Feature Vector Construction:
   year_proximity (0-1):
     - 1 if same year, decreasing with year difference
 
-Sentiment-Aware Boost (optional):
+Multi-Movie Strategies:
+  
+  1. Average Strategy (default):
+     user_preference_vec = mean([vec_1, vec_2, ..., vec_n])
+     sim(candidate) = cosine_similarity(user_preference_vec, candidate_vec)
+     
+     Use case: Balanced recommendations across all liked movies
+     Example: Like "Inception", "Interstellar", "The Matrix" → sci-fi mind-benders
+  
+  2. Union Strategy:
+     For each candidate, calculate similarity to ALL input movies
+     final_score = max(sim_1, sim_2, ..., sim_n)
+     
+     Use case: Diverse recommendations, similar to ANY liked movie
+     Example: Like "Inception" OR "The Notebook" → diverse romance + sci-fi results
+  
+  3. Intersection Strategy:
+     final_score = min(sim_1, sim_2, ..., sim_n)
+     
+     Use case: Focused recommendations, similar to ALL liked movies
+     Example: Like "Dark Knight", "Iron Man", "Avengers" → must be superhero + action
+
+Sentiment-Aware Boost (applied to all strategies):
   final_score = sim * sentiment_boost
   where:
     sentiment_boost = {
@@ -1254,53 +1289,350 @@ Sentiment-Aware Boost (optional):
       0.8 if either has negative sentiment (<-0.3)
     }
     Note: avg_sentiment range is -1.0 to 1.0, not TMDB rating scale
+    
+    For multi-movie input:
+      - Average the sentiments of all input movies
+      - Compare averaged sentiment against candidate sentiment
+```
+
+**Feature Vector Implementation:**
+
+```python
+import numpy as np
+from math import exp
+
+# Budget tier ordering for adjacency calculation
+BUDGET_TIERS = ["indie", "mid", "blockbuster", "unknown"]
+
+def build_feature_vector(movie):
+    """
+    Build a 5-dimensional feature vector for content-based similarity.
+    
+    Based on movie_intelligence schema fields:
+    - genre: String (single genre, not array)
+    - director: String
+    - franchise: String or null
+    - budget_tier: String ("indie", "mid", "blockbuster", "unknown")
+    - release_year: Integer
+    
+    Returns:
+        numpy.ndarray: 5-element feature vector [genre, director, franchise, budget_tier, year]
+    """
+    # Store original values (not one-hot encoded)
+    # Comparison happens during cosine similarity calculation
+    return {
+        'genre': movie.get('genre', ''),           # String
+        'director': movie.get('director', ''),     # String
+        'franchise': movie.get('franchise', None), # String or None
+        'budget_tier': movie.get('budget_tier', 'unknown'),  # String
+        'release_year': movie.get('release_year', 0)  # Integer
+    }
+
+def calculate_feature_similarity(vec_a, vec_b):
+    """
+    Calculate similarity between two feature vectors.
+    
+    Returns a 5-element numeric vector for cosine similarity calculation.
+    Each dimension is a similarity score [0, 1].
+    """
+    # 1. Genre Match (binary: 1 if same, 0 otherwise)
+    genre_match = 1.0 if (vec_a['genre'] and vec_b['genre'] and 
+                          vec_a['genre'] == vec_b['genre']) else 0.0
+    
+    # 2. Director Match (binary: 1 if same, 0 otherwise)
+    director_match = 1.0 if (vec_a['director'] and vec_b['director'] and 
+                             vec_a['director'] == vec_b['director']) else 0.0
+    
+    # 3. Franchise Match (binary: 1 if same franchise, 0 otherwise)
+    franchise_match = 1.0 if (vec_a['franchise'] and vec_b['franchise'] and 
+                              vec_a['franchise'] == vec_b['franchise']) else 0.0
+    
+    # 4. Budget Tier Similarity (0, 0.5, or 1.0)
+    budget_sim = calculate_budget_tier_similarity(
+        vec_a['budget_tier'], 
+        vec_b['budget_tier']
+    )
+    
+    # 5. Year Proximity (exponential decay: 1.0 for same year, decreasing with distance)
+    year_prox = calculate_year_proximity(
+        vec_a['release_year'], 
+        vec_b['release_year']
+    )
+    
+    # Return as numpy array for cosine similarity
+    return np.array([genre_match, director_match, franchise_match, budget_sim, year_prox])
+
+def calculate_budget_tier_similarity(tier_a, tier_b):
+    """
+    Calculate similarity between budget tiers.
+    
+    Budget tier ordering (from MONGODB_SCHEMAS.md):
+    - indie: Low-budget independent films
+    - mid: Mid-range budget films
+    - blockbuster: High-budget major productions
+    - unknown: Budget information not available
+    
+    Returns:
+        1.0 if same tier
+        0.5 if adjacent tiers (indie-mid, mid-blockbuster)
+        0.0 if non-adjacent or unknown
+    """
+    if tier_a == tier_b:
+        return 1.0
+    
+    if tier_a == 'unknown' or tier_b == 'unknown':
+        return 0.0
+    
+    # Check if tiers are adjacent in the ordering
+    try:
+        idx_a = BUDGET_TIERS.index(tier_a)
+        idx_b = BUDGET_TIERS.index(tier_b)
+        
+        # Adjacent if difference is exactly 1
+        if abs(idx_a - idx_b) == 1:
+            return 0.5
+    except ValueError:
+        pass
+    
+    return 0.0
+
+def calculate_year_proximity(year_a, year_b):
+    """
+    Calculate proximity between release years using exponential decay.
+    
+    Formula: proximity = exp(-|year_diff| / decay_factor)
+    
+    Where:
+    - decay_factor = 5 years (half-life of similarity)
+    - Same year → 1.0
+    - 5 years apart → ~0.37 (e^-1)
+    - 10 years apart → ~0.14 (e^-2)
+    - 15 years apart → ~0.05 (e^-3)
+    
+    Returns:
+        Float [0, 1]: Year proximity score
+    """
+    if not year_a or not year_b:
+        return 0.0
+    
+    year_diff = abs(year_a - year_b)
+    decay_factor = 5.0  # Years for similarity to decay to ~37%
+    
+    return exp(-year_diff / decay_factor)
+
+def cosine_similarity(vec_a, vec_b):
+    """
+    Calculate cosine similarity between two feature vectors.
+    
+    Formula: cos(θ) = (A · B) / (||A|| * ||B||)
+    
+    Args:
+        vec_a: Feature dict or numpy array
+        vec_b: Feature dict or numpy array
+    
+    Returns:
+        Float [-1, 1]: Cosine similarity (1 = identical, 0 = orthogonal, -1 = opposite)
+    """
+    # Convert feature dicts to similarity vectors if needed
+    if isinstance(vec_a, dict):
+        vec_a = calculate_feature_similarity(vec_a, vec_b)
+        vec_b = calculate_feature_similarity(vec_b, vec_b)  # All 1s (self-similarity)
+    
+    # Calculate dot product
+    dot_product = np.dot(vec_a, vec_b)
+    
+    # Calculate magnitudes
+    magnitude_a = np.linalg.norm(vec_a)
+    magnitude_b = np.linalg.norm(vec_b)
+    
+    # Avoid division by zero
+    if magnitude_a == 0 or magnitude_b == 0:
+        return 0.0
+    
+    # Cosine similarity
+    return dot_product / (magnitude_a * magnitude_b)
+
+def get_sentiment_boost(sentiment_a, sentiment_b):
+    """
+    Calculate sentiment-aware boost multiplier.
+    
+    Sentiment range (from MONGODB_SCHEMAS.md): -1.0 to 1.0
+    - Positive sentiment: > 0.3
+    - Neutral: -0.3 to 0.3
+    - Negative sentiment: < -0.3
+    
+    Returns:
+        1.2 if both positive
+        1.0 if neutral
+        0.8 if either negative
+    """
+    if sentiment_a is None or sentiment_b is None:
+        return 1.0
+    
+    both_positive = sentiment_a > 0.3 and sentiment_b > 0.3
+    either_negative = sentiment_a < -0.3 or sentiment_b < -0.3
+    
+    if both_positive:
+        return 1.2
+    elif either_negative:
+        return 0.8
+    else:
+        return 1.0
 ```
 
 **Implementation:**
+
 ```python
-def get_similar_movies(movie_id, limit=10):
-    # Get target movie
-    target = movie_intelligence.find_one({"movie_id": movie_id})
+def get_similar_movies(movie_ids, limit=10, strategy="average"):
+    """
+    Args:
+        movie_ids: Single ID or list of IDs
+        limit: Number of recommendations
+        strategy: "average", "union", or "intersection"
+    """
+    # Normalize to list
+    if isinstance(movie_ids, int):
+        movie_ids = [movie_ids]
     
-    # Build target feature vector
-    target_vec = build_feature_vector(target)
+    # Get target movies from movie_intelligence collection
+    targets = list(movie_intelligence.find({"movie_id": {"$in": movie_ids}}))
     
-    # Get candidate movies (same genre or nearby release year)
-    candidates = movie_intelligence.find({
-        "movie_id": {"$ne": movie_id},
-        "$or": [
-            {"genre": target.genre},  # Direct string match (genre is a string field)
+    if not targets:
+        raise ValueError("No valid movies found")
+    
+    # Build target feature vectors
+    target_vecs = [build_feature_vector(movie) for movie in targets]
+    
+    # Get candidate movies (exclude input movies)
+    # Expand search to include genres and years from ALL target movies
+    search_criteria = {"movie_id": {"$nin": movie_ids}}
+    
+    if len(targets) == 1:
+        # Single movie: narrow search
+        target = targets[0]
+        search_criteria["$or"] = [
+            {"genre": target.genre},
             {"release_year": {"$gte": target.release_year - 3, "$lte": target.release_year + 3}}
         ]
-    })
+    else:
+        # Multiple movies: broader search across all genres/years
+        all_genres = list(set([t.genre for t in targets if t.genre]))
+        all_years = [t.release_year for t in targets if t.release_year]
+        if all_years:
+            year_min = min(all_years) - 3
+            year_max = max(all_years) + 3
+            search_criteria["$or"] = [
+                {"genre": {"$in": all_genres}},
+                {"release_year": {"$gte": year_min, "$lte": year_max}}
+            ]
+    
+    candidates = movie_intelligence.find(search_criteria)
     
     similarities = []
     for candidate in candidates:
         candidate_vec = build_feature_vector(candidate)
         
-        # Calculate cosine similarity
-        sim = cosine_similarity(target_vec, candidate_vec)
+        # Calculate similarity based on strategy
+        if strategy == "average":
+            # Average approach: Create averaged preference vector
+            # Convert all target feature dicts to numeric similarity vectors relative to candidate
+            target_similarity_vecs = [
+                calculate_feature_similarity(tv, candidate_vec) 
+                for tv in target_vecs
+            ]
+            # Average the similarity vectors
+            avg_similarity_vec = np.mean(target_similarity_vecs, axis=0)
+            # Compare against candidate's self-similarity (all 1s)
+            candidate_self_vec = calculate_feature_similarity(candidate_vec, candidate_vec)
+            sim = np.dot(avg_similarity_vec, candidate_self_vec) / (
+                np.linalg.norm(avg_similarity_vec) * np.linalg.norm(candidate_self_vec)
+            )
+            
+        elif strategy == "union":
+            # Max similarity to ANY target movie
+            sims = []
+            for tv in target_vecs:
+                similarity_vec = calculate_feature_similarity(tv, candidate_vec)
+                self_vec = calculate_feature_similarity(tv, tv)
+                sim_score = np.dot(similarity_vec, self_vec) / (
+                    np.linalg.norm(similarity_vec) * np.linalg.norm(self_vec)
+                )
+                sims.append(sim_score)
+            sim = max(sims)
+            
+        elif strategy == "intersection":
+            # Min similarity across ALL target movies
+            sims = []
+            for tv in target_vecs:
+                similarity_vec = calculate_feature_similarity(tv, candidate_vec)
+                self_vec = calculate_feature_similarity(tv, tv)
+                sim_score = np.dot(similarity_vec, self_vec) / (
+                    np.linalg.norm(similarity_vec) * np.linalg.norm(self_vec)
+                )
+                sims.append(sim_score)
+            sim = min(sims)
+        else:
+            raise ValueError(f"Unknown strategy: {strategy}")
         
         # Apply sentiment boost
-        target_sentiment = get_current_sentiment(target.movie_id)
+        if len(targets) == 1:
+            target_sentiment = get_current_sentiment(targets[0].movie_id)
+        else:
+            # Average sentiment across all target movies
+            target_sentiments = [get_current_sentiment(t.movie_id) for t in targets]
+            target_sentiment = np.mean([s for s in target_sentiments if s is not None])
+        
         candidate_sentiment = get_current_sentiment(candidate.movie_id)
         sentiment_boost = get_sentiment_boost(target_sentiment, candidate_sentiment)
         
         final_score = sim * sentiment_boost
         
+        # Determine shared attributes with input movies
+        shared_genres = [t.genre for t in targets if t.genre == candidate.genre]
+        shared_genre = shared_genres[0] if shared_genres else None
+        
         similarities.append({
             "movie_id": candidate.movie_id,
             "movie_title": candidate.title,
             "similarity_score": round(final_score, 3),
-            "shared_genre": target.genre if target.genre == candidate.genre else None,
-            "release_year_diff": abs(target.release_year - candidate.release_year),
-            "popularity": candidate.popularity,  # Consistent with other recommendation endpoints
-            "vote_average": candidate.vote_average,  # Quality reference
-            "vote_count": candidate.vote_count  # Credibility reference (added for consistency with dual-success)
+            "shared_genre": shared_genre,
+            "release_year_diff": min([abs(t.release_year - candidate.release_year) 
+                                      for t in targets if t.release_year and candidate.release_year]),
+            "popularity": candidate.popularity,
+            "vote_average": candidate.vote_average,
+            "vote_count": candidate.vote_count,
+            "matched_with": len([t for t in targets 
+                                if cosine_similarity(build_feature_vector(t), candidate_vec) > 0.5])
+                           if len(targets) > 1 else None  # How many input movies it matches
         })
     
     # Sort by similarity score
     return sorted(similarities, key=lambda x: x["similarity_score"], reverse=True)[:limit]
+```
+
+**Response Schema (Multi-Movie Example):**
+```json
+{
+  "input_movies": [
+    {"movie_id": 299534, "title": "Avengers: Endgame"},
+    {"movie_id": 299536, "title": "Avengers: Infinity War"}
+  ],
+  "strategy": "average",
+  "recommendations": [
+    {
+      "rank": 1,
+      "movie_id": 271110,
+      "movie_title": "Captain America: Civil War",
+      "similarity_score": 0.892,
+      "shared_genre": "Action",
+      "release_year_diff": 3,
+      "popularity": 82.5,
+      "vote_average": 7.4,
+      "vote_count": 18500,
+      "matched_with": 2
+    }
+  ]
+}
 ```
 
 #### 3.3 `GET /recommendations/reddit-buzz`

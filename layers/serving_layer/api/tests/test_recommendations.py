@@ -352,6 +352,173 @@ class TestEndpointValidation:
             pytest.skip("API is not running")
 
 
+class TestSimilarMoviesEndpoint:
+    """Test GET /recommendations/similar endpoints"""
+    
+    def test_similar_movies_single_id(self):
+        """Test similar movies with single movie ID"""
+        try:
+            # Use a popular movie ID (19995 = Avatar)
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar/19995",
+                params={"limit": 5},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Verify response structure
+            assert "input_movies" in data
+            assert len(data["input_movies"]) == 1
+            assert data["input_movies"][0]["movie_id"] == 19995
+            
+            assert "strategy" in data
+            assert data["strategy"] == "average"
+            
+            assert "similar_movies" in data
+            assert "total_count" in data
+            
+            if data["total_count"] > 0:
+                sim = data["similar_movies"][0]
+                
+                assert "rank" in sim and sim["rank"] == 1
+                assert "movie_id" in sim
+                assert "movie_title" in sim
+                assert "similarity_score" in sim
+                assert 0 <= sim["similarity_score"] <= 1.2  # With sentiment boost
+                assert "shared_genre" in sim
+                assert "release_year_diff" in sim
+                assert "popularity" in sim
+                assert "vote_average" in sim
+                assert "vote_count" in sim
+                
+                print(f"\n✓ Similar movies for Avatar:")
+                for i, movie in enumerate(data["similar_movies"][:3]):
+                    print(f"  {i+1}. {movie['movie_title']} (similarity: {movie['similarity_score']:.3f})")
+            else:
+                print("\n✓ No similar movies found (database may be limited)")
+                
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_multiple_ids(self):
+        """Test similar movies with multiple movie IDs"""
+        try:
+            # Use multiple movie IDs
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar",
+                params={"ids": "19995,278", "limit": 5, "strategy": "average"},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            assert "input_movies" in data
+            assert len(data["input_movies"]) == 2
+            
+            assert "strategy" in data
+            assert data["strategy"] == "average"
+            
+            if data["total_count"] > 0:
+                # Check matched_with field for multi-movie input
+                sim = data["similar_movies"][0]
+                assert "matched_with" in sim
+                if sim["matched_with"] is not None:
+                    assert isinstance(sim["matched_with"], int)
+                    assert sim["matched_with"] >= 0
+                
+                print(f"\n✓ Similar movies for multiple inputs (strategy: average):")
+                print(f"  Found {data['total_count']} recommendations")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_union_strategy(self):
+        """Test similar movies with union strategy"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar",
+                params={"ids": "19995,550", "limit": 5, "strategy": "union"},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["strategy"] == "union"
+            
+            print(f"\n✓ Union strategy working: {data['total_count']} diverse recommendations")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_intersection_strategy(self):
+        """Test similar movies with intersection strategy"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar",
+                params={"ids": "19995,550", "limit": 5, "strategy": "intersection"},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["strategy"] == "intersection"
+            
+            print(f"\n✓ Intersection strategy working: {data['total_count']} focused recommendations")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_invalid_id(self):
+        """Test with invalid movie ID"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar/9999999",
+                timeout=5
+            )
+            assert response.status_code == 404
+            print("\n✓ Correctly returns 404 for invalid movie ID")
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_invalid_strategy(self):
+        """Test with invalid strategy"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar",
+                params={"ids": "19995", "strategy": "invalid"},
+                timeout=5
+            )
+            assert response.status_code == 422
+            print("\n✓ Correctly rejects invalid strategy")
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_similar_movies_sorted_by_similarity(self):
+        """Test that results are sorted by similarity score"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/similar/19995",
+                params={"limit": 10},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            if data["total_count"] > 1:
+                scores = [m["similarity_score"] for m in data["similar_movies"]]
+                assert scores == sorted(scores, reverse=True), \
+                    "Similar movies should be sorted by similarity score (descending)"
+                
+                print(f"\n✓ Sorting verified: scores range from {scores[0]:.3f} to {scores[-1]:.3f}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Recommendation API Integration Tests")

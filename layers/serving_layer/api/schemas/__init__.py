@@ -33,6 +33,7 @@ from api.schemas.viral_detection import (
 from api.schemas.recommendations import (
     DualSuccessRecommendation,
     DualSuccessResponse,
+    InputMovie,
     SimilarMovieRecommendation,
     SimilarMoviesResponse,
     RedditBuzzRecommendation,
@@ -72,6 +73,7 @@ __all__ = [
     # Recommendations
     "DualSuccessRecommendation",
     "DualSuccessResponse",
+    "InputMovie",
     "SimilarMovieRecommendation",
     "SimilarMoviesResponse",
     "RedditBuzzRecommendation",

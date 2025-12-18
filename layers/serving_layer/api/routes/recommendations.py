@@ -10,12 +10,18 @@ import math
 from api.schemas.recommendations import (
     DualSuccessResponse,
     DualSuccessRecommendation,
+    InputMovie,
     SimilarMoviesResponse,
+    SimilarMovieRecommendation,
     RedditBuzzResponse,
     TMDBQualityResponse
 )
 from mongodb.client import get_mongodb_client, get_database
 from mongodb.queries import MovieQueries
+from query_engine.similarity_engine import (
+    build_feature_vector,
+    calculate_similarity_score
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,13 +265,194 @@ async def get_dual_success_by_genre(
         queries=queries
     )
 
-@router.get("/similar/{movie_id}")
-async def get_similar_movies(
+
+@router.get("/similar/{movie_id}", response_model=SimilarMoviesResponse)
+async def get_similar_movies_by_id(
     movie_id: int,
-    limit: int = Query(10, ge=1, le=50)
+    limit: int = Query(10, ge=1, le=50, description="Number of similar movies to return"),
+    strategy: str = Query("average", description="Similarity strategy (only applies if using ids param)"),
+    queries: MovieQueries = Depends(get_movie_queries)
 ):
-    """Get content-based similar movies"""
-    pass
+    """
+    Get content-based similar movies using cosine similarity
+    
+    Single movie similarity based on:
+    - Genre matching
+    - Director matching
+    - Franchise matching
+    - Budget tier similarity
+    - Release year proximity
+    """
+    return await get_similar_movies_impl([movie_id], limit, "average", queries)
+
+
+@router.get("/similar", response_model=SimilarMoviesResponse)
+async def get_similar_movies_by_ids(
+    ids: str = Query(..., description="Comma-separated list of movie IDs"),
+    limit: int = Query(10, ge=1, le=50, description="Number of similar movies to return"),
+    strategy: str = Query("average", regex="^(average|union|intersection)$", description="How to combine multiple movies"),
+    queries: MovieQueries = Depends(get_movie_queries)
+):
+    """
+    Get content-based similar movies for multiple input movies
+    
+    Strategies:
+    - average: Balanced recommendations across all liked movies
+    - union: Find movies similar to ANY input movie (diverse)
+    - intersection: Find movies similar to ALL input movies (focused)
+    """
+    try:
+        # Parse comma-separated IDs
+        movie_ids = [int(id.strip()) for id in ids.split(',')]
+        if not movie_ids:
+            raise HTTPException(status_code=422, detail="At least one movie ID required")
+        
+        return await get_similar_movies_impl(movie_ids, limit, strategy, queries)
+    
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid movie ID format. Use comma-separated integers.")
+
+
+async def get_similar_movies_impl(
+    movie_ids: List[int],
+    limit: int,
+    strategy: str,
+    queries: MovieQueries
+):
+    """
+    Implementation for similar movies recommendation
+    
+    Args:
+        movie_ids: List of input movie IDs
+        limit: Number of recommendations
+        strategy: "average", "union", or "intersection"
+        queries: MovieQueries instance
+    """
+    try:
+        logger.info(f"Fetching similar movies for {movie_ids}, strategy={strategy}, limit={limit}")
+        
+        # Get target movies
+        targets = queries.get_movies_by_ids(movie_ids)
+        
+        if not targets:
+            raise HTTPException(status_code=404, detail="No valid movies found with provided IDs")
+        
+        # Build feature vectors for target movies
+        target_vecs = [build_feature_vector(movie) for movie in targets]
+        target_sentiments = [movie.get('avg_sentiment') for movie in targets]
+        
+        # Prepare candidate search criteria
+        exclude_ids = movie_ids
+        
+        if len(targets) == 1:
+            # Single movie: narrow search
+            target = targets[0]
+            genres = [target.get('genre')] if target.get('genre') else None
+            year = target.get('release_year')
+            year_min = year - 3 if year else None
+            year_max = year + 3 if year else None
+        else:
+            # Multiple movies: broader search
+            all_genres = list(set([t.get('genre') for t in targets if t.get('genre')]))
+            genres = all_genres if all_genres else None
+            all_years = [t.get('release_year') for t in targets if t.get('release_year')]
+            if all_years:
+                year_min = min(all_years) - 3
+                year_max = max(all_years) + 3
+            else:
+                year_min = None
+                year_max = None
+        
+        # Get candidate movies
+        candidates = queries.get_candidate_movies_for_similarity(
+            exclude_ids=exclude_ids,
+            genres=genres,
+            year_min=year_min,
+            year_max=year_max,
+            limit=500
+        )
+        
+        if not candidates:
+            return SimilarMoviesResponse(
+                input_movies=[InputMovie(movie_id=m['movie_id'], movie_title=m['title']) for m in targets],
+                strategy=strategy,
+                similar_movies=[],
+                total_count=0
+            )
+        
+        logger.info(f"Evaluating {len(candidates)} candidate movies")
+        
+        # Calculate similarities
+        similarities = []
+        for candidate in candidates:
+            candidate_vec = build_feature_vector(candidate)
+            candidate_sentiment = candidate.get('avg_sentiment')
+            
+            # Calculate similarity score
+            sim = calculate_similarity_score(
+                target_vecs,
+                candidate_vec,
+                strategy,
+                target_sentiments,
+                candidate_sentiment
+            )
+            
+            # Determine shared attributes
+            shared_genres = [t.get('genre') for t in targets if t.get('genre') == candidate.get('genre')]
+            shared_genre = shared_genres[0] if shared_genres else None
+            
+            # Calculate year difference from closest target
+            year_diffs = []
+            for t in targets:
+                if t.get('release_year') and candidate.get('release_year'):
+                    year_diffs.append(abs(t['release_year'] - candidate['release_year']))
+            release_year_diff = min(year_diffs) if year_diffs else None
+            
+            # For multi-movie: count how many target movies it matches well with
+            matched_with = None
+            if len(targets) > 1:
+                matches = 0
+                for tv in target_vecs:
+                    test_sim = calculate_similarity_score([tv], candidate_vec, "average", None, None)
+                    if test_sim > 0.5:
+                        matches += 1
+                matched_with = matches
+            
+            similarities.append({
+                'movie_id': candidate['movie_id'],
+                'movie_title': candidate['title'],
+                'similarity_score': round(sim, 3),
+                'shared_genre': shared_genre,
+                'release_year_diff': release_year_diff,
+                'popularity': candidate.get('popularity', 0),
+                'vote_average': candidate.get('vote_average', 0),
+                'vote_count': candidate.get('vote_count', 0),
+                'matched_with': matched_with
+            })
+        
+        # Sort by similarity score
+        sorted_sims = sorted(similarities, key=lambda x: x['similarity_score'], reverse=True)[:limit]
+        
+        # Assign ranks
+        recommendations = []
+        for i, sim in enumerate(sorted_sims):
+            sim['rank'] = i + 1
+            recommendations.append(SimilarMovieRecommendation(**sim))
+        
+        logger.info(f"Returning {len(recommendations)} similar movies")
+        
+        return SimilarMoviesResponse(
+            input_movies=[InputMovie(movie_id=m['movie_id'], movie_title=m['title']) for m in targets],
+            strategy=strategy,
+            similar_movies=recommendations,
+            total_count=len(recommendations)
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in similar movies: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/reddit-buzz")
 async def get_reddit_buzz_recommendations(

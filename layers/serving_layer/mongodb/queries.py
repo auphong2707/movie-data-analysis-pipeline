@@ -655,4 +655,41 @@ class MovieQueries:
         
         result = list(self.movie_intelligence.aggregate(pipeline))
         return result[0]['avg'] if result else 7.0  # Default to 7.0 if no data
+    
+    def get_all_genres(self) -> List[Dict[str, Any]]:
+        """
+        Get all distinct genres with movie counts.
+        
+        Returns:
+            List of dicts with 'name' and 'movie_count' fields, sorted by count descending
+        """
+        # Aggregate to count movies per genre
+        # Note: Using 'genre' field (single genre per movie in movie_intelligence)
+        pipeline = [
+            {
+                '$match': {
+                    'genre': {'$exists': True, '$ne': None, '$ne': ''}
+                }
+            },
+            {
+                '$group': {
+                    '_id': '$genre',
+                    'movie_count': {'$sum': 1}
+                }
+            },
+            {
+                '$project': {
+                    '_id': 0,
+                    'name': '$_id',
+                    'movie_count': 1
+                }
+            },
+            {
+                '$sort': {'movie_count': -1}
+            }
+        ]
+        
+        result = list(self.movie_intelligence.aggregate(pipeline))
+        logger.info(f"Found {len(result)} distinct genres")
+        return result
 

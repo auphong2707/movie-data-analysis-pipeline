@@ -69,3 +69,31 @@ class CrisisAlertsResponse(BaseModel):
     total_alerts: int
     alerts: list[CrisisAlert]
     filters_applied: Dict[str, Optional[str]]
+
+
+class Percentiles(BaseModel):
+    """Statistical percentiles"""
+    min: float
+    q1: float
+    median: float
+    q3: float
+    max: float
+
+
+class DateRange(BaseModel):
+    """Date range for data"""
+    start_date: str
+    end_date: str
+
+
+class BaselineStatsResponse(BaseModel):
+    """Response for baseline statistics endpoints (genre/franchise/year)"""
+    dimension_type: str  # "genre", "franchise", or "year"
+    dimension_value: str  # The actual genre/franchise/year value
+    baseline_sentiment: float
+    stddev_sentiment: float
+    sample_size: int
+    percentiles: Percentiles
+    crisis_threshold: float
+    data_range: Optional[DateRange] = None
+

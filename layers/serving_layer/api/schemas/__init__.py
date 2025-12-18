@@ -8,7 +8,10 @@ from api.schemas.crisis_detection import (
     DeviationAnalysis,
     MovieSentimentResponse,
     CrisisAlert,
-    CrisisAlertsResponse
+    CrisisAlertsResponse,
+    Percentiles,
+    DateRange,
+    BaselineStatsResponse
 )
 
 __all__ = [
@@ -19,4 +22,7 @@ __all__ = [
     "MovieSentimentResponse",
     "CrisisAlert",
     "CrisisAlertsResponse",
+    "Percentiles",
+    "DateRange",
+    "BaselineStatsResponse",
 ]

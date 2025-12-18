@@ -445,6 +445,261 @@ class TestCrisisAlertsEndpoint:
             pytest.skip("API is not running")
 
 
+class TestBaselineEndpoints:
+    """Test baseline statistics endpoints (1.3, 1.4, 1.5)"""
+    
+    def test_genre_baseline_exists(self):
+        """Test genre baseline endpoint returns valid data"""
+        try:
+            # Use a common genre that should exist
+            genre = "Action"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/genre/{genre}",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check structure
+            assert "dimension_type" in data
+            assert data["dimension_type"] == "genre"
+            assert "dimension_value" in data
+            assert data["dimension_value"] == genre
+            assert "baseline_sentiment" in data
+            assert "stddev_sentiment" in data
+            assert "sample_size" in data
+            assert "percentiles" in data
+            assert "crisis_threshold" in data
+            
+            # Check null values
+            assert data["baseline_sentiment"] is not None
+            assert data["stddev_sentiment"] is not None
+            assert data["sample_size"] is not None
+            assert data["sample_size"] > 0, "Sample size must be positive"
+            
+            # Check percentiles structure
+            percentiles = data["percentiles"]
+            assert "min" in percentiles and percentiles["min"] is not None
+            assert "q1" in percentiles and percentiles["q1"] is not None
+            assert "median" in percentiles and percentiles["median"] is not None
+            assert "q3" in percentiles and percentiles["q3"] is not None
+            assert "max" in percentiles and percentiles["max"] is not None
+            
+            # Check percentile ordering: min <= q1 <= median <= q3 <= max
+            assert percentiles["min"] <= percentiles["q1"]
+            assert percentiles["q1"] <= percentiles["median"]
+            assert percentiles["median"] <= percentiles["q3"]
+            assert percentiles["q3"] <= percentiles["max"]
+            
+            # Check sentiment range (-1.0 to 1.0)
+            assert -1.0 <= data["baseline_sentiment"] <= 1.0
+            assert data["stddev_sentiment"] >= 0  # Standard deviation must be non-negative
+            
+            # Check crisis threshold calculation (should be baseline - 3*stddev)
+            expected_threshold = data["baseline_sentiment"] - 3 * data["stddev_sentiment"]
+            assert abs(data["crisis_threshold"] - expected_threshold) < 0.001
+            
+            print(f"\n✓ Genre baseline for '{genre}': avg={data['baseline_sentiment']:.3f}, "
+                  f"stddev={data['stddev_sentiment']:.3f}, n={data['sample_size']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_genre_baseline_not_found(self):
+        """Test genre baseline returns 404 for non-existent genre"""
+        try:
+            # Use a genre that shouldn't exist
+            genre = "NonExistentGenre12345"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/genre/{genre}",
+                timeout=10
+            )
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert "detail" in data
+            assert genre in data["detail"]
+            print(f"\n✓ Correctly returns 404 for non-existent genre")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_franchise_baseline_exists(self):
+        """Test franchise baseline endpoint returns valid data"""
+        try:
+            # Try multiple common franchises to find one that exists
+            franchises_to_try = [
+                "The Terminator Collection",
+                "James Bond Collection",
+                "The Hunger Games Collection"
+            ]
+            
+            response = None
+            franchise = None
+            
+            # Try to find a franchise that exists
+            for test_franchise in franchises_to_try:
+                test_response = requests.get(
+                    f"{API_BASE_URL}/api/v1/crisis-detection/baselines/franchise/{test_franchise}",
+                    timeout=10
+                )
+                if test_response.status_code == 200:
+                    response = test_response
+                    franchise = test_franchise
+                    break
+            
+            # If no franchises found, skip test
+            if response is None:
+                pytest.skip("No franchise baseline data available in database")
+            
+            data = response.json()
+            
+            # Check structure
+            assert data["dimension_type"] == "franchise"
+            assert data["dimension_value"] == franchise
+            assert data["baseline_sentiment"] is not None
+            assert data["stddev_sentiment"] is not None
+            assert data["sample_size"] is not None and data["sample_size"] > 0
+            
+            # Check percentiles
+            percentiles = data["percentiles"]
+            assert percentiles["min"] is not None
+            assert percentiles["q1"] is not None
+            assert percentiles["median"] is not None
+            assert percentiles["q3"] is not None
+            assert percentiles["max"] is not None
+            
+            # Verify ordering
+            assert percentiles["min"] <= percentiles["q1"] <= percentiles["median"]
+            assert percentiles["median"] <= percentiles["q3"] <= percentiles["max"]
+            
+            # Check sentiment range
+            assert -1.0 <= data["baseline_sentiment"] <= 1.0
+            assert data["stddev_sentiment"] >= 0
+            
+            # Check crisis threshold
+            expected_threshold = data["baseline_sentiment"] - 3 * data["stddev_sentiment"]
+            assert abs(data["crisis_threshold"] - expected_threshold) < 0.001
+            
+            print(f"\n✓ Franchise baseline for '{franchise}': avg={data['baseline_sentiment']:.3f}, "
+                  f"stddev={data['stddev_sentiment']:.3f}, n={data['sample_size']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_franchise_baseline_not_found(self):
+        """Test franchise baseline returns 404 for non-existent franchise"""
+        try:
+            franchise = "NonExistentFranchise12345"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/franchise/{franchise}",
+                timeout=10
+            )
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert "detail" in data
+            assert franchise in data["detail"]
+            print(f"\n✓ Correctly returns 404 for non-existent franchise")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_year_baseline_exists(self):
+        """Test year baseline endpoint returns valid data"""
+        try:
+            # Use a recent year that should have data
+            year = 2025
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/year/{year}",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check structure
+            assert data["dimension_type"] == "year"
+            assert data["dimension_value"] == str(year)
+            assert data["baseline_sentiment"] is not None
+            assert data["stddev_sentiment"] is not None
+            assert data["sample_size"] is not None and data["sample_size"] > 0
+            
+            # Check percentiles
+            percentiles = data["percentiles"]
+            assert all(percentiles[k] is not None for k in ["min", "q1", "median", "q3", "max"])
+            assert percentiles["min"] <= percentiles["q1"] <= percentiles["median"]
+            assert percentiles["median"] <= percentiles["q3"] <= percentiles["max"]
+            
+            # Check sentiment range
+            assert -1.0 <= data["baseline_sentiment"] <= 1.0
+            assert data["stddev_sentiment"] >= 0
+            
+            # Check crisis threshold
+            expected_threshold = data["baseline_sentiment"] - 3 * data["stddev_sentiment"]
+            assert abs(data["crisis_threshold"] - expected_threshold) < 0.001
+            
+            # Year baseline should have data_range
+            assert "data_range" in data
+            if data["data_range"]:
+                assert "start_date" in data["data_range"]
+                assert "end_date" in data["data_range"]
+                assert str(year) in data["data_range"]["start_date"]
+                assert str(year) in data["data_range"]["end_date"]
+            
+            print(f"\n✓ Year baseline for {year}: avg={data['baseline_sentiment']:.3f}, "
+                  f"stddev={data['stddev_sentiment']:.3f}, n={data['sample_size']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_year_baseline_not_found(self):
+        """Test year baseline returns 404 for year with no data"""
+        try:
+            # Use a year that shouldn't have data (very old or future)
+            year = 1800
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/year/{year}",
+                timeout=10
+            )
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert "detail" in data
+            assert str(year) in data["detail"]
+            print(f"\n✓ Correctly returns 404 for year with no data")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_baseline_data_consistency(self):
+        """Test that median is approximately equal to baseline_sentiment"""
+        try:
+            # Test with a genre that should exist
+            genre = "Action"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/baselines/genre/{genre}",
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # For normal distribution, median should equal mean (baseline_sentiment)
+                median = data["percentiles"]["median"]
+                baseline = data["baseline_sentiment"]
+                
+                # They should be very close (using normal distribution approximation)
+                assert abs(median - baseline) < 0.01, \
+                    f"Median ({median}) should approximate baseline ({baseline})"
+                
+                print(f"\n✓ Baseline data is statistically consistent")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Crisis Detection API Integration Tests")
@@ -453,3 +708,4 @@ if __name__ == "__main__":
     print("="*60 + "\n")
     
     pytest.main([__file__, "-v", "-s"])
+

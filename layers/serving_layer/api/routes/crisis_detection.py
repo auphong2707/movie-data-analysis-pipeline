@@ -16,7 +16,10 @@ from api.schemas.crisis_detection import (
     DeviationAnalysis,
     MovieSentimentResponse,
     CrisisAlert,
-    CrisisAlertsResponse
+    CrisisAlertsResponse,
+    Percentiles,
+    DateRange,
+    BaselineStatsResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -442,25 +445,187 @@ async def get_alert_details(alert_id: str):
     pass
 
 
-@router.get("/baselines/genre/{genre}")
+@router.get("/baselines/genre/{genre}", response_model=BaselineStatsResponse)
 async def get_genre_baseline(genre: str):
-    """Get sentiment baseline for genre"""
-    # TODO: Implement genre baseline
-    pass
+    """Get sentiment baseline statistics for a genre"""
+    client = get_mongodb_client()
+    db = client.get_database("moviedb")
+    
+    try:
+        # Query sentiment_baselines collection for genre baseline
+        # Schema: One dimension per document (genre, franchise, or year - not multiple)
+        baseline_doc = db.sentiment_baselines.find_one({
+            "genre": genre,
+            "franchise": None,
+            "year": None
+        })
+        
+        if not baseline_doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No baseline data found for genre '{genre}'"
+            )
+        
+        # Calculate percentiles from the baseline document
+        # Note: MongoDB aggregation would be better, but using available data
+        avg_sentiment = baseline_doc.get("avg_sentiment", 0.0)
+        stddev = baseline_doc.get("sentiment_stddev", 0.0)
+        
+        # Estimate percentiles using normal distribution approximation
+        # q1 ≈ mean - 0.675σ, median = mean, q3 ≈ mean + 0.675σ
+        percentiles = Percentiles(
+            min=baseline_doc.get("min_sentiment", avg_sentiment - 3 * stddev),
+            q1=avg_sentiment - 0.675 * stddev,
+            median=avg_sentiment,
+            q3=avg_sentiment + 0.675 * stddev,
+            max=baseline_doc.get("max_sentiment", avg_sentiment + 3 * stddev)
+        )
+        
+        # Crisis threshold: 3 standard deviations below baseline
+        crisis_threshold = avg_sentiment - 3 * stddev
+        
+        # Get data range if available
+        data_range = None
+        if "data_range" in baseline_doc and baseline_doc["data_range"]:
+            data_range = DateRange(
+                start_date=baseline_doc["data_range"].get("start_date", "unknown"),
+                end_date=baseline_doc["data_range"].get("end_date", "unknown")
+            )
+        
+        return BaselineStatsResponse(
+            dimension_type="genre",
+            dimension_value=genre,
+            baseline_sentiment=avg_sentiment,
+            stddev_sentiment=stddev,
+            sample_size=baseline_doc.get("movie_count", 0),
+            percentiles=percentiles,
+            crisis_threshold=crisis_threshold,
+            data_range=data_range
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching genre baseline: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/baselines/franchise/{franchise}")
+@router.get("/baselines/franchise/{franchise}", response_model=BaselineStatsResponse)
 async def get_franchise_baseline(franchise: str):
-    """Get sentiment baseline for franchise"""
-    # TODO: Implement franchise baseline
-    pass
+    """Get sentiment baseline statistics for a franchise"""
+    client = get_mongodb_client()
+    db = client.get_database("moviedb")
+    
+    try:
+        # Query sentiment_baselines collection for franchise baseline
+        baseline_doc = db.sentiment_baselines.find_one({
+            "franchise": franchise,
+            "genre": None,
+            "year": None
+        })
+        
+        if not baseline_doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No baseline data found for franchise '{franchise}'"
+            )
+        
+        avg_sentiment = baseline_doc.get("avg_sentiment", 0.0)
+        stddev = baseline_doc.get("sentiment_stddev", 0.0)
+        
+        # Estimate percentiles using normal distribution
+        percentiles = Percentiles(
+            min=baseline_doc.get("min_sentiment", avg_sentiment - 3 * stddev),
+            q1=avg_sentiment - 0.675 * stddev,
+            median=avg_sentiment,
+            q3=avg_sentiment + 0.675 * stddev,
+            max=baseline_doc.get("max_sentiment", avg_sentiment + 3 * stddev)
+        )
+        
+        crisis_threshold = avg_sentiment - 3 * stddev
+        
+        # Franchises typically don't have explicit date ranges
+        data_range = None
+        if "data_range" in baseline_doc and baseline_doc["data_range"]:
+            data_range = DateRange(
+                start_date=baseline_doc["data_range"].get("start_date", "unknown"),
+                end_date=baseline_doc["data_range"].get("end_date", "unknown")
+            )
+        
+        return BaselineStatsResponse(
+            dimension_type="franchise",
+            dimension_value=franchise,
+            baseline_sentiment=avg_sentiment,
+            stddev_sentiment=stddev,
+            sample_size=baseline_doc.get("movie_count", 0),
+            percentiles=percentiles,
+            crisis_threshold=crisis_threshold,
+            data_range=data_range
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching franchise baseline: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/baselines/year/{year}")
+@router.get("/baselines/year/{year}", response_model=BaselineStatsResponse)
 async def get_year_baseline(year: int):
-    """Get sentiment baseline for year"""
-    # TODO: Implement year baseline
-    pass
+    """Get sentiment baseline statistics for a release year"""
+    client = get_mongodb_client()
+    db = client.get_database("moviedb")
+    
+    try:
+        # Query sentiment_baselines collection for year baseline
+        baseline_doc = db.sentiment_baselines.find_one({
+            "year": year,
+            "genre": None,
+            "franchise": None
+        })
+        
+        if not baseline_doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No baseline data found for year {year}"
+            )
+        
+        avg_sentiment = baseline_doc.get("avg_sentiment", 0.0)
+        stddev = baseline_doc.get("sentiment_stddev", 0.0)
+        
+        # Estimate percentiles using normal distribution
+        percentiles = Percentiles(
+            min=baseline_doc.get("min_sentiment", avg_sentiment - 3 * stddev),
+            q1=avg_sentiment - 0.675 * stddev,
+            median=avg_sentiment,
+            q3=avg_sentiment + 0.675 * stddev,
+            max=baseline_doc.get("max_sentiment", avg_sentiment + 3 * stddev)
+        )
+        
+        crisis_threshold = avg_sentiment - 3 * stddev
+        
+        # Year baselines can indicate the year itself as the range
+        data_range = DateRange(
+            start_date=f"{year}-01-01",
+            end_date=f"{year}-12-31"
+        )
+        
+        return BaselineStatsResponse(
+            dimension_type="year",
+            dimension_value=str(year),
+            baseline_sentiment=avg_sentiment,
+            stddev_sentiment=stddev,
+            sample_size=baseline_doc.get("movie_count", 0),
+            percentiles=percentiles,
+            crisis_threshold=crisis_threshold,
+            data_range=data_range
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching year baseline: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/monitoring")

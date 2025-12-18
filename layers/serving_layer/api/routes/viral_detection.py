@@ -15,7 +15,10 @@ from api.schemas.viral_detection import (
     RedditEngagement,
     MovieIntelligence,
     ThresholdContext,
-    ViralScoreDetailResponse
+    ViralScoreDetailResponse,
+    ThresholdResponse,
+    GenreThresholdSummary,
+    ThresholdsListResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -439,12 +442,133 @@ async def get_viral_score(movie_id: int):
 
 @router.get("/thresholds")
 async def get_viral_thresholds(
-    genre: Optional[str] = Query(None),
-    budget_tier: Optional[str] = Query(None),
-    season: Optional[str] = Query(None)
+    genre: Optional[str] = Query(None, description="Filter by genre"),
+    budget_tier: Optional[str] = Query(None, description="Filter by budget tier"),
+    season: Optional[str] = Query(None, description="Filter by season")
 ):
-    """Get viral thresholds by context"""
-    pass
+    """
+    Get viral thresholds by context (genre, budget_tier, or season)
+    
+    Important Notes:
+    - avg_popularity is used as the threshold denominator in viral coefficient calculation
+    - viral_threshold (99th percentile of vote_count) is stored but NOT used in calculation
+    - This endpoint returns both values, but only avg_popularity is semantically correct
+    - Schema constraint: EXACTLY ONE dimension per document (no multi-dimensional thresholds)
+    
+    Query Priority:
+    1. If genre specified: return genre threshold
+    2. Else if budget_tier specified: return budget_tier threshold  
+    3. Else if season specified: return season threshold
+    4. Else: return all genre thresholds
+    """
+    try:
+        # Get MongoDB connection
+        client = get_mongodb_client()
+        db = client.get_database("moviedb")
+        
+        # Priority: genre > budget_tier > season (query ONE dimension only)
+        if genre:
+            threshold = db.viral_thresholds.find_one({
+                "genre": genre,
+                "budget_tier": None,
+                "season": None
+            })
+            
+            if not threshold:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No threshold found for genre: {genre}"
+                )
+            
+            return ThresholdResponse(
+                dimension="genre",
+                value=genre,
+                threshold_used_in_calculation=threshold["avg_popularity"],
+                avg_popularity=threshold["avg_popularity"],
+                viral_threshold=threshold["viral_threshold"],
+                movie_count=threshold.get("movie_count", 0),
+                note="avg_popularity is used as denominator in viral coefficient calculation"
+            )
+        
+        elif budget_tier:
+            threshold = db.viral_thresholds.find_one({
+                "genre": None,
+                "budget_tier": budget_tier,
+                "season": None
+            })
+            
+            if not threshold:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No threshold found for budget_tier: {budget_tier}"
+                )
+            
+            return ThresholdResponse(
+                dimension="budget_tier",
+                value=budget_tier,
+                threshold_used_in_calculation=threshold["avg_popularity"],
+                avg_popularity=threshold["avg_popularity"],
+                viral_threshold=threshold["viral_threshold"],
+                movie_count=threshold.get("movie_count", 0),
+                note="avg_popularity is used as denominator in viral coefficient calculation"
+            )
+        
+        elif season:
+            threshold = db.viral_thresholds.find_one({
+                "genre": None,
+                "budget_tier": None,
+                "season": season
+            })
+            
+            if not threshold:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No threshold found for season: {season}"
+                )
+            
+            return ThresholdResponse(
+                dimension="season",
+                value=season,
+                threshold_used_in_calculation=threshold["avg_popularity"],
+                avg_popularity=threshold["avg_popularity"],
+                viral_threshold=threshold["viral_threshold"],
+                movie_count=threshold.get("movie_count", 0),
+                note="avg_popularity is used as denominator in viral coefficient calculation"
+            )
+        
+        # If no filter, return all genre thresholds
+        else:
+            genre_thresholds = list(db.viral_thresholds.find({
+                "genre": {"$ne": None},
+                "budget_tier": None,
+                "season": None
+            }).sort("genre", 1))
+            
+            thresholds_list = [
+                GenreThresholdSummary(
+                    genre=t["genre"],
+                    threshold_used_in_calculation=t["avg_popularity"],
+                    avg_popularity=t["avg_popularity"],
+                    viral_threshold=t["viral_threshold"],
+                    movie_count=t.get("movie_count", 0)
+                )
+                for t in genre_thresholds
+            ]
+            
+            return ThresholdsListResponse(
+                thresholds=thresholds_list,
+                count=len(thresholds_list),
+                note="avg_popularity is used as denominator in viral coefficient calculation"
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_viral_thresholds: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve thresholds: {str(e)}"
+        )
 
 @router.get("/velocity/{movie_id}")
 async def get_engagement_velocity(movie_id: int):

@@ -678,6 +678,262 @@ class TestViralScoreEndpoint:
         assert "last_window_start" in data
 
 
+class TestThresholdsEndpoint:
+    """Test GET /viral-detection/thresholds"""
+    
+    def test_thresholds_all_genres(self):
+        """Test getting all genre thresholds (no filter)"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                timeout=10
+            )
+            
+            assert response.status_code == 200, \
+                f"Expected 200, got {response.status_code}"
+            
+            data = response.json()
+            print(f"\n✓ Successfully retrieved all genre thresholds")
+            
+            # Verify response structure
+            assert "thresholds" in data, "Missing thresholds field"
+            assert "count" in data, "Missing count field"
+            assert "note" in data, "Missing note field"
+            
+            # Verify data types
+            assert isinstance(data["thresholds"], list), "thresholds should be a list"
+            assert isinstance(data["count"], int), "count should be an integer"
+            assert data["count"] == len(data["thresholds"]), "count should match array length"
+            
+            # Verify note about avg_popularity usage
+            assert "avg_popularity" in data["note"], \
+                "Note should explain avg_popularity usage"
+            
+            print(f"  Found {data['count']} genre thresholds")
+            
+            # Verify each threshold structure
+            if data["thresholds"]:
+                self._verify_genre_threshold_structure(data["thresholds"][0])
+                print(f"  Sample: {data['thresholds'][0]['genre']} - " +
+                      f"threshold={data['thresholds'][0]['threshold_used_in_calculation']:.2f}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_specific_genre(self):
+        """Test getting threshold for specific genre"""
+        try:
+            genre = "Horror"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                params={"genre": genre},
+                timeout=10
+            )
+            
+            assert response.status_code == 200, \
+                f"Expected 200, got {response.status_code}"
+            
+            data = response.json()
+            print(f"\n✓ Successfully retrieved threshold for {genre}")
+            
+            # Verify response structure for single threshold
+            assert "dimension" in data
+            assert data["dimension"] == "genre"
+            assert "value" in data
+            assert data["value"] == genre
+            assert "threshold_used_in_calculation" in data
+            assert "avg_popularity" in data
+            assert "viral_threshold" in data
+            assert "movie_count" in data
+            assert "note" in data
+            
+            # Verify threshold values are positive
+            assert data["threshold_used_in_calculation"] > 0
+            assert data["avg_popularity"] > 0
+            assert data["viral_threshold"] > 0
+            
+            # Verify threshold_used_in_calculation equals avg_popularity
+            assert data["threshold_used_in_calculation"] == data["avg_popularity"], \
+                "threshold_used_in_calculation should equal avg_popularity"
+            
+            print(f"  Threshold: {data['threshold_used_in_calculation']:.2f}")
+            print(f"  Movie count: {data['movie_count']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_invalid_genre(self):
+        """Test getting threshold for non-existent genre"""
+        try:
+            genre = "NonExistentGenre12345"
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                params={"genre": genre},
+                timeout=10
+            )
+            
+            assert response.status_code == 404, \
+                f"Expected 404 for invalid genre, got {response.status_code}"
+            
+            print(f"\n✓ Correctly returns 404 for invalid genre")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_all_have_required_fields(self):
+        """Test that all thresholds have required fields"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Verify each threshold has required fields
+            for threshold in data["thresholds"]:
+                assert "genre" in threshold
+                assert isinstance(threshold["genre"], str)
+                assert len(threshold["genre"]) > 0
+                
+                assert "threshold_used_in_calculation" in threshold
+                assert threshold["threshold_used_in_calculation"] > 0
+                
+                assert "avg_popularity" in threshold
+                assert threshold["avg_popularity"] > 0
+                
+                assert "viral_threshold" in threshold
+                assert threshold["viral_threshold"] > 0
+                
+                assert "movie_count" in threshold
+                assert threshold["movie_count"] > 0
+                
+                # Verify consistency
+                assert threshold["threshold_used_in_calculation"] == threshold["avg_popularity"]
+            
+            print(f"\n✓ All {len(data['thresholds'])} thresholds have valid data")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_sorted_by_genre(self):
+        """Test that thresholds are sorted alphabetically by genre"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Extract genres
+            genres = [t["genre"] for t in data["thresholds"]]
+            
+            # Verify alphabetical order
+            sorted_genres = sorted(genres)
+            assert genres == sorted_genres, \
+                "Genres should be sorted alphabetically"
+            
+            print(f"\n✓ Thresholds are sorted alphabetically")
+            print(f"  Genres: {', '.join(genres[:5])}...")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_consistency_with_trending(self):
+        """Test that thresholds match those used in trending endpoint"""
+        try:
+            # Get all thresholds
+            thresholds_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                timeout=10
+            )
+            assert thresholds_response.status_code == 200
+            thresholds_data = thresholds_response.json()
+            
+            # Get trending movies
+            trending_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/trending?limit=10",
+                timeout=10
+            )
+            assert trending_response.status_code == 200
+            trending_data = trending_response.json()
+            
+            # Build threshold lookup by genre
+            threshold_by_genre = {
+                t["genre"]: t["threshold_used_in_calculation"]
+                for t in thresholds_data["thresholds"]
+            }
+            
+            # Verify trending movies use correct thresholds
+            for movie in trending_data["movies"]:
+                genre = movie["movie_intelligence"]["genre"]
+                threshold_used = movie["threshold_context"]["threshold_used"]
+                
+                if movie["threshold_context"]["threshold_dimension"] == "genre":
+                    # Should match genre threshold from thresholds endpoint
+                    expected_threshold = threshold_by_genre.get(genre)
+                    if expected_threshold:
+                        assert abs(threshold_used - expected_threshold) < 0.001, \
+                            f"Threshold mismatch for {genre}: {threshold_used} vs {expected_threshold}"
+            
+            print(f"\n✓ Thresholds consistent between endpoints")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_thresholds_data_quality(self):
+        """Test threshold data quality and reasonable values"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/thresholds",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            for threshold in data["thresholds"]:
+                # avg_popularity should be in reasonable range (based on TMDB data)
+                avg_pop = threshold["avg_popularity"]
+                assert 0 < avg_pop < 1000, \
+                    f"avg_popularity {avg_pop} out of reasonable range for {threshold['genre']}"
+                
+                # viral_threshold should be higher than avg_popularity (99th percentile)
+                viral_thresh = threshold["viral_threshold"]
+                assert viral_thresh > 0, \
+                    f"viral_threshold should be positive for {threshold['genre']}"
+                
+                # movie_count should be reasonable
+                count = threshold["movie_count"]
+                assert count > 0, \
+                    f"movie_count should be positive for {threshold['genre']}"
+            
+            print(f"\n✓ All thresholds have reasonable values")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def _verify_genre_threshold_structure(self, threshold: dict):
+        """Helper to verify structure of a genre threshold"""
+        assert "genre" in threshold
+        assert isinstance(threshold["genre"], str)
+        
+        assert "threshold_used_in_calculation" in threshold
+        assert isinstance(threshold["threshold_used_in_calculation"], (int, float))
+        
+        assert "avg_popularity" in threshold
+        assert isinstance(threshold["avg_popularity"], (int, float))
+        
+        assert "viral_threshold" in threshold
+        assert isinstance(threshold["viral_threshold"], (int, float))
+        
+        assert "movie_count" in threshold
+        assert isinstance(threshold["movie_count"], int)
+
+
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main([__file__, "-v", "-s"])

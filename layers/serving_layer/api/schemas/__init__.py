@@ -24,7 +24,10 @@ from api.schemas.viral_detection import (
     RedditEngagement,
     MovieIntelligence,
     ThresholdContext,
-    ViralScoreDetailResponse
+    ViralScoreDetailResponse,
+    ThresholdResponse,
+    GenreThresholdSummary,
+    ThresholdsListResponse
 )
 
 __all__ = [
@@ -51,5 +54,8 @@ __all__ = [
     "MovieIntelligence",
     "ThresholdContext",
     "ViralScoreDetailResponse",
+    "ThresholdResponse",
+    "GenreThresholdSummary",
+    "ThresholdsListResponse",
 ]
 

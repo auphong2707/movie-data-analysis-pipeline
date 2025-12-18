@@ -98,3 +98,31 @@ class ViralScoreDetailResponse(BaseModel):
     # Timestamps
     first_window_start: datetime
     last_window_start: datetime
+
+
+class ThresholdResponse(BaseModel):
+    """Response for a single threshold"""
+    dimension: str = Field(..., description="Dimension type: genre, budget_tier, or season")
+    value: str = Field(..., description="Value of the dimension")
+    threshold_used_in_calculation: float = Field(..., description="Threshold used in viral coefficient calculation (avg_popularity)")
+    avg_popularity: float = Field(..., description="Average TMDB popularity (current TMDB buzz metric)")
+    viral_threshold: float = Field(..., description="99th percentile of vote_count (NOT used in calculation, for reference only)")
+    movie_count: int = Field(..., description="Number of movies in this dimension")
+    note: Optional[str] = Field(None, description="Explanation of threshold usage")
+
+
+class GenreThresholdSummary(BaseModel):
+    """Summary of threshold for genre listing"""
+    genre: str = Field(..., description="Genre name")
+    threshold_used_in_calculation: float = Field(..., description="Threshold used in calculation")
+    avg_popularity: float = Field(..., description="Average TMDB popularity")
+    viral_threshold: float = Field(..., description="99th percentile vote_count (reference only)")
+    movie_count: int = Field(..., description="Number of movies in genre")
+
+
+class ThresholdsListResponse(BaseModel):
+    """Response for thresholds list (all genres)"""
+    thresholds: list[GenreThresholdSummary]
+    count: int = Field(..., description="Number of thresholds returned")
+    note: str = Field(default="avg_popularity is used as denominator in viral coefficient calculation")
+

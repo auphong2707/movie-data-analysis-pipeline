@@ -505,12 +505,9 @@ Viral Status (based on percentile thresholds):
 **Ranking Algorithm:**
 ```python
 # Aggregate speed_views to get one record per movie (handles multiple time windows)
-# Note: speed_views stores one document per 5-minute window, so movies appear multiple times
-cutoff_time = datetime.utcnow() - timedelta(hours=48)
+# Note: speed_views has 48h TTL, so all data in collection is already within 48h
+# No need for explicit time cutoff - collection auto-expires old data
 speed_data = db.speed_views.aggregate([
-    # Filter to recent windows
-    {"$match": {"window_start": {"$gte": cutoff_time}}},
-    
     # Group by movie, summing metrics across all windows (more discussion = more viral)
     {"$group": {
         "_id": "$movie_title",
@@ -523,7 +520,8 @@ speed_data = db.speed_views.aggregate([
         "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
         "max_upvote_velocity": {"$max": "$metrics.upvote_velocity"},
         "max_comment_velocity": {"$max": "$metrics.comment_velocity"},
-        "max_award_velocity": {"$max": "$metrics.award_velocity"}
+        "max_award_velocity": {"$max": "$metrics.award_velocity"},
+        "window_count": {"$sum": 1}
     }},
     
     # Sort by total viral score descending
@@ -630,12 +628,78 @@ return sorted(movies, key=lambda x: x["viral_coefficient"], reverse=True)
 
 **Purpose:** Get detailed viral metrics for specific movie
 
+**Viral Coefficient Calculation:**
+```python
+# Aggregate viral_scores from ALL speed_views data (same as 2.1)
+# Note: speed_views has 48h TTL, so all data is recent by definition
+speed_data = db.speed_views.aggregate([
+    # Filter to this movie only (no time cutoff - all data is within 48h TTL)
+    {"$match": {
+        "movie_title": movie_title
+    }},
+    
+    # Sum viral_score across all windows (handles multiple time windows)
+    {"$group": {
+        "_id": "$movie_title",
+        "total_viral_score": {"$sum": "$metrics.viral_score"},
+        "total_upvotes": {"$sum": "$metrics.total_upvotes"},
+        "total_comments": {"$sum": "$metrics.total_comments"},
+        "total_awards": {"$sum": "$metrics.total_awards"},
+        "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
+        "max_upvote_velocity": {"$max": "$metrics.upvote_velocity"},
+        "max_comment_velocity": {"$max": "$metrics.comment_velocity"},
+        "max_award_velocity": {"$max": "$metrics.award_velocity"},
+        "latest_window": {"$max": "$window_start"},
+        "window_count": {"$sum": 1}
+    }}
+])
+
+# Get threshold (same logic as 2.1)
+batch_movie = db.movie_intelligence.find_one({"movie_id": movie_id})
+genre = batch_movie.get("genre", "")
+threshold_doc = db.viral_thresholds.find_one({
+    "genre": genre,
+    "budget_tier": None,
+    "season": None
+})
+
+if not threshold_doc:
+    threshold_doc = db.viral_thresholds.find_one({
+        "genre": None,
+        "budget_tier": None,
+        "season": None
+    })
+
+threshold = threshold_doc["avg_popularity"]
+
+# Extract aggregation result (cursor returns list with one element)
+speed_result = list(speed_data)[0] if speed_data else None
+
+if not speed_result:
+    # No speed layer data available
+    return {"error": "No recent discussion data found"}
+
+# Calculate viral coefficient using summed total_viral_score
+viral_score = speed_result['total_viral_score']
+viral_coefficient = viral_score / threshold
+
+# Determine viral status
+if viral_coefficient >= 0.3:
+    viral_status = "viral"
+elif viral_coefficient >= 0.15:
+    viral_status = "trending"
+elif viral_coefficient >= 0.05:
+    viral_status = "growing"
+else:
+    viral_status = "stable"
+```
+
 **Implementation Note - Trending Trajectory:**
 The `trending_trajectory` field requires historical rank tracking. Since rank data is not stored in MongoDB, it must be calculated on-demand:
 1. Calculate current viral coefficients for all movies → rank them → find current rank
-2. Query 24h old data from `speed_views` → calculate 24h ago viral coefficients → rank them → find 24h ago rank
+2. Query 24h old data from `speed_views` → calculate 24h ago viral coefficients (sum across windows) → rank them → find 24h ago rank
 3. Compare ranks to get `rank_change`
-4. Compare current velocity to 24h ago velocity to determine `velocity_trend` (accelerating/decelerating/stable)
+4. Compare current total viral_score to 24h ago total viral_score to determine `velocity_trend` (accelerating/decelerating/stable)
 
 **Alternative Implementation:** Cache daily rankings in Redis with TTL=7 days for faster lookups.
 
@@ -678,6 +742,11 @@ The `trending_trajectory` field requires historical rank tracking. Since rank da
 
 **Purpose:** Get viral thresholds by context (genre, budget, season)
 
+**Note on Threshold Usage:**
+- `avg_popularity` is used as the threshold denominator in viral coefficient calculation (V = viral_score / avg_popularity)
+- `viral_threshold` (99th percentile of vote_count) is stored but NOT used in the calculation
+- This endpoint returns both values for reference, but only `avg_popularity` is semantically correct for comparing Reddit buzz to TMDB buzz
+
 **Query Logic:**
 ```python
 # viral_thresholds schema: EXACTLY ONE dimension per document
@@ -695,9 +764,11 @@ if genre:
         return {
             "dimension": "genre",
             "value": genre,
-            "viral_threshold": threshold["viral_threshold"],
-            "avg_popularity": threshold["avg_popularity"],
-            "movie_count": threshold["movie_count"]
+            "threshold_used_in_calculation": threshold["avg_popularity"],  # ✅ THIS is used for viral coefficient
+            "avg_popularity": threshold["avg_popularity"],  # Current TMDB buzz metric
+            "viral_threshold": threshold["viral_threshold"],  # 99th percentile vote_count (NOT used)
+            "movie_count": threshold["movie_count"],
+            "note": "avg_popularity is used as denominator in viral coefficient calculation"
         }
 
 elif budget_tier:
@@ -710,6 +781,8 @@ elif budget_tier:
         return {
             "dimension": "budget_tier",
             "value": budget_tier,
+            "threshold_used_in_calculation": threshold["avg_popularity"],
+            "avg_popularity": threshold["avg_popularity"],
             "viral_threshold": threshold["viral_threshold"],
             "budget_tier_coefficient": threshold.get("budget_tier_coefficient", 2.5),
             "movie_count": threshold["movie_count"]
@@ -725,6 +798,8 @@ elif season:
         return {
             "dimension": "season",
             "value": season,
+            "threshold_used_in_calculation": threshold["avg_popularity"],
+            "avg_popularity": threshold["avg_popularity"],
             "viral_threshold": threshold["viral_threshold"],
             "seasonal_threshold": threshold.get("seasonal_threshold"),
             "movie_count": threshold["movie_count"]
@@ -740,8 +815,9 @@ else:
     return [
         {
             "genre": t["genre"],
-            "viral_threshold": t["viral_threshold"],
-            "avg_popularity": t["avg_popularity"]
+            "threshold_used_in_calculation": t["avg_popularity"],  # ✅ Used in calculation
+            "avg_popularity": t["avg_popularity"],
+            "viral_threshold": t["viral_threshold"]  # NOT used, just for reference
         }
         for t in genre_thresholds
     ]
@@ -759,8 +835,10 @@ Opportunity Score (O):
     V = viral_coefficient (from 2.1)
     
     recency_factor = exp(-age_hours / 24)
+      - Measures time since LATEST engagement (not when discussion started)
       - Decays exponentially: fresher content = higher opportunity
       - Half-life of 24 hours
+      - Note: age_hours calculated from latest_window, not earliest_window
     
     momentum_factor = velocity_now / velocity_24h_ago
       - Accelerating trends get boost
@@ -790,33 +868,36 @@ Estimated Reach:
 opportunities = []
 for movie in get_trending_movies(min_viral_coefficient=1.5):
     # Calculate factors
-    # Get earliest discussion time from speed_views
+    # Note: speed_views has 48h TTL, so all data is already within 48h window
+    
+    # Get latest window for recency calculation (when was LATEST engagement?)
+    latest_window = db.speed_views.find_one(
+        {"movie_title": movie.title},
+        sort=[("window_start", -1)]
+    )
+    
+    if not latest_window:
+        continue  # No speed data available
+    
+    # Recency: time since LATEST engagement (not when discussion started)
+    age_hours = (now - latest_window['window_start']).total_seconds() / 3600
+    recency_factor = exp(-age_hours / 24)
+    
+    # Current velocity from latest window
+    velocity_now = latest_window['metrics']['viral_score']
+    
+    # Get earliest window for momentum comparison
     earliest_window = db.speed_views.find_one(
         {"movie_title": movie.title},
         sort=[("window_start", 1)]
     )
-    age_hours = (now - earliest_window['window_start']).total_seconds() / 3600 if earliest_window else 48
-    recency_factor = exp(-age_hours / 24)
     
-    # Get current velocity (most recent window)
-    current_window = db.speed_views.find_one(
-        {"movie_title": movie.title},
-        sort=[("window_start", -1)]
-    )
-    velocity_now = current_window['metrics']['viral_score'] if current_window else 0
-    
-    # Get velocity from 24h ago
-    time_24h_ago = now - timedelta(hours=24)
-    past_window = db.speed_views.find_one(
-        {
-            "movie_title": movie.title,
-            "window_start": {"$gte": time_24h_ago - timedelta(hours=1), "$lt": time_24h_ago + timedelta(hours=1)}
-        }
-    )
-    velocity_24h_ago = past_window['metrics']['viral_score'] if past_window else velocity_now
+    # Momentum: compare latest vs earliest velocity across TTL period
+    velocity_24h_ago = earliest_window['metrics']['viral_score'] if earliest_window else velocity_now
     momentum_factor = velocity_now / velocity_24h_ago if velocity_24h_ago > 0 else 1.0
     
-    # Calculate impressions proxy from available metrics
+    # Calculate impressions proxy from available metrics (already aggregated in movie object)
+    # Note: movie object from get_trending_movies already has aggregated metrics from ALL speed_views
     total_impressions = (
         movie.speed_metrics['total_upvotes'] + 
         movie.speed_metrics['total_comments'] * 5 + 

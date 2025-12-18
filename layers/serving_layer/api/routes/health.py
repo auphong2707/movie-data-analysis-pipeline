@@ -12,4 +12,7 @@ router = APIRouter(
 @router.get("")
 async def health_check():
     """System health check endpoint"""
-    pass
+    return {
+        "status": "healthy",
+        "timestamp": "2025-12-18T00:00:00Z"
+    }

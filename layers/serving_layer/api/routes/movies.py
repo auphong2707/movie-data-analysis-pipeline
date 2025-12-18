@@ -10,7 +10,7 @@ import logging
 from mongodb.client import get_database
 from query_engine.view_merger import ViewMerger
 from query_engine.cache_manager import get_cache_manager, cache_response
-from api.metrics import record_crisis_alert, update_sentiment_metrics
+from api.metrics import record_crisis_alert
 
 logger = logging.getLogger(__name__)
 
@@ -155,14 +155,10 @@ async def get_movie_sentiment(
         response = {
             'movie_id': result['movie_id'],
             'title': result.get('title'),
-            'genres': result.get('genres', []),
             'sentiment': result['sentiment'],
             'breakdown': result.get('breakdown', []),
             'data_sources': result.get('data_sources', {})
         }
-        
-        # Update Prometheus sentiment metrics for dashboard
-        update_sentiment_metrics(response)
         
         # Cache result (3 minutes - sentiment is dynamic)
         cache.set(cache_key, response, ttl_seconds=180)
@@ -305,28 +301,13 @@ async def get_movie_sentiment_by_title(
                 detail=f"Sentiment data for movie '{title}' (ID: {movie_id}) not found"
             )
         
-        # Check for PR crisis (sentiment drop)
-        sentiment_data = result['sentiment']
-        overall_score = sentiment_data.get('overall_score', 0)
-        sentiment_label = sentiment_data.get('label', 'neutral')
-        
-        # Record crisis alert if sentiment is negative or very low
-        if sentiment_label == 'negative' or overall_score < 0.3:
-            record_crisis_alert(severity="warning")
-        elif sentiment_label == 'very_negative' or overall_score < 0.1:
-            record_crisis_alert(severity="critical")
-        
         response = {
             'movie_id': result['movie_id'],
             'title': result.get('title'),
-            'genres': result.get('genres', []),
             'sentiment': result['sentiment'],
             'breakdown': result.get('breakdown', []),
             'data_sources': result.get('data_sources', {})
         }
-        
-        # Update Prometheus sentiment metrics for dashboard
-        update_sentiment_metrics(response)
         
         cache.set(cache_key, response, ttl_seconds=180)
         

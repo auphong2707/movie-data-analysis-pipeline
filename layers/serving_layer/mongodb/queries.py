@@ -330,3 +330,107 @@ class MovieQueries:
             'total_pages': (total + limit - 1) // limit,
             'limit': limit
         }
+    
+    # --- Recommendations Queries ---
+    
+    def get_batch_movies_for_recommendations(
+        self,
+        min_rating: float = 6.0,
+        genre: Optional[str] = None,
+        min_popularity: float = 1.0,
+        min_vote_count: int = 50
+    ) -> List[Dict]:
+        """
+        Get batch layer movies for dual-success recommendations
+        
+        Args:
+            min_rating: Minimum vote_average threshold
+            genre: Optional genre filter
+            min_popularity: Minimum TMDB popularity
+            min_vote_count: Minimum vote count for credibility
+        
+        Returns:
+            List of movie documents from movie_intelligence collection
+        """
+        query = {
+            'vote_average': {'$gte': min_rating},
+            'popularity': {'$gte': min_popularity},
+            'vote_count': {'$gte': min_vote_count}
+        }
+        
+        if genre:
+            # Handle both flat 'genre' and array 'genres'
+            query['$or'] = [
+                {'genre': genre},
+                {'genres': genre}
+            ]
+        
+        # Return all necessary fields for scoring
+        projection = {
+            'movie_id': 1,
+            'title': 1,
+            'genre': 1,
+            'genres': 1,
+            'vote_average': 1,
+            'vote_count': 1,
+            'popularity': 1,
+            'release_year': 1,
+            '_id': 0
+        }
+        
+        return list(self.movie_intelligence.find(query, projection))
+    
+    def get_speed_layer_engagement(
+        self,
+        movie_titles: Optional[List[str]] = None,
+        days_back: int = 30
+    ) -> Dict[str, Dict]:
+        """
+        Get Reddit engagement from speed layer for dual-success recommendations
+        
+        Args:
+            movie_titles: Optional list of movie titles to filter by
+            days_back: How many days back to aggregate
+        
+        Returns:
+            Dictionary mapping movie_title to aggregated engagement metrics
+        """
+        cutoff_time = datetime.utcnow() - timedelta(days=days_back)
+        
+        # Base match query
+        match_query = {
+            'window_start': {'$gte': cutoff_time}
+        }
+        
+        if movie_titles:
+            match_query['movie_title'] = {'$in': movie_titles}
+        
+        # Aggregation pipeline
+        pipeline = [
+            {'$match': match_query},
+            {
+                '$group': {
+                    '_id': '$movie_title',
+                    'total_upvotes': {'$sum': '$total_upvotes'},
+                    'total_comments': {'$sum': '$total_comments'},
+                    'total_awards': {'$sum': '$total_awards'},
+                    'discussion_count': {'$sum': 1},
+                    'last_window_start': {'$max': '$window_start'}
+                }
+            }
+        ]
+        
+        results = list(self.speed_views.aggregate(pipeline))
+        
+        # Convert to dictionary for easy lookup
+        engagement_map = {}
+        for result in results:
+            engagement_map[result['_id']] = {
+                'total_upvotes': result.get('total_upvotes', 0),
+                'total_comments': result.get('total_comments', 0),
+                'total_awards': result.get('total_awards', 0),
+                'discussion_count': result.get('discussion_count', 0),
+                'last_window_start': result.get('last_window_start')
+            }
+        
+        return engagement_map

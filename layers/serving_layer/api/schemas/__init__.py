@@ -30,6 +30,17 @@ from api.schemas.viral_detection import (
     ThresholdsListResponse
 )
 
+from api.schemas.recommendations import (
+    DualSuccessRecommendation,
+    DualSuccessResponse,
+    SimilarMovieRecommendation,
+    SimilarMoviesResponse,
+    RedditBuzzRecommendation,
+    RedditBuzzResponse,
+    TMDBQualityRecommendation,
+    TMDBQualityResponse
+)
+
 __all__ = [
     # Crisis Detection
     "BaselineInfo",
@@ -57,5 +68,15 @@ __all__ = [
     "ThresholdResponse",
     "GenreThresholdSummary",
     "ThresholdsListResponse",
+    
+    # Recommendations
+    "DualSuccessRecommendation",
+    "DualSuccessResponse",
+    "SimilarMovieRecommendation",
+    "SimilarMoviesResponse",
+    "RedditBuzzRecommendation",
+    "RedditBuzzResponse",
+    "TMDBQualityRecommendation",
+    "TMDBQualityResponse",
 ]
 

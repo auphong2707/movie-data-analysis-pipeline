@@ -6,7 +6,9 @@ from api.schemas.crisis_detection import (
     BaselineAvailability,
     DeviationDetail,
     DeviationAnalysis,
-    MovieSentimentResponse
+    MovieSentimentResponse,
+    CrisisAlert,
+    CrisisAlertsResponse
 )
 
 __all__ = [
@@ -15,4 +17,6 @@ __all__ = [
     "DeviationDetail",
     "DeviationAnalysis",
     "MovieSentimentResponse",
+    "CrisisAlert",
+    "CrisisAlertsResponse",
 ]

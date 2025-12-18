@@ -99,6 +99,10 @@ class TestMovieSentimentEndpoint:
                     f"Invalid baseline type: {baseline['type']}"
                 assert "avg_sentiment" in baseline, "baseline_used missing avg_sentiment"
                 assert "sentiment_stddev" in baseline, "baseline_used missing sentiment_stddev"
+                assert baseline["avg_sentiment"] is not None, "baseline avg_sentiment is None"
+                assert baseline["sentiment_stddev"] is not None, "baseline sentiment_stddev is None"
+                assert baseline["movie_count"] is not None, "baseline movie_count is None"
+                assert baseline["value"] is not None, "baseline value is None"
                 
                 assert "baseline_alternatives" in data, "Missing baseline_alternatives field"
                 assert data["baseline_alternatives"] is not None, "baseline_alternatives is None"
@@ -106,6 +110,20 @@ class TestMovieSentimentEndpoint:
                 assert "franchise" in alternatives, "baseline_alternatives missing franchise"
                 assert "genre" in alternatives, "baseline_alternatives missing genre"
                 assert "year" in alternatives, "baseline_alternatives missing year"
+                
+                # Check that at least one alternative is available
+                available_count = sum(1 for alt in alternatives.values() if alt["available"])
+                assert available_count > 0, "No baselines available - at least one should be available"
+                
+                # For available alternatives, check no unexpected nulls
+                for alt_name, alt_data in alternatives.items():
+                    assert alt_data is not None, f"{alt_name} alternative is None"
+                    assert "available" in alt_data, f"{alt_name} missing 'available' field"
+                    if alt_data["available"]:
+                        assert alt_data["value"] is not None, f"{alt_name} is available but value is None"
+                        assert alt_data["avg_sentiment"] is not None, f"{alt_name} is available but avg_sentiment is None"
+                        assert alt_data["sentiment_stddev"] is not None, f"{alt_name} is available but sentiment_stddev is None"
+                        assert alt_data["movie_count"] is not None, f"{alt_name} is available but movie_count is None"
                 
                 assert "deviation_analysis" in data, "Missing deviation_analysis field"
                 assert data["deviation_analysis"] is not None, "deviation_analysis is None"
@@ -116,11 +134,27 @@ class TestMovieSentimentEndpoint:
                 
                 # Check using_baseline structure
                 using_baseline = deviation["using_baseline"]
+                assert using_baseline is not None, "using_baseline is None"
                 assert "deviation_sigma" in using_baseline, "using_baseline missing deviation_sigma"
+                assert using_baseline["deviation_sigma"] is not None, "deviation_sigma is None"
                 assert "is_crisis" in using_baseline, "using_baseline missing is_crisis"
+                assert using_baseline["is_crisis"] is not None, "is_crisis is None"
+                assert isinstance(using_baseline["is_crisis"], bool), "is_crisis not a boolean"
                 assert "severity" in using_baseline, "using_baseline missing severity"
+                assert using_baseline["severity"] is not None, "severity is None"
                 assert using_baseline["severity"] in ["critical", "high", "warning", "normal"], \
                     f"Invalid severity: {using_baseline['severity']}"
+                
+                # Check all_baselines - should have at least one entry
+                all_baselines = deviation["all_baselines"]
+                assert all_baselines is not None, "all_baselines is None"
+                assert len(all_baselines) > 0, "all_baselines is empty"
+                for baseline_name, baseline_dev in all_baselines.items():
+                    assert baseline_dev is not None, f"Baseline {baseline_name} in all_baselines is None"
+                    assert "deviation_sigma" in baseline_dev, f"{baseline_name} missing deviation_sigma"
+                    assert baseline_dev["deviation_sigma"] is not None, f"{baseline_name} deviation_sigma is None"
+                    assert "is_crisis" in baseline_dev, f"{baseline_name} missing is_crisis"
+                    assert "severity" in baseline_dev, f"{baseline_name} missing severity"
                 
                 assert "last_updated" in data, "Missing last_updated field"
                 assert data["last_updated"] is not None, "last_updated is None"
@@ -229,6 +263,183 @@ class TestMultipleMovies:
                 assert data.get("current_sentiment") is not None
                 assert data.get("baseline_used") is not None
                 print(f"✓ Movie {movie_id}: {data.get('movie_title')} - OK")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+
+
+class TestCrisisAlertsEndpoint:
+    """Test GET /crisis-detection/alerts"""
+    
+    def test_alerts_endpoint_returns_200(self):
+        """Test that alerts endpoint returns valid response"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/alerts",
+                timeout=10
+            )
+            
+            # Should return 200
+            assert response.status_code == 200, \
+                f"Unexpected status code: {response.status_code}"
+            
+            data = response.json()
+            print(f"\n✓ Crisis alerts retrieved successfully")
+            
+            # Verify response structure
+            assert "total_alerts" in data, "Missing total_alerts field"
+            assert data["total_alerts"] is not None, "total_alerts is None"
+            assert isinstance(data["total_alerts"], int), "total_alerts not an integer"
+            
+            assert "alerts" in data, "Missing alerts field"
+            assert data["alerts"] is not None, "alerts is None"
+            assert isinstance(data["alerts"], list), "alerts not a list"
+            
+            assert "filters_applied" in data, "Missing filters_applied field"
+            assert data["filters_applied"] is not None, "filters_applied is None"
+            
+            print(f"  Total alerts: {data['total_alerts']}")
+            
+            # If there are alerts, check their structure
+            if data["total_alerts"] > 0:
+                alert = data["alerts"][0]
+                
+                assert "movie_id" in alert, "Alert missing movie_id"
+                assert alert["movie_id"] is not None, "Alert movie_id is None"
+                assert isinstance(alert["movie_id"], int), "Alert movie_id not an integer"
+                
+                assert "movie_title" in alert, "Alert missing movie_title"
+                assert alert["movie_title"] is not None, "Alert movie_title is None"
+                assert len(alert["movie_title"]) > 0, "Alert movie_title is empty"
+                
+                assert "current_sentiment" in alert, "Alert missing current_sentiment"
+                assert alert["current_sentiment"] is not None, "Alert current_sentiment is None"
+                assert -1.0 <= alert["current_sentiment"] <= 1.0, "current_sentiment out of range"
+                
+                assert "baseline_sentiment" in alert, "Alert missing baseline_sentiment"
+                assert alert["baseline_sentiment"] is not None, "Alert baseline_sentiment is None"
+                assert "baseline_type" in alert, "Alert missing baseline_type"
+                assert alert["baseline_type"] is not None, "Alert baseline_type is None"
+                assert alert["baseline_type"] in ["franchise", "genre", "year"], \
+                    f"Invalid baseline_type: {alert['baseline_type']}"
+                
+                assert "deviation_sigma" in alert, "Alert missing deviation_sigma"
+                assert alert["deviation_sigma"] is not None, "Alert deviation_sigma is None"
+                assert alert["deviation_sigma"] < -3.0, "Alert sigma should be < -3.0 for crisis"
+                
+                assert "severity" in alert, "Alert missing severity"
+                assert alert["severity"] is not None, "Alert severity is None"
+                assert alert["severity"] in ["critical", "high", "warning"], \
+                    f"Invalid severity for crisis: {alert['severity']}"
+                
+                assert "alert_timestamp" in alert, "Alert missing alert_timestamp"
+                assert alert["alert_timestamp"] is not None, "Alert alert_timestamp is None"
+                assert "data_age_hours" in alert, "Alert missing data_age_hours"
+                assert alert["data_age_hours"] is not None, "Alert data_age_hours is None"
+                assert alert["data_age_hours"] >= 0, "data_age_hours should be non-negative"
+                
+                # Check all alerts, not just first one
+                for i, alert in enumerate(data["alerts"]):
+                    assert alert["movie_id"] is not None, f"Alert {i} has None movie_id"
+                    assert alert["movie_title"] is not None, f"Alert {i} has None movie_title"
+                    assert alert["current_sentiment"] is not None, f"Alert {i} has None current_sentiment"
+                    assert alert["deviation_sigma"] is not None, f"Alert {i} has None deviation_sigma"
+                    assert alert["severity"] is not None, f"Alert {i} has None severity"
+                
+                print(f"  First alert: {alert['movie_title']}")
+                print(f"    Deviation: {alert['deviation_sigma']:.2f}σ")
+                print(f"    Severity: {alert['severity']}")
+                print(f"    Baseline: {alert['baseline_type']}")
+            else:
+                print("  No active crises (all movies within normal range)")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_alerts_with_severity_filter(self):
+        """Test alerts endpoint with severity filter"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/alerts",
+                params={"severity": "critical"},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check filter was applied
+            assert data["filters_applied"]["severity"] == "critical"
+            
+            # If there are alerts, verify they're all critical
+            for alert in data["alerts"]:
+                assert alert["severity"] == "critical", \
+                    f"Filter failed: got {alert['severity']} instead of critical"
+            
+            print(f"\n✓ Severity filter working: {data['total_alerts']} critical alerts")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_alerts_with_genre_filter(self):
+        """Test alerts endpoint with genre filter"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/alerts",
+                params={"genre": "Action"},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check filter was applied
+            assert data["filters_applied"]["genre"] == "Action"
+            
+            print(f"\n✓ Genre filter working: {data['total_alerts']} Action movie alerts")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_alerts_with_limit(self):
+        """Test alerts endpoint with limit parameter"""
+        try:
+            limit = 5
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/alerts",
+                params={"limit": limit},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Should not exceed limit
+            assert len(data["alerts"]) <= limit, \
+                f"Returned {len(data['alerts'])} alerts, exceeds limit of {limit}"
+            
+            print(f"\n✓ Limit working: requested {limit}, got {len(data['alerts'])}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_alerts_sorted_by_severity(self):
+        """Test that alerts are sorted by deviation (most negative first)"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/crisis-detection/alerts",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # If there are multiple alerts, check sorting
+            if data["total_alerts"] > 1:
+                deviations = [alert["deviation_sigma"] for alert in data["alerts"]]
+                assert deviations == sorted(deviations), \
+                    "Alerts not sorted by deviation (most negative first)"
+                print(f"\n✓ Alerts properly sorted by severity")
             
         except requests.exceptions.ConnectionError:
             pytest.skip("API is not running")

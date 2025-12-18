@@ -49,3 +49,23 @@ class MovieSentimentResponse(BaseModel):
     baseline_alternatives: Dict[str, BaselineAvailability]
     deviation_analysis: DeviationAnalysis
     last_updated: str
+
+
+class CrisisAlert(BaseModel):
+    """Individual crisis alert"""
+    movie_id: int
+    movie_title: str
+    current_sentiment: float
+    baseline_sentiment: float
+    baseline_type: str
+    deviation_sigma: float
+    severity: str
+    alert_timestamp: str
+    data_age_hours: float
+
+
+class CrisisAlertsResponse(BaseModel):
+    """Response for crisis alerts listing"""
+    total_alerts: int
+    alerts: list[CrisisAlert]
+    filters_applied: Dict[str, Optional[str]]

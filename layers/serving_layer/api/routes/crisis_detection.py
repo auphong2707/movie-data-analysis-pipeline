@@ -14,7 +14,9 @@ from api.schemas.crisis_detection import (
     BaselineAvailability,
     DeviationDetail,
     DeviationAnalysis,
-    MovieSentimentResponse
+    MovieSentimentResponse,
+    CrisisAlert,
+    CrisisAlertsResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -291,15 +293,146 @@ async def get_movie_sentiment_by_title(title: str):
         )
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=CrisisAlertsResponse)
 async def get_crisis_alerts(
-    severity: Optional[str] = Query(None, description="Filter by severity"),
+    severity: Optional[str] = Query(None, description="Filter by severity: critical, high, warning"),
     genre: Optional[str] = Query(None, description="Filter by genre"),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results")
 ):
-    """List active crisis alerts"""
-    # TODO: Implement crisis alerts listing
-    pass
+    """
+    List all movies currently in crisis state (σ < -3.0)
+    
+    Scans recent speed layer data and calculates deviation from baselines
+    to identify movies experiencing PR crises.
+    """
+    try:
+        # Get MongoDB connection
+        client = get_mongodb_client()
+        db = client.get_database("moviedb")
+        queries = MovieQueries(db)
+        
+        # Step 1: Get all movies with recent discussions (speed layer)
+        cutoff_time = datetime.utcnow() - timedelta(hours=48)
+        speed_movies = list(db.speed_views.find({
+            "window_start": {"$gte": cutoff_time}
+        }).sort("window_start", -1))
+        
+        # Step 2: Match with batch layer and calculate deviation
+        alerts = []
+        processed_titles = set()  # Avoid duplicates
+        
+        for speed_movie in speed_movies:
+            movie_title = speed_movie.get('movie_title', '')
+            
+            # Skip if already processed
+            normalized_title = normalize_movie_title(movie_title)
+            if normalized_title in processed_titles:
+                continue
+            processed_titles.add(normalized_title)
+            
+            # Find matching movie in batch layer
+            batch_movie = db.movie_intelligence.find_one({
+                "title": {"$regex": f"^{re.escape(normalized_title)}$", "$options": "i"}
+            })
+            
+            if not batch_movie:
+                continue
+            
+            # Apply genre filter if specified
+            if genre and batch_movie.get("genre", "").lower() != genre.lower():
+                continue
+            
+            # Get current sentiment from speed layer
+            S_current = speed_movie.get('metrics', {}).get('avg_sentiment')
+            if S_current is None:
+                continue
+            
+            # Get baseline using priority: franchise → genre → year
+            baseline = None
+            baseline_type = None
+            
+            # Try franchise first
+            if batch_movie.get("franchise"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "franchise")
+                if baseline:
+                    baseline_type = "franchise"
+            
+            # Try genre if no franchise baseline
+            if not baseline and batch_movie.get("genre"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "genre")
+                if baseline:
+                    baseline_type = "genre"
+            
+            # Try year if no genre baseline
+            if not baseline and batch_movie.get("release_year"):
+                baseline = await get_sentiment_baseline(db, batch_movie, "year")
+                if baseline:
+                    baseline_type = "year"
+            
+            if not baseline:
+                continue
+            
+            S_baseline = baseline.get("avg_sentiment")
+            σ_baseline = baseline.get("sentiment_stddev")
+            
+            if not σ_baseline or σ_baseline == 0:
+                continue
+            
+            # Calculate deviation: σ = (S_current - S_baseline) / σ_baseline
+            σ = (S_current - S_baseline) / σ_baseline
+            
+            # Only include if in crisis (σ < -3.0)
+            if σ < -3.0:
+                alert_severity = get_severity(σ)
+                
+                # Apply severity filter if specified
+                if severity and alert_severity != severity.lower():
+                    continue
+                
+                # Calculate data age
+                window_start = speed_movie.get('window_start')
+                if isinstance(window_start, datetime):
+                    data_age_hours = (datetime.utcnow() - window_start).total_seconds() / 3600
+                else:
+                    data_age_hours = 0.0
+                
+                alerts.append(CrisisAlert(
+                    movie_id=batch_movie.get("movie_id"),
+                    movie_title=batch_movie.get("title"),
+                    current_sentiment=round(S_current, 2),
+                    baseline_sentiment=round(S_baseline, 2),
+                    baseline_type=baseline_type,
+                    deviation_sigma=round(σ, 2),
+                    severity=alert_severity,
+                    alert_timestamp=window_start.isoformat() if isinstance(window_start, datetime) else str(window_start),
+                    data_age_hours=round(data_age_hours, 1)
+                ))
+        
+        # Step 3: Sort by severity (most negative σ first)
+        alerts.sort(key=lambda x: x.deviation_sigma)
+        
+        # Apply limit
+        alerts = alerts[:limit]
+        
+        # Build response
+        response = CrisisAlertsResponse(
+            total_alerts=len(alerts),
+            alerts=alerts,
+            filters_applied={
+                "severity": severity,
+                "genre": genre,
+                "limit": str(limit)
+            }
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error getting crisis alerts: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.get("/alerts/{alert_id}")

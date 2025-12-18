@@ -17,7 +17,18 @@ from api.schemas.crisis_detection import (
     MonitoringDashboardResponse
 )
 
+from api.schemas.viral_detection import (
+    TrendingMoviesResponse,
+    TrendingMovieResponse,
+    ViralMetrics,
+    RedditEngagement,
+    MovieIntelligence,
+    ThresholdContext,
+    ViralScoreDetailResponse
+)
+
 __all__ = [
+    # Crisis Detection
     "BaselineInfo",
     "BaselineAvailability",
     "DeviationDetail",
@@ -31,4 +42,14 @@ __all__ = [
     "SeverityCounts",
     "SentimentVelocity",
     "MonitoringDashboardResponse",
+    
+    # Viral Detection
+    "TrendingMoviesResponse",
+    "TrendingMovieResponse",
+    "ViralMetrics",
+    "RedditEngagement",
+    "MovieIntelligence",
+    "ThresholdContext",
+    "ViralScoreDetailResponse",
 ]
+

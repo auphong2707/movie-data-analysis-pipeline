@@ -37,17 +37,20 @@ def get_severity(deviation_sigma: float) -> str:
     """
     Calculate severity level from deviation sigma
     
-    Thresholds calibrated from analysis of 58 movies (Strategy 3 - Conservative):
-    - Critical: σ < -76.94 (bottom 2% of negative deviations)
-    - High: σ < -31.27 (bottom 10% of negative deviations)
-    - Warning: σ < -24.09 (bottom 25% of negative deviations)
-    - Normal: σ >= -24.09
+    Thresholds calibrated using AVERAGE sentiment (Strategy 4 - Round Numbers):
+    - Critical: σ < -70 (bottom 1% of negative deviations)
+    - High: σ < -30 (bottom 5% of negative deviations)
+    - Warning: σ < -25 (bottom 15% of negative deviations)
+    - Normal: σ >= -25
+    
+    Based on percentiles: 1%=-74.1, 5%=-54.6, 15%=-27.2
+    Rounded for practical use and easy interpretation
     """
-    if deviation_sigma < -76.94:
+    if deviation_sigma < -70:
         return "critical"
-    elif deviation_sigma < -31.27:
+    elif deviation_sigma < -30:
         return "high"
-    elif deviation_sigma < -24.09:
+    elif deviation_sigma < -25:
         return "warning"
     else:
         return "normal"
@@ -327,16 +330,21 @@ async def get_crisis_alerts(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of results")
 ):
     """
-    List all movies currently in crisis state (σ < -3.0)
+    List all movies currently in alert state (warning or worse)
     
     Scans recent speed layer data and calculates deviation from baselines
-    to identify movies experiencing PR crises.
+    to identify movies experiencing PR issues.
+    
+    Alert thresholds (Round Numbers - Strategy 4):
+    - Critical: σ < -70 (bottom 1% of negative deviations)
+    - High: σ < -30 (bottom 5% of negative deviations)
+    - Warning: σ < -25 (bottom 15% of negative deviations)
     
     Implementation:
     - Groups speed_views by movie (last 48h)
     - Calculates S_current = AVG(all windows) for each movie
     - Matches with batch layer to get baseline
-    - Returns movies with σ < -3.0
+    - Returns movies with severity != 'normal'
     """
     try:
         # Get MongoDB connection
@@ -344,15 +352,13 @@ async def get_crisis_alerts(
         db = client.get_database("moviedb")
         queries = MovieQueries(db)
         
-        # Step 1: Get all movies with recent discussions (speed layer)
-        # Changed: Aggregate sentiment across ALL windows for each movie (last 48h)
+        # Get recent speed layer data (last 48 hours)
         cutoff_time = datetime.utcnow() - timedelta(hours=48)
         speed_data = list(db.speed_views.find({
             "window_start": {"$gte": cutoff_time}
         }))
         
-        # Step 2: Group by movie and calculate average sentiment across all windows
-        # S_speed = AVG(metrics.avg_sentiment) across all speed_views windows in last 48h
+        # Group by movie and calculate average sentiment across all windows
         movie_sentiments = {}  # {normalized_title: {"sentiments": [], "latest_window": datetime, "title": str}}
         
         for speed_doc in speed_data:
@@ -378,12 +384,11 @@ async def get_crisis_alerts(
                     if current_latest is None or window_start > current_latest:
                         movie_sentiments[normalized_title]["latest_window"] = window_start
         
-        # Step 3: Match with batch layer and calculate deviation
+        # Process each unique movie
         alerts = []
         
         for normalized_title, sentiment_data in movie_sentiments.items():
-            
-            # Find matching movie in batch layer
+            # Find matching batch movie
             batch_movie = db.movie_intelligence.find_one({
                 "title": {"$regex": f"^{re.escape(normalized_title)}$", "$options": "i"}
             })
@@ -396,7 +401,6 @@ async def get_crisis_alerts(
                 continue
             
             # Calculate average sentiment across all windows in 48h
-            # S_current = AVG(metrics.avg_sentiment) across all windows
             sentiments = sentiment_data["sentiments"]
             if not sentiments:
                 continue
@@ -438,10 +442,11 @@ async def get_crisis_alerts(
             # Calculate deviation: σ = (S_current - S_baseline) / σ_baseline
             σ = (S_current - S_baseline) / σ_baseline
             
-            # Only include if in crisis (σ < -3.0)
-            if σ < -3.0:
-                alert_severity = get_severity(σ)
-                
+            # Get severity level
+            alert_severity = get_severity(σ)
+            
+            # Only include if in alert state (warning, high, or critical - not normal)
+            if alert_severity != "normal":
                 # Apply severity filter if specified
                 if severity and alert_severity != severity.lower():
                     continue
@@ -464,7 +469,7 @@ async def get_crisis_alerts(
                     data_age_hours=round(data_age_hours, 1)
                 ))
         
-        # Step 4: Sort by severity (most negative σ first)
+        # Sort by severity (most negative σ first)
         alerts.sort(key=lambda x: x.deviation_sigma)
         
         # Apply limit
@@ -698,9 +703,37 @@ async def get_monitoring_data():
         
         # Get recent speed layer data (last 48 hours)
         cutoff_time = datetime.utcnow() - timedelta(hours=48)
-        speed_movies = list(db.speed_views.find({
+        speed_data = list(db.speed_views.find({
             "window_start": {"$gte": cutoff_time}
-        }).sort("window_start", -1))
+        }))
+        
+        # Group by movie and calculate average sentiment across all windows
+        movie_sentiments = {}  # {normalized_title: {"sentiments": [], "latest_window": datetime, "title": str, "windows": []}}
+        
+        for speed_doc in speed_data:
+            movie_title = speed_doc.get('movie_title', '')
+            normalized_title = normalize_movie_title(movie_title)
+            
+            sentiment_val = speed_doc.get('metrics', {}).get('avg_sentiment')
+            window_start = speed_doc.get('window_start')
+            
+            if sentiment_val is not None:
+                if normalized_title not in movie_sentiments:
+                    movie_sentiments[normalized_title] = {
+                        "sentiments": [],
+                        "latest_window": window_start,
+                        "title": movie_title,
+                        "windows": []
+                    }
+                
+                movie_sentiments[normalized_title]["sentiments"].append(sentiment_val)
+                movie_sentiments[normalized_title]["windows"].append(speed_doc)
+                
+                # Track the most recent window
+                if isinstance(window_start, datetime):
+                    current_latest = movie_sentiments[normalized_title]["latest_window"]
+                    if current_latest is None or window_start > current_latest:
+                        movie_sentiments[normalized_title]["latest_window"] = window_start
         
         # Initialize counters
         severity_counts = {
@@ -714,18 +747,9 @@ async def get_monitoring_data():
         crisis_movies = 0
         sentiment_sum = 0.0
         sentiment_velocities = []
-        processed_titles = set()
         
-        # Process each speed layer movie
-        for speed_movie in speed_movies:
-            movie_title = speed_movie.get('movie_title', '')
-            normalized_title = normalize_movie_title(movie_title)
-            
-            # Skip duplicates
-            if normalized_title in processed_titles:
-                continue
-            processed_titles.add(normalized_title)
-            
+        # Process each unique movie
+        for normalized_title, sentiment_data in movie_sentiments.items():
             # Find matching batch movie
             batch_movie = db.movie_intelligence.find_one({
                 "title": {"$regex": f"^{re.escape(normalized_title)}$", "$options": "i"}
@@ -736,11 +760,12 @@ async def get_monitoring_data():
             
             total_movies_tracked += 1
             
-            # Get current sentiment
-            S_current = speed_movie.get('metrics', {}).get('avg_sentiment')
-            if S_current is None:
+            # Calculate average sentiment across all windows
+            sentiments = sentiment_data["sentiments"]
+            if not sentiments:
                 continue
             
+            S_current = sum(sentiments) / len(sentiments)
             sentiment_sum += S_current
             
             # Get baseline (try franchise → genre → year)
@@ -765,32 +790,34 @@ async def get_monitoring_data():
             σ = (S_current - S_baseline) / σ_baseline
             severity = get_severity(σ)
             
-            # Count by severity (data-driven thresholds from calibration)
-            # Based on analysis of 58 movies: Strategy 3 (Conservative)
-            # - Critical: bottom 2% of negative deviations (σ < -76.94)
-            # - High: bottom 10% of negative deviations (σ < -31.27)
-            # - Warning: bottom 25% of negative deviations (σ < -24.09)
-            if σ < -75:
+            # Count by severity (Round Numbers - Strategy 4)
+            # - Critical: σ < -70 (bottom 1% of negative deviations)
+            # - High: σ < -30 (bottom 5% of negative deviations)
+            # - Warning: σ < -25 (bottom 15% of negative deviations)
+            if σ < -70:
                 severity_counts["critical"] += 1
                 crisis_movies += 1
             elif σ < -30:
                 severity_counts["high"] += 1
                 crisis_movies += 1
-            elif σ < -20:
+            elif σ < -25:
                 severity_counts["warning"] += 1
             else:
                 severity_counts["normal"] += 1
             
             # Calculate sentiment velocity (rate of change)
             # Get sentiment from 1 hour ago
+            movie_title = sentiment_data["title"]
             time_1h_ago = datetime.utcnow() - timedelta(hours=1)
-            older_window = db.speed_views.find_one({
-                "movie_title": movie_title,
-                "window_start": {
-                    "$gte": time_1h_ago - timedelta(minutes=30),
-                    "$lt": time_1h_ago + timedelta(minutes=30)
-                }
-            })
+            
+            # Find window from ~1 hour ago
+            older_window = None
+            for window in sentiment_data["windows"]:
+                window_start = window.get('window_start')
+                if isinstance(window_start, datetime):
+                    if time_1h_ago - timedelta(minutes=30) <= window_start <= time_1h_ago + timedelta(minutes=30):
+                        older_window = window
+                        break
             
             S_1h_ago = None
             velocity = 0.0

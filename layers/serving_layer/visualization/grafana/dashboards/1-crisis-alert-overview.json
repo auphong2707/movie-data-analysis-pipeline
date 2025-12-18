@@ -192,7 +192,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🔴 Critical Alerts (σ < -4.0)",
+      "title": "🔴 Critical Alerts (σ < -70)",
       "type": "stat"
     },
     {
@@ -275,7 +275,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🟠 High Alerts (-4.0 ≤ σ < -3.0)",
+      "title": "🟠 High Alerts (-70 ≤ σ < -30)",
       "type": "stat"
     },
     {
@@ -358,7 +358,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🟡 Warning Alerts (-3.0 ≤ σ < -2.0)",
+      "title": "🟡 Warning Alerts (-30 ≤ σ < -25)",
       "type": "stat"
     },
     {
@@ -840,7 +840,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🎬 Movies in Crisis (Detailed Alert Table)",
+      "title": "🎬 Movies in Alert State (Warning or Worse)",
       "type": "table"
     }
   ],

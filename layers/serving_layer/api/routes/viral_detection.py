@@ -255,13 +255,6 @@ async def get_trending_movies(
             detail=f"Failed to retrieve trending movies: {str(e)}"
         )
 
-@router.get("/trending/genre/{genre}")
-async def get_trending_by_genre(
-    genre: str,
-    limit: int = Query(20, ge=1, le=100)
-):
-    """Get viral movies for specific genre"""
-    pass
 
 @router.get("/movies/{movie_id}/viral-score", response_model=ViralScoreDetailResponse)
 async def get_viral_score(movie_id: int):
@@ -573,11 +566,6 @@ async def get_viral_thresholds(
             status_code=500,
             detail=f"Failed to retrieve thresholds: {str(e)}"
         )
-
-@router.get("/velocity/{movie_id}")
-async def get_engagement_velocity(movie_id: int):
-    """Get engagement velocity metrics for movie"""
-    pass
 
 @router.get("/opportunities", response_model=OpportunitiesResponse)
 async def get_marketing_opportunities(

@@ -589,13 +589,157 @@ async def get_reddit_buzz_recommendations(
         logger.error(f"Error in Reddit buzz recommendations: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/tmdb-quality")
+@router.get("/tmdb-quality", response_model=TMDBQualityResponse)
 async def get_tmdb_quality_recommendations(
-    genre: Optional[str] = Query(None),
-    limit: int = Query(20, ge=1, le=100)
-):
-    """Get top TMDB quality movies (TMDB component only)"""
-    pass
+    genre: Optional[str] = Query(None, description="Filter by genre"),
+    min_vote_count: int = Query(100, ge=1, description="Minimum vote count threshold"),
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of recommendations"),
+    queries: MovieQueries = Depends(get_movie_queries)
+) -> TMDBQualityResponse:
+    """
+    Get TMDB quality rankings based on Bayesian average, popularity, and freshness.
+    
+    **TMDB Quality Score Formula:**
+    ```
+    tmdb_quality_score = weighted_rating * (0.7 + 0.3 * popularity_factor) * freshness_bonus
+    
+    Where:
+    - weighted_rating (Bayesian average): WR = (v/(v+m))*R + (m/(v+m))*C
+      - v = vote_count for the movie
+      - m = minimum votes threshold (100)
+      - R = vote_average for the movie
+      - C = mean vote_average across all movies
+    
+    - popularity_factor: P = log10(vote_count + 1) / 6
+      - Normalized to [0, 1]
+      - Assumption: max vote_count ≈ 1M (log10(1M) ≈ 6)
+    
+    - freshness_bonus:
+      - 1.1 if released in last 6 months
+      - 1.05 if released in last 1 year
+      - 1.0 otherwise
+    ```
+    
+    Args:
+        genre: Optional genre filter
+        min_vote_count: Minimum vote count threshold (default 100)
+        limit: Maximum results (default 10, max 100)
+        
+    Returns:
+        TMDBQualityResponse with ranked movies
+    """
+    try:
+        logger.info(f"TMDB quality request: genre={genre}, min_vote_count={min_vote_count}, limit={limit}")
+        
+        # Get mean vote average across dataset (C parameter for Bayesian average)
+        C = queries.get_mean_vote_average()
+        m = min_vote_count
+        
+        logger.info(f"Bayesian parameters: C={C:.2f}, m={m}")
+        
+        # Get candidate movies
+        movies = queries.get_tmdb_quality_data(min_vote_count=m, genre=genre)
+        
+        if not movies:
+            logger.warning(f"No movies found with min_vote_count >= {m}")
+            return TMDBQualityResponse(
+                recommendations=[],
+                total_count=0,
+                filters_applied={
+                    "genre": genre,
+                    "min_vote_count": m,
+                    "limit": limit
+                }
+            )
+        
+        logger.info(f"Found {len(movies)} candidate movies")
+        
+        # Calculate TMDB quality scores
+        rankings = []
+        now = datetime.utcnow()
+        
+        for movie in movies:
+            v = movie.get('vote_count', 0)
+            R = movie.get('vote_average', 0)
+            
+            if v == 0:
+                continue
+            
+            # Weighted rating (Bayesian average)
+            WR = (v / (v + m)) * R + (m / (v + m)) * C
+            
+            # Popularity factor (log scale, normalized to 0-1)
+            P = math.log10(v + 1) / 6.0
+            P = min(P, 1.0)  # Cap at 1.0
+            
+            # Freshness bonus
+            freshness_bonus = 1.0
+            release_date_str = movie.get('release_date')
+            if release_date_str:
+                try:
+                    if isinstance(release_date_str, str):
+                        release_date = datetime.strptime(release_date_str, '%Y-%m-%d')
+                    else:
+                        release_date = release_date_str
+                    
+                    months_since_release = (now - release_date).days / 30.0
+                    
+                    if months_since_release <= 6:
+                        freshness_bonus = 1.1
+                    elif months_since_release <= 12:
+                        freshness_bonus = 1.05
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Could not parse release_date for movie {movie.get('title')}: {e}")
+            
+            # Final TMDB quality score
+            tmdb_quality_score = WR * (0.7 + 0.3 * P) * freshness_bonus
+            
+            # Get genre (handle both flat and array)
+            genre_value = movie.get('genre')
+            if not genre_value and 'genres' in movie:
+                genres = movie.get('genres', [])
+                genre_value = genres[0] if genres else None
+            
+            rankings.append({
+                'movie_id': movie.get('movie_id', 0),
+                'movie_title': movie.get('title', 'Unknown'),
+                'genre': genre_value,
+                'tmdb_quality_score': round(tmdb_quality_score, 2),
+                'vote_average': R,
+                'vote_count': v,
+                'weighted_rating': round(WR, 2),
+                'popularity_factor': round(P, 3),
+                'release_date': release_date_str
+            })
+        
+        # Sort by TMDB quality score (descending)
+        sorted_rankings = sorted(rankings, key=lambda x: x['tmdb_quality_score'], reverse=True)
+        
+        # Apply limit and create response objects
+        from api.schemas.recommendations import TMDBQualityRecommendation
+        recommendations = []
+        for i, ranking in enumerate(sorted_rankings[:limit]):
+            recommendations.append(TMDBQualityRecommendation(
+                rank=i + 1,
+                **ranking
+            ))
+        
+        logger.info(f"Returning {len(recommendations)} TMDB quality recommendations")
+        
+        return TMDBQualityResponse(
+            recommendations=recommendations,
+            total_count=len(recommendations),
+            filters_applied={
+                "genre": genre,
+                "min_vote_count": m,
+                "limit": limit
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"Error in TMDB quality recommendations: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 @router.get("/personalized")
 async def get_personalized_recommendations():

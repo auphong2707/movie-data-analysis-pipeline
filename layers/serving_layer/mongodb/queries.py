@@ -602,3 +602,57 @@ class MovieQueries:
             results = [r for r in results if r['movie_title'] in genre_titles]
         
         return results
+    
+    def get_tmdb_quality_data(self, min_vote_count: int = 100, genre: Optional[str] = None) -> List[dict]:
+        """
+        Get movies from batch layer for TMDB quality ranking.
+        
+        Args:
+            min_vote_count: Minimum vote count threshold (default 100)
+            genre: Optional genre filter
+            
+        Returns:
+            List of movie documents with TMDB metrics
+        """
+        query = {'vote_count': {'$gte': min_vote_count}}
+        
+        if genre:
+            query['$or'] = [
+                {'genre': genre},
+                {'genres': genre}
+            ]
+        
+        projection = {
+            'movie_id': 1,
+            'title': 1,
+            'genre': 1,
+            'genres': 1,
+            'vote_average': 1,
+            'vote_count': 1,
+            'popularity': 1,
+            'release_date': 1,
+            '_id': 0
+        }
+        
+        return list(self.movie_intelligence.find(query, projection))
+    
+    def get_mean_vote_average(self) -> float:
+        """
+        Calculate mean vote_average across all movies in database.
+        Used for Bayesian average calculation.
+        
+        Returns:
+            Mean vote average (C parameter)
+        """
+        pipeline = [
+            {
+                '$group': {
+                    '_id': None,
+                    'avg': {'$avg': '$vote_average'}
+                }
+            }
+        ]
+        
+        result = list(self.movie_intelligence.aggregate(pipeline))
+        return result[0]['avg'] if result else 7.0  # Default to 7.0 if no data
+

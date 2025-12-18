@@ -700,6 +700,122 @@ class TestRedditBuzzEndpoint:
             pytest.skip("API is not running")
 
 
+class TestTMDBQualityEndpoint:
+    """Tests for TMDB Quality Recommendations Endpoint"""
+    
+    def test_tmdb_quality_endpoint_returns_200(self):
+        """Test basic TMDB quality endpoint"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?limit=10")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "recommendations" in data
+        assert "total_count" in data
+        assert "filters_applied" in data
+        
+        if data["total_count"] > 0:
+            print(f"\n✓ TMDB quality recommendations retrieved successfully")
+            print(f"  Total recommendations: {data['total_count']}")
+            
+            first = data["recommendations"][0]
+            print(f"  First recommendation: {first['movie_title']}")
+            print(f"    TMDB Quality Score: {first['tmdb_quality_score']}")
+            print(f"    Weighted Rating: {first['weighted_rating']}")
+            print(f"    Popularity Factor: {first['popularity_factor']}")
+            print(f"    Vote Average: {first['vote_average']}")
+            print(f"    Vote Count: {first['vote_count']}")
+    
+    def test_tmdb_quality_with_genre_filter(self):
+        """Test TMDB quality with genre filter"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?genre=Drama&limit=10")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["filters_applied"]["genre"] == "Drama"
+        
+        if data["total_count"] > 0:
+            # Verify all are Drama genre
+            for rec in data["recommendations"]:
+                if rec["genre"]:  # Only check if genre is not None
+                    assert rec["genre"] == "Drama", f"Expected Drama, got {rec['genre']}"
+            
+            print(f"\n✓ Genre filter working: {data['total_count']} Drama TMDB quality recommendations")
+    
+    def test_tmdb_quality_with_min_vote_count(self):
+        """Test TMDB quality with custom min_vote_count"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?min_vote_count=500&limit=10")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["filters_applied"]["min_vote_count"] == 500
+        
+        if data["total_count"] > 0:
+            # Verify all have vote_count >= 500
+            for rec in data["recommendations"]:
+                assert rec["vote_count"] >= 500, f"Expected vote_count >= 500, got {rec['vote_count']}"
+            
+            print(f"\n✓ Min vote count filter working: {data['total_count']} recommendations with vote_count >= 500")
+    
+    def test_tmdb_quality_sorted_by_score(self):
+        """Test that results are sorted by TMDB quality score descending"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?limit=20")
+        assert response.status_code == 200
+        
+        data = response.json()
+        
+        if data["total_count"] >= 2:
+            scores = [rec["tmdb_quality_score"] for rec in data["recommendations"]]
+            
+            # Check descending order
+            for i in range(len(scores) - 1):
+                assert scores[i] >= scores[i+1], f"Scores not in descending order: {scores[i]} < {scores[i+1]}"
+            
+            print(f"\n✓ Sorting verified: scores range from {scores[0]} to {scores[-1]}")
+    
+    def test_tmdb_quality_with_limit(self):
+        """Test limit parameter"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?limit=5")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert len(data["recommendations"]) <= 5
+        
+        print(f"\n✓ Limit working: requested 5, got {len(data['recommendations'])}")
+    
+    def test_tmdb_quality_formula_validation(self):
+        """Test that TMDB quality formula components are correct"""
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?limit=5")
+        assert response.status_code == 200
+        
+        data = response.json()
+        
+        if data["total_count"] > 0:
+            rec = data["recommendations"][0]
+            
+            # Verify weighted_rating is between 0-10
+            assert 0 <= rec["weighted_rating"] <= 10, f"Weighted rating out of range: {rec['weighted_rating']}"
+            
+            # Verify popularity_factor is between 0-1
+            assert 0 <= rec["popularity_factor"] <= 1, f"Popularity factor out of range: {rec['popularity_factor']}"
+            
+            # Verify tmdb_quality_score is positive
+            assert rec["tmdb_quality_score"] > 0, "TMDB quality score should be positive"
+            
+            print(f"\n✓ Formula validation passed for {rec['movie_title']}")
+            print(f"  Weighted Rating: {rec['weighted_rating']} (should be 0-10)")
+            print(f"  Popularity Factor: {rec['popularity_factor']} (should be 0-1)")
+            print(f"  TMDB Quality Score: {rec['tmdb_quality_score']}")
+    
+    def test_tmdb_quality_invalid_min_vote_count(self):
+        """Test invalid min_vote_count values are rejected"""
+        # Test negative value
+        response = requests.get(f"{API_BASE_URL}/api/v1/recommendations/tmdb-quality?min_vote_count=-1")
+        assert response.status_code == 422
+        
+        print("\n✓ Correctly rejects invalid min_vote_count values")
+
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Recommendation API Integration Tests")
@@ -708,4 +824,5 @@ if __name__ == "__main__":
     print("="*60 + "\n")
     
     pytest.main([__file__, "-v", "-s"])
+
 

@@ -188,22 +188,26 @@ class TMDBQualityRecommendation(BaseModel):
     movie_id: int = Field(..., description="TMDB movie ID")
     movie_title: str = Field(..., description="Movie title")
     genre: Optional[str] = Field(None, description="Primary genre")
-    tmdb_score: float = Field(..., description="TMDB quality score", ge=0, le=100)
+    tmdb_quality_score: float = Field(..., description="TMDB quality score (Bayesian average * popularity * freshness)", ge=0)
     vote_average: float = Field(..., description="TMDB vote average", ge=0, le=10)
     vote_count: int = Field(..., description="TMDB vote count", ge=0)
-    popularity: float = Field(..., description="TMDB popularity score", ge=0)
+    weighted_rating: float = Field(..., description="Bayesian average rating", ge=0, le=10)
+    popularity_factor: float = Field(..., description="Popularity factor (0-1)", ge=0, le=1)
+    release_date: Optional[str] = Field(None, description="Release date (YYYY-MM-DD)")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "rank": 1,
-                "movie_id": 12345,
+                "movie_id": 278,
                 "movie_title": "The Shawshank Redemption",
                 "genre": "Drama",
-                "tmdb_score": 98.5,
-                "vote_average": 9.3,
-                "vote_count": 38000,
-                "popularity": 95.2
+                "tmdb_quality_score": 9.87,
+                "vote_average": 8.7,
+                "vote_count": 26000,
+                "weighted_rating": 8.65,
+                "popularity_factor": 0.71,
+                "release_date": "1994-09-23"
             }
         }
 

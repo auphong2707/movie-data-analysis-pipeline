@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Histogram, Gauge
 import logging
 import sys
 
@@ -47,6 +47,25 @@ dual_success_score = Histogram(
     'dual_success_score',
     'Distribution of dual-success recommendation scores',
     buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
+
+# Sentiment monitoring metrics (Goal #1: Crisis Detection)
+sentiment_score = Gauge(
+    'sentiment_score',
+    'Current sentiment score for movies from Reddit (speed layer)',
+    ['movie_id', 'movie_title', 'genre', 'source']
+)
+
+sentiment_baseline = Gauge(
+    'sentiment_baseline',
+    'Historical baseline sentiment from TMDB (batch layer)',
+    ['movie_id', 'movie_title', 'genre', 'source']
+)
+
+movies_in_crisis = Gauge(
+    'movies_in_crisis',
+    'Number of movies currently in crisis state',
+    ['severity']
 )
 
 # Import routes

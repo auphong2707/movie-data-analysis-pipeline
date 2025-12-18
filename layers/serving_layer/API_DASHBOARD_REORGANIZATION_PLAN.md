@@ -202,20 +202,17 @@ Crisis Threshold:
 **Query Logic:**
 ```python
 # Step 1: Get all movies with recent discussions (speed layer)
-speed_movies = cassandra_session.execute(
-    """
-    SELECT movie_title, combined_sentiment, window_start
-    FROM speed_views
-    WHERE window_start >= ?
-    """,
-    [datetime.utcnow() - timedelta(hours=48)]
-)
+# Note: speed_views is a MongoDB collection, not Cassandra
+cutoff_time = datetime.utcnow() - timedelta(hours=48)
+speed_movies = db.speed_views.find({
+    "window_start": {"$gte": cutoff_time}
+})
 
 # Step 2: Match with batch layer and calculate deviation
 alerts = []
 for speed_movie in speed_movies:
     # Normalize title for batch layer matching
-    normalized_title = normalize_movie_title(speed_movie.movie_title)
+    normalized_title = normalize_movie_title(speed_movie['movie_title'])
     
     # Find matching movie in batch layer
     batch_movie = movie_intelligence.find_one({
@@ -225,7 +222,7 @@ for speed_movie in speed_movies:
     if not batch_movie:
         continue
     
-    S_current = speed_movie.combined_sentiment  # -1.0 to 1.0
+    S_current = speed_movie['metrics']['avg_sentiment']  # -1.0 to 1.0
     
     # Get baseline using priority fallback
     baseline = get_sentiment_baseline(batch_movie)  # franchise → genre → year
@@ -249,8 +246,8 @@ for speed_movie in speed_movies:
             "baseline_type": baseline_type,
             "deviation_sigma": round(σ, 2),
             "severity": get_severity(σ),
-            "alert_timestamp": speed_movie.window_start,
-            "data_age_hours": (datetime.utcnow() - speed_movie.window_start).total_seconds() / 3600
+            "alert_timestamp": speed_movie['window_start'],
+            "data_age_hours": (datetime.utcnow() - speed_movie['window_start']).total_seconds() / 3600
         })
 
 # Step 3: Sort by severity (most negative σ first)
@@ -287,17 +284,17 @@ GROUP BY genre
 ```json
 {
   "genre": "Action",
-  "baseline_sentiment": 7.2,
-  "stddev_sentiment": 1.3,
+  "baseline_sentiment": 0.12,
+  "stddev_sentiment": 0.045,
   "sample_size": 1543,
   "percentiles": {
-    "min": 3.5,
-    "q1": 6.4,
-    "median": 7.3,
-    "q3": 8.1,
-    "max": 9.8
+    "min": -0.35,
+    "q1": 0.04,
+    "median": 0.13,
+    "q3": 0.21,
+    "max": 0.58
   },
-  "crisis_threshold": 3.3,  // baseline - 3*stddev
+  "crisis_threshold": -0.015,
   "data_range": {
     "start_date": "2020-01-01",
     "end_date": "2025-12-18"
@@ -546,6 +543,15 @@ return sorted(movies, key=lambda x: x["viral_coefficient"], reverse=True)
 
 **Purpose:** Get detailed viral metrics for specific movie
 
+**Implementation Note - Trending Trajectory:**
+The `trending_trajectory` field requires historical rank tracking. Since rank data is not stored in MongoDB, it must be calculated on-demand:
+1. Calculate current viral coefficients for all movies → rank them → find current rank
+2. Query 24h old data from `speed_views` → calculate 24h ago viral coefficients → rank them → find 24h ago rank
+3. Compare ranks to get `rank_change`
+4. Compare current velocity to 24h ago velocity to determine `velocity_trend` (accelerating/decelerating/stable)
+
+**Alternative Implementation:** Cache daily rankings in Redis with TTL=7 days for faster lookups.
+
 **Response Schema:**
 ```json
 {
@@ -561,7 +567,7 @@ return sorted(movies, key=lambda x: x["viral_coefficient"], reverse=True)
   },
   "threshold_context": {
     "genre": "Action",
-    "budget_tier": "high",
+    "budget_tier": "blockbuster",
     "season": "summer",
     "threshold_value": 93.8
   },
@@ -697,14 +703,38 @@ Estimated Reach:
 opportunities = []
 for movie in get_trending_movies(min_viral_coefficient=1.5):
     # Calculate factors
-    age_hours = (now - movie.first_discussion_time).hours
+    # Get earliest discussion time from speed_views
+    earliest_window = db.speed_views.find_one(
+        {"movie_title": movie.title},
+        sort=[("window_start", 1)]
+    )
+    age_hours = (now - earliest_window['window_start']).total_seconds() / 3600 if earliest_window else 48
     recency_factor = exp(-age_hours / 24)
     
-    velocity_now = movie.velocity
-    velocity_24h_ago = movie.velocity_history[-24h]
+    # Get current velocity (most recent window)
+    current_window = db.speed_views.find_one(
+        {"movie_title": movie.title},
+        sort=[("window_start", -1)]
+    )
+    velocity_now = current_window['metrics']['viral_score'] if current_window else 0
+    
+    # Get velocity from 24h ago
+    time_24h_ago = now - timedelta(hours=24)
+    past_window = db.speed_views.find_one(
+        {
+            "movie_title": movie.title,
+            "window_start": {"$gte": time_24h_ago - timedelta(hours=1), "$lt": time_24h_ago + timedelta(hours=1)}
+        }
+    )
+    velocity_24h_ago = past_window['metrics']['viral_score'] if past_window else velocity_now
     momentum_factor = velocity_now / velocity_24h_ago if velocity_24h_ago > 0 else 1.0
     
-    total_impressions = sum(movie.discussions.impressions)
+    # Calculate impressions proxy from available metrics
+    total_impressions = (
+        movie.speed_metrics['total_upvotes'] + 
+        movie.speed_metrics['total_comments'] * 5 + 
+        movie.speed_metrics['total_awards'] * 10
+    )
     reach_factor = log10(total_impressions) / log10(1000)
     
     # Calculate opportunity score

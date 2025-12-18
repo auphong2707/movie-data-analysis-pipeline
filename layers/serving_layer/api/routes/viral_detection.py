@@ -14,7 +14,8 @@ from api.schemas.viral_detection import (
     ViralMetrics,
     RedditEngagement,
     MovieIntelligence,
-    ThresholdContext
+    ThresholdContext,
+    ViralScoreDetailResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -255,10 +256,186 @@ async def get_trending_by_genre(
     """Get viral movies for specific genre"""
     pass
 
-@router.get("/movies/{movie_id}/viral-score")
+@router.get("/movies/{movie_id}/viral-score", response_model=ViralScoreDetailResponse)
 async def get_viral_score(movie_id: int):
-    """Get viral coefficient for specific movie"""
-    pass
+    """
+    Get detailed viral metrics for specific movie
+    
+    Implements Goal #2: Viral Detection formula for individual movie:
+    - Aggregates viral scores from ALL speed_views data (48h TTL)
+    - Calculates viral coefficient: V = viral_score / avg_popularity
+    - Provides detailed breakdown of engagement metrics
+    - Shows time range and window count
+    
+    Returns 404 if:
+    - Movie not found in batch layer
+    - No recent discussion data in speed layer
+    """
+    try:
+        # Get MongoDB connection
+        client = get_mongodb_client()
+        db = client.get_database("moviedb")
+        
+        # Get batch layer movie data
+        batch_movie = db.movie_intelligence.find_one({"movie_id": movie_id})
+        if not batch_movie:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Movie with ID {movie_id} not found"
+            )
+        
+        movie_title = batch_movie.get("title", "")
+        normalized_title = normalize_movie_title(movie_title)
+        
+        # Aggregate viral scores from ALL speed_views data (48h TTL)
+        # Note: speed_views has 48h TTL, so all data is recent by definition
+        pipeline = [
+            # Match by normalized title (we need to find matching speed_views)
+            # Since speed_views uses movie_title, we'll match after normalization
+            {
+                "$group": {
+                    "_id": "$movie_title",
+                    "movie_title": {"$first": "$movie_title"},
+                    "total_viral_score": {"$sum": "$metrics.viral_score"},
+                    "total_upvotes": {"$sum": "$metrics.total_upvotes"},
+                    "total_comments": {"$sum": "$metrics.total_comments"},
+                    "total_awards": {"$sum": "$metrics.total_awards"},
+                    "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
+                    "max_upvote_velocity": {"$max": "$metrics.upvote_velocity"},
+                    "max_comment_velocity": {"$max": "$metrics.comment_velocity"},
+                    "max_award_velocity": {"$max": "$metrics.award_velocity"},
+                    "first_window": {"$min": "$window_start"},
+                    "last_window": {"$max": "$window_start"},
+                    "window_count": {"$sum": 1}
+                }
+            }
+        ]
+        
+        speed_data = list(db.speed_views.aggregate(pipeline))
+        
+        # Find matching speed data by normalized title
+        speed_result = None
+        for row in speed_data:
+            if normalize_movie_title(row['movie_title']) == normalized_title:
+                speed_result = row
+                break
+        
+        if not speed_result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No recent discussion data found for movie ID {movie_id}"
+            )
+        
+        # Get threshold (same logic as trending endpoint)
+        genre = batch_movie.get("genre", "")
+        threshold_doc = db.viral_thresholds.find_one({
+            "genre": genre,
+            "budget_tier": None,
+            "season": None
+        })
+        
+        threshold_dimension = "genre"
+        if not threshold_doc:
+            # Fallback to global threshold
+            threshold_doc = db.viral_thresholds.find_one({
+                "genre": None,
+                "budget_tier": None,
+                "season": None
+            })
+            threshold_dimension = "global"
+        
+        if not threshold_doc:
+            raise HTTPException(
+                status_code=500,
+                detail="No viral thresholds configured"
+            )
+        
+        # Use avg_popularity as threshold (current TMDB buzz)
+        threshold = threshold_doc.get("avg_popularity")
+        if not threshold or threshold == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid threshold configuration"
+            )
+        
+        # Calculate viral coefficient using summed total_viral_score
+        viral_score = speed_result['total_viral_score']
+        V = viral_score / threshold
+        
+        # Determine viral status
+        if V >= 0.3:
+            viral_status = "viral"
+        elif V >= 0.15:
+            viral_status = "trending"
+        elif V >= 0.05:
+            viral_status = "growing"
+        else:
+            viral_status = "stable"
+        
+        # Calculate time range
+        first_window = speed_result['first_window']
+        last_window = speed_result['last_window']
+        time_range_hours = int((last_window - first_window).total_seconds() / 3600) if first_window and last_window else 48
+        
+        # Build response
+        return ViralScoreDetailResponse(
+            # Movie identification
+            movie_id=movie_id,
+            movie_title=movie_title,
+            
+            # Viral metrics
+            viral_metrics=ViralMetrics(
+                viral_coefficient=V,
+                viral_score=viral_score,
+                viral_status=viral_status,
+                upvote_velocity=speed_result.get('max_upvote_velocity') or 0.0,
+                comment_velocity=speed_result.get('max_comment_velocity') or 0.0,
+                award_velocity=speed_result.get('max_award_velocity') or 0.0
+            ),
+            
+            # Reddit engagement breakdown
+            reddit_engagement=RedditEngagement(
+                total_upvotes=speed_result.get('total_upvotes', 0),
+                total_comments=speed_result.get('total_comments', 0),
+                total_awards=speed_result.get('total_awards', 0),
+                avg_sentiment=speed_result.get('avg_sentiment') or 0.0
+            ),
+            
+            # Time series data
+            window_count=speed_result['window_count'],
+            time_range_hours=time_range_hours,
+            
+            # Movie intelligence
+            movie_intelligence=MovieIntelligence(
+                genre=genre,
+                budget_tier=batch_movie.get("budget_tier"),
+                vote_average=batch_movie.get("vote_average"),
+                vote_count=batch_movie.get("vote_count"),
+                popularity=batch_movie.get("popularity"),
+                release_year=batch_movie.get("release_year"),
+                franchise=batch_movie.get("franchise")
+            ),
+            
+            # Threshold context
+            threshold_context=ThresholdContext(
+                threshold_used=threshold,
+                threshold_type="avg_popularity",
+                threshold_dimension=threshold_dimension
+            ),
+            
+            # Timestamps
+            first_window_start=first_window,
+            last_window_start=last_window
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_viral_score: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve viral score: {str(e)}"
+        )
 
 @router.get("/thresholds")
 async def get_viral_thresholds(

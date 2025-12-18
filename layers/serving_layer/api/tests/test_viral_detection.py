@@ -430,6 +430,255 @@ class TestTrendingPerformance:
             pytest.skip("API is not running")
 
 
+class TestViralScoreEndpoint:
+    """Test GET /viral-detection/movies/{id}/viral-score"""
+    
+    def test_viral_score_valid_movie(self):
+        """Test viral score endpoint with a movie that has Reddit activity"""
+        try:
+            # First get a movie ID from trending
+            trending_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/trending?limit=1",
+                timeout=10
+            )
+            
+            if trending_response.status_code != 200 or not trending_response.json().get("movies"):
+                pytest.skip("No trending movies available for testing")
+            
+            movie_id = trending_response.json()["movies"][0]["movie_id"]
+            
+            # Test the viral score endpoint
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/movies/{movie_id}/viral-score",
+                timeout=10
+            )
+            
+            assert response.status_code == 200, \
+                f"Expected 200, got {response.status_code}"
+            
+            data = response.json()
+            print(f"\n✓ Successfully retrieved viral score for movie {movie_id}")
+            
+            # Verify response structure
+            self._verify_viral_score_structure(data)
+            
+            print(f"  Movie: {data['movie_title']}")
+            print(f"  Viral Coefficient: {data['viral_metrics']['viral_coefficient']:.4f}")
+            print(f"  Status: {data['viral_metrics']['viral_status']}")
+            print(f"  Windows: {data['window_count']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_viral_score_movie_not_found(self):
+        """Test viral score endpoint with non-existent movie ID"""
+        try:
+            # Use a very unlikely movie ID
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/movies/99999999/viral-score",
+                timeout=10
+            )
+            
+            assert response.status_code == 404, \
+                f"Expected 404 for non-existent movie, got {response.status_code}"
+            
+            print(f"\n✓ Correctly returns 404 for non-existent movie")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_viral_score_no_reddit_activity(self):
+        """Test viral score endpoint with movie that has no Reddit activity"""
+        try:
+            # Get a movie from batch layer that might not have Reddit activity
+            # We'll use a movie with very low popularity
+            # This test might skip if all movies have some activity
+            
+            # Try a few different movie IDs
+            test_ids = [550, 238, 424, 680]  # Classic movies unlikely to have recent Reddit buzz
+            
+            found_inactive = False
+            for movie_id in test_ids:
+                response = requests.get(
+                    f"{API_BASE_URL}/api/v1/viral-detection/movies/{movie_id}/viral-score",
+                    timeout=10
+                )
+                
+                if response.status_code == 404:
+                    detail = response.json().get("detail", "")
+                    if "No recent discussion data" in detail:
+                        found_inactive = True
+                        print(f"\n✓ Correctly returns 404 for movie without recent Reddit activity")
+                        break
+            
+            if not found_inactive:
+                pytest.skip("All test movies have Reddit activity")
+                
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_viral_score_metrics_consistency(self):
+        """Test that viral score metrics are consistent with trending endpoint"""
+        try:
+            # Get a movie from trending
+            trending_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/trending?limit=1",
+                timeout=10
+            )
+            
+            if trending_response.status_code != 200 or not trending_response.json().get("movies"):
+                pytest.skip("No trending movies available")
+            
+            trending_movie = trending_response.json()["movies"][0]
+            movie_id = trending_movie["movie_id"]
+            
+            # Get detailed viral score
+            score_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/movies/{movie_id}/viral-score",
+                timeout=10
+            )
+            
+            assert score_response.status_code == 200
+            score_data = score_response.json()
+            
+            # Compare key metrics (they should be identical or very close)
+            trending_coef = trending_movie["viral_metrics"]["viral_coefficient"]
+            score_coef = score_data["viral_metrics"]["viral_coefficient"]
+            
+            # Allow small floating point differences
+            assert abs(trending_coef - score_coef) < 0.001, \
+                f"Viral coefficient mismatch: trending={trending_coef}, score={score_coef}"
+            
+            # Compare viral status
+            assert trending_movie["viral_metrics"]["viral_status"] == score_data["viral_metrics"]["viral_status"], \
+                "Viral status should match between endpoints"
+            
+            print(f"\n✓ Metrics consistent between trending and viral-score endpoints")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_viral_score_time_range(self):
+        """Test that time range is calculated correctly"""
+        try:
+            # Get a movie with viral score
+            trending_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/trending?limit=1",
+                timeout=10
+            )
+            
+            if trending_response.status_code != 200 or not trending_response.json().get("movies"):
+                pytest.skip("No trending movies available")
+            
+            movie_id = trending_response.json()["movies"][0]["movie_id"]
+            
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/movies/{movie_id}/viral-score",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Verify time range is within TTL (48 hours)
+            time_range = data["time_range_hours"]
+            assert 0 <= time_range <= 48, \
+                f"Time range {time_range}h should be within 0-48h (TTL period)"
+            
+            # Verify window count is positive
+            assert data["window_count"] > 0, "Should have at least one window"
+            
+            # Verify timestamps are valid and in order
+            first_window = datetime.fromisoformat(data["first_window_start"].replace('Z', '+00:00'))
+            last_window = datetime.fromisoformat(data["last_window_start"].replace('Z', '+00:00'))
+            
+            assert last_window >= first_window, \
+                "Last window should be after or equal to first window"
+            
+            print(f"\n✓ Time range validation passed")
+            print(f"  Time range: {time_range}h")
+            print(f"  Window count: {data['window_count']}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_viral_score_threshold_context(self):
+        """Test that threshold context is properly included"""
+        try:
+            # Get a movie with viral score
+            trending_response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/trending?limit=1",
+                timeout=10
+            )
+            
+            if trending_response.status_code != 200 or not trending_response.json().get("movies"):
+                pytest.skip("No trending movies available")
+            
+            movie_id = trending_response.json()["movies"][0]["movie_id"]
+            
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/viral-detection/movies/{movie_id}/viral-score",
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Verify threshold context
+            threshold_ctx = data["threshold_context"]
+            assert "threshold_used" in threshold_ctx
+            assert threshold_ctx["threshold_used"] > 0
+            assert threshold_ctx["threshold_type"] == "avg_popularity"
+            assert threshold_ctx["threshold_dimension"] in ["genre", "global"]
+            
+            print(f"\n✓ Threshold context validated")
+            print(f"  Dimension: {threshold_ctx['threshold_dimension']}")
+            print(f"  Threshold: {threshold_ctx['threshold_used']:.2f}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def _verify_viral_score_structure(self, data: dict):
+        """Helper to verify structure of viral score response"""
+        
+        # Movie identification
+        assert "movie_id" in data
+        assert isinstance(data["movie_id"], int)
+        assert "movie_title" in data
+        assert isinstance(data["movie_title"], str)
+        
+        # Viral metrics
+        assert "viral_metrics" in data
+        vm = data["viral_metrics"]
+        assert "viral_coefficient" in vm
+        assert isinstance(vm["viral_coefficient"], (int, float))
+        assert vm["viral_coefficient"] >= 0
+        assert "viral_score" in vm
+        assert "viral_status" in vm
+        assert vm["viral_status"] in ["viral", "trending", "growing", "stable"]
+        
+        # Reddit engagement
+        assert "reddit_engagement" in data
+        
+        # Time series data
+        assert "window_count" in data
+        assert isinstance(data["window_count"], int)
+        assert data["window_count"] > 0
+        assert "time_range_hours" in data
+        assert isinstance(data["time_range_hours"], int)
+        
+        # Movie intelligence
+        assert "movie_intelligence" in data
+        
+        # Threshold context
+        assert "threshold_context" in data
+        
+        # Timestamps
+        assert "first_window_start" in data
+        assert "last_window_start" in data
+
+
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main([__file__, "-v", "-s"])
+

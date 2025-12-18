@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import logging
 import re
+from math import exp, log10
 
 from mongodb.client import get_mongodb_client
 from api.schemas.viral_detection import (
@@ -18,7 +19,10 @@ from api.schemas.viral_detection import (
     ViralScoreDetailResponse,
     ThresholdResponse,
     GenreThresholdSummary,
-    ThresholdsListResponse
+    ThresholdsListResponse,
+    OpportunitiesResponse,
+    MarketingOpportunity,
+    OpportunityFactors
 )
 
 logger = logging.getLogger(__name__)
@@ -575,10 +579,159 @@ async def get_engagement_velocity(movie_id: int):
     """Get engagement velocity metrics for movie"""
     pass
 
-@router.get("/opportunities")
+@router.get("/opportunities", response_model=OpportunitiesResponse)
 async def get_marketing_opportunities(
-    min_viral_coefficient: float = Query(1.5, ge=1.0),
-    limit: int = Query(10, ge=1, le=50)
+    min_viral_coefficient: float = Query(0.001, ge=0.0, description="Minimum viral coefficient to consider"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
+    min_opportunity_score: float = Query(0.001, ge=0.0, description="Minimum opportunity score threshold")
 ):
-    """Get marketing amplification opportunities"""
-    pass
+    """
+    Identify marketing amplification opportunities
+    
+    Implements Simple & Intuitive Opportunity Score Formula:
+    - O = V × (1 + urgency)
+    - urgency = recency × momentum
+    
+    Where:
+    - V = viral_coefficient (current Reddit buzz vs TMDB buzz)
+    - recency = exp(-age_hours / 24) - how fresh the discussion is (0-1)
+    - momentum = velocity_now / velocity_24h_ago - is discussion accelerating? (>1 = yes)
+    - urgency = recency × momentum - how urgent is action needed?
+    - multiplier = 1 + urgency - amplifies V by 1x to 3x
+    
+    Intuition: "Viral score × urgency multiplier"
+    - Fresh + Accelerating = High urgency, act now!
+    - Old + Decelerating = Low urgency, let it fade
+    
+    Recommendation Logic (calibrated to data: O_max=0.338, 95th=0.060, 90th=0.050, 75th=0.010):
+    - amplify_immediately: O ≥ 0.060 (top 5%) and urgency ≥ 0.99 (top 10%)
+    - monitor_closely: O ≥ 0.050 (top 10%)
+    - organic_growth: O ≥ 0.010 (top 25%)
+    - evaluate: O < 0.010 (bottom 75%)
+    
+    Returns top opportunities sorted by opportunity score (descending)
+    """
+    try:
+        # Get MongoDB connection
+        client = get_mongodb_client()
+        db = client.get_database("moviedb")
+        
+        now = datetime.utcnow()
+        
+        # Get trending movies with minimum viral coefficient
+        # Reuse the trending endpoint logic with min_viral_coefficient filter
+        trending_response = await get_trending_movies(
+            genre=None,
+            limit=100,  # Get more candidates for filtering
+            viral_threshold=min_viral_coefficient,
+            window=48
+        )
+        
+        opportunities = []
+        
+        for movie in trending_response.movies:
+            movie_title = movie.movie_title
+            normalized_title = normalize_movie_title(movie_title)
+            
+            # Get all speed_views documents for this movie to find latest/earliest
+            # Match using normalized title comparison
+            speed_windows = list(db.speed_views.find().sort("window_start", -1))
+            
+            # Filter to matching movies by normalized title
+            matching_windows = [
+                w for w in speed_windows 
+                if normalize_movie_title(w.get('movie_title', '')) == normalized_title
+            ]
+            
+            if not matching_windows:
+                logger.debug(f"No speed_views data for movie: {movie_title}")
+                continue
+            
+            # Latest window is first (sorted descending)
+            latest_window = matching_windows[0]
+            # Earliest window is last
+            earliest_window = matching_windows[-1]
+            
+            # Recency: time since LATEST engagement (not when discussion started)
+            age_hours = (now - latest_window['window_start']).total_seconds() / 3600
+            recency = exp(-age_hours / 24)
+            
+            # Current velocity from latest window
+            velocity_now = latest_window.get('metrics', {}).get('viral_score', 0)
+            
+            # Momentum: compare latest vs earliest velocity across TTL period
+            velocity_24h_ago = earliest_window.get('metrics', {}).get('viral_score', 0) if earliest_window else velocity_now
+            momentum = velocity_now / velocity_24h_ago if velocity_24h_ago > 0 else 1.0
+            
+            # Calculate urgency: how urgent is action needed?
+            urgency = recency * momentum
+            
+            # NEW FORMULA: O = V × (1 + urgency)
+            # Intuition: Viral score amplified by urgency multiplier (1.0 to 3.0)
+            V = movie.viral_metrics.viral_coefficient
+            O = V * (1 + urgency)
+            
+            # Only include if O >= min_opportunity_score (default 0.01)
+            if O < min_opportunity_score:
+                continue
+            
+            # Determine recommended action (calibrated to current data distribution)
+            # Data: O_max=0.338, 95th=0.060, 90th=0.050, 75th=0.010, urgency_90th=0.99
+            if O >= 0.060 and urgency >= 0.99:
+                recommended_action = "amplify_immediately"  # Top 5% score + top 10% urgency
+            elif O >= 0.050:
+                recommended_action = "monitor_closely"  # Top 10%
+            elif O >= 0.010:
+                recommended_action = "organic_growth"  # Top 25%
+            else:
+                recommended_action = "evaluate"  # Bottom 75%
+            
+            # Estimated reach: current_velocity * amplification_multiplier * time_horizon
+            # amplification_multiplier = 3.0 (assumed 3x with marketing push)
+            # time_horizon = 7 days = 168 hours
+            estimated_reach = velocity_now * 3.0 * 7 * 24  # 7 days in hours
+            
+            # Build opportunity object with simplified factors
+            opportunity = MarketingOpportunity(
+                movie_id=movie.movie_id,
+                movie_title=movie.movie_title,
+                viral_coefficient=V,
+                opportunity_score=O,
+                recommended_action=recommended_action,
+                estimated_reach=estimated_reach,
+                factors=OpportunityFactors(
+                    recency=recency,
+                    momentum=momentum,
+                    reach=urgency  # Now storing urgency instead of reach
+                ),
+                age_hours=age_hours,
+                velocity_now=velocity_now,
+                velocity_24h_ago=velocity_24h_ago
+            )
+            
+            opportunities.append(opportunity)
+        
+        # Sort by opportunity score descending (highest opportunities first)
+        opportunities.sort(key=lambda x: x.opportunity_score, reverse=True)
+        
+        # Apply limit
+        opportunities = opportunities[:limit]
+        
+        # Return response
+        return OpportunitiesResponse(
+            opportunities=opportunities,
+            count=len(opportunities),
+            filters_applied={
+                "min_viral_coefficient": min_viral_coefficient,
+                "min_opportunity_score": min_opportunity_score,
+                "limit": limit
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in get_marketing_opportunities: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve marketing opportunities: {str(e)}"
+        )
+

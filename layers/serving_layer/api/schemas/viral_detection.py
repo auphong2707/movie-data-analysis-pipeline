@@ -126,3 +126,31 @@ class ThresholdsListResponse(BaseModel):
     count: int = Field(..., description="Number of thresholds returned")
     note: str = Field(default="avg_popularity is used as denominator in viral coefficient calculation")
 
+
+class OpportunityFactors(BaseModel):
+    """Breakdown of opportunity score factors"""
+    recency: float = Field(..., description="Recency factor: exp(-age_hours / 24) - how fresh is the discussion (0-1)")
+    momentum: float = Field(..., description="Momentum factor: velocity_now / velocity_24h_ago - is discussion accelerating? (>1 = yes)")
+    reach: float = Field(..., description="Urgency: recency × momentum - how urgent is action needed? (stored in reach field for compatibility)")
+
+
+class MarketingOpportunity(BaseModel):
+    """Marketing opportunity for a single movie"""
+    movie_id: int = Field(..., description="Unique movie ID")
+    movie_title: str = Field(..., description="Movie title")
+    viral_coefficient: float = Field(..., description="Viral coefficient (V)")
+    opportunity_score: float = Field(..., description="Opportunity score (O)")
+    recommended_action: str = Field(..., description="Recommended action: amplify_immediately, monitor_closely, organic_growth, or no_action")
+    estimated_reach: float = Field(..., description="Estimated reach with marketing amplification (7-day projection)")
+    factors: OpportunityFactors = Field(..., description="Breakdown of opportunity factors")
+    age_hours: float = Field(..., description="Hours since latest engagement")
+    velocity_now: float = Field(..., description="Current viral score from latest window")
+    velocity_24h_ago: float = Field(..., description="Viral score from 24h ago (or earliest window)")
+
+
+class OpportunitiesResponse(BaseModel):
+    """Response for marketing opportunities list"""
+    opportunities: list[MarketingOpportunity]
+    count: int = Field(..., description="Number of opportunities returned")
+    filters_applied: dict = Field(..., description="Filters applied to the query")
+

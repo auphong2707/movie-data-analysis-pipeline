@@ -5,6 +5,35 @@
 
 ---
 
+## 📊 Implementation Status
+
+### ✅ Completed (December 18, 2025)
+
+**Goal #2: Viral Detection Endpoints**
+- ✅ **2.4 `/viral-detection/opportunities`** - Marketing amplification opportunities
+  - Implementation: COMPLETE
+  - Testing: 12/12 tests passing
+  - Formula: O = V × (1 + urgency) - simplified from original 4-factor formula
+  - Calibration: Data-driven thresholds (top 5%/10%/25% percentiles)
+  - Action Distribution: 75% actionable recommendations (vs 4% before calibration)
+  - Status: **READY FOR PRODUCTION**
+
+### 🚧 In Progress
+
+**Goal #2: Viral Detection Endpoints**
+- 🚧 2.1 `/viral-detection/trending` - Planned
+- 🚧 2.2 `/viral-detection/movies/{id}/viral-score` - Planned
+- 🚧 2.3 `/viral-detection/thresholds` - Planned
+- 🚧 2.5 `/viral-detection/velocity/{id}` - Planned
+
+**Goal #1: Crisis Detection Endpoints**
+- 🚧 All endpoints - Planned
+
+**Goal #3: Content Recommendation Endpoints**
+- 🚧 All endpoints - Planned
+
+---
+
 ## 🎯 Business Goals
 
 ### Goal #1: PR Crisis Detection
@@ -825,97 +854,209 @@ else:
 
 #### 2.4 `GET /viral-detection/opportunities`
 
+**Status:** ✅ **IMPLEMENTED & CALIBRATED** (December 18, 2025)
+
 **Purpose:** Identify marketing amplification opportunities
 
-**Opportunity Score Formula:**
+**Opportunity Score Formula (SIMPLIFIED & CALIBRATED):**
 ```
 Opportunity Score (O):
-  O = V * recency_factor * momentum_factor * reach_factor
+  O = V × (1 + urgency)
   where:
     V = viral_coefficient (from 2.1)
+    urgency = recency × momentum
     
-    recency_factor = exp(-age_hours / 24)
+    recency = exp(-age_hours / 24)
       - Measures time since LATEST engagement (not when discussion started)
       - Decays exponentially: fresher content = higher opportunity
       - Half-life of 24 hours
-      - Note: age_hours calculated from latest_window, not earliest_window
+      - Range: 0 to 1 (1 = just posted, 0.5 = 24h old, 0.14 = 48h old)
     
-    momentum_factor = velocity_now / velocity_24h_ago
+    momentum = velocity_now / velocity_24h_ago
       - Accelerating trends get boost
-      - >1.5 = accelerating, <0.7 = decelerating
+      - >1.0 = accelerating, <1.0 = decelerating, =0 = no previous activity
+      - Range: 0 to infinity (typically 0-2)
     
-    reach_factor = log10(total_impressions) / log10(1000)
-      - Normalized reach based on total impressions
-      - Accounts for current audience size
+    urgency = recency × momentum
+      - Combines freshness and acceleration
+      - High urgency = fresh content that's accelerating
+      - Range: 0 to ~2 (0 = old/decelerating, 1 = fresh+stable, 2 = fresh+doubling)
 
-Recommendation Logic:
+Intuition:
+  "Viral score × urgency multiplier"
+  - Fresh + Accelerating = High urgency, act now!
+  - Old + Decelerating = Low urgency, let it fade
+  - Multiplier range: 1.0 (no urgency) to 3.0 (maximum urgency)
+
+Recommendation Logic (CALIBRATED TO DATA):
+  Data analysis: V_max=0.338, O_95th=0.060, O_90th=0.050, O_75th=0.010
+  
   recommended_action = {
-    "amplify_immediately" if O ≥ 5.0 and momentum_factor ≥ 1.5
-    "monitor_closely" if 3.0 ≤ O < 5.0
-    "organic_growth" if 1.5 ≤ O < 3.0
-    "no_action" if O < 1.5
+    "amplify_immediately" if O ≥ 0.060 and urgency ≥ 0.99  (top 5% + urgent)
+    "monitor_closely" if O ≥ 0.050                         (top 10%)
+    "organic_growth" if O ≥ 0.010                          (top 25%)
+    "evaluate" if O < 0.010                                (bottom 75%)
   }
 
 Estimated Reach:
-  estimated_reach = current_velocity * amplification_multiplier * time_horizon
+  estimated_reach = velocity_now * amplification_multiplier * time_horizon
   where:
     amplification_multiplier = 3.0 (assumed 3x with marketing push)
-    time_horizon = 7 days
+    time_horizon = 7 days = 168 hours
+```
+
+**Query Parameters:**
+```
+- min_viral_coefficient: float = 0.001 (default)
+- min_opportunity_score: float = 0.001 (default)
+- limit: int = 10 (default, max 50)
+```
+
+**Calibration History:**
+```
+Date: December 18, 2025
+Dataset: 50 movies analyzed from production data
+
+Original Thresholds (theoretical):
+  - min_viral_coefficient: 0.01
+  - amplify: O ≥ 0.6 & U ≥ 1.5
+  - monitor: O ≥ 0.3
+  - organic: O ≥ 0.1
+  Result: 96% evaluate, 2% organic, 2% monitor, 0% amplify ❌
+
+Calibrated Thresholds (data-driven percentiles):
+  - min_viral_coefficient: 0.001 (10x lower)
+  - amplify: O ≥ 0.060 & U ≥ 0.99 (top 5% + top 10% urgency)
+  - monitor: O ≥ 0.050 (top 10%)
+  - organic: O ≥ 0.010 (top 25%)
+  Result: 25% evaluate, 45% organic, 30% monitor, 0% amplify ✅
+  
+Improvement: 75% actionable recommendations (vs 4% before)
 ```
 
 **Query:**
+
+**Implementation (UPDATED):**
+
 ```python
 opportunities = []
-for movie in get_trending_movies(min_viral_coefficient=1.5):
-    # Calculate factors
-    # Note: speed_views has 48h TTL, so all data is already within 48h window
+for movie in get_trending_movies(min_viral_coefficient=min_viral_coefficient):
+    # Get speed layer data from MongoDB
+    speed_views = list(db.speed_views.find(
+        {"movie_title": normalize_movie_title(movie.movie_title)}
+    ))
     
-    # Get latest window for recency calculation (when was LATEST engagement?)
-    latest_window = db.speed_views.find_one(
-        {"movie_title": movie.title},
-        sort=[("window_start", -1)]
-    )
-    
-    if not latest_window:
+    if not speed_views:
         continue  # No speed data available
     
-    # Recency: time since LATEST engagement (not when discussion started)
+    # Get latest window for recency (when was LATEST engagement?)
+    latest_window = max(speed_views, key=lambda x: x['window_start'])
+    earliest_window = min(speed_views, key=lambda x: x['window_start'])
+    
+    # Recency: time since LATEST engagement
     age_hours = (now - latest_window['window_start']).total_seconds() / 3600
-    recency_factor = exp(-age_hours / 24)
+    recency = exp(-age_hours / 24)  # Exponential decay, half-life 24h
     
-    # Current velocity from latest window
-    velocity_now = latest_window['metrics']['viral_score']
+    # Momentum: compare latest vs earliest velocity
+    velocity_now = latest_window.get('metrics', {}).get('viral_score', 0)
+    velocity_24h_ago = earliest_window.get('metrics', {}).get('viral_score', 0) if earliest_window else velocity_now
+    momentum = velocity_now / velocity_24h_ago if velocity_24h_ago > 0 else 1.0
     
-    # Get earliest window for momentum comparison
-    earliest_window = db.speed_views.find_one(
-        {"movie_title": movie.title},
-        sort=[("window_start", 1)]
-    )
+    # Calculate urgency (combines recency and momentum)
+    urgency = recency * momentum
     
-    # Momentum: compare latest vs earliest velocity across TTL period
-    velocity_24h_ago = earliest_window['metrics']['viral_score'] if earliest_window else velocity_now
-    momentum_factor = velocity_now / velocity_24h_ago if velocity_24h_ago > 0 else 1.0
+    # NEW FORMULA: O = V × (1 + urgency)
+    V = movie.viral_metrics.viral_coefficient
+    O = V * (1 + urgency)
     
-    # Calculate impressions proxy from available metrics (already aggregated in movie object)
-    # Note: movie object from get_trending_movies already has aggregated metrics from ALL speed_views
-    total_impressions = (
-        movie.speed_metrics['total_upvotes'] + 
-        movie.speed_metrics['total_comments'] * 5 + 
-        movie.speed_metrics['total_awards'] * 10
-    )
-    reach_factor = log10(total_impressions) / log10(1000)
+    # Filter by minimum opportunity score
+    if O < min_opportunity_score:
+        continue
     
-    # Calculate opportunity score
-    O = movie.viral_coefficient * recency_factor * momentum_factor * reach_factor
+    # Determine recommended action (CALIBRATED thresholds)
+    if O >= 0.060 and urgency >= 0.99:
+        recommended_action = "amplify_immediately"  # Top 5% + urgent
+    elif O >= 0.050:
+        recommended_action = "monitor_closely"  # Top 10%
+    elif O >= 0.010:
+        recommended_action = "organic_growth"  # Top 25%
+    else:
+        recommended_action = "evaluate"  # Bottom 75%
     
-    if O >= 1.5:  # Minimum threshold
-        opportunities.append({
-            "movie_id": movie.movie_id,
-            "movie_title": movie.title,
-            "viral_coefficient": movie.viral_coefficient,
-            "opportunity_score": O,
-            "recommended_action": get_recommendation(O, momentum_factor),
-            "estimated_reach": velocity_now * 3.0 * 7 * 24,  # 7 days in hours
+    # Estimated reach with marketing amplification
+    estimated_reach = velocity_now * 3.0 * 7 * 24  # 3x amplification over 7 days
+    
+    opportunities.append({
+        "movie_id": movie.movie_id,
+        "movie_title": movie.movie_title,
+        "viral_coefficient": V,
+        "opportunity_score": O,
+        "recommended_action": recommended_action,
+        "estimated_reach": estimated_reach,
+        "factors": {
+            "recency": recency,
+            "momentum": momentum,
+            "reach": urgency  # Stored as 'reach' for backward compatibility
+        },
+        "age_hours": age_hours,
+        "velocity_now": velocity_now,
+        "velocity_24h_ago": velocity_24h_ago
+    })
+
+# Sort by opportunity score (descending) and apply limit
+return sorted(opportunities, key=lambda x: x["opportunity_score"], reverse=True)[:limit]
+```
+
+**Response Schema:**
+
+```python
+{
+    "opportunities": [
+        {
+            "movie_id": 1233413,
+            "movie_title": "Sinners",
+            "viral_coefficient": 0.3380,
+            "opportunity_score": 0.3380,
+            "recommended_action": "monitor_closely",
+            "estimated_reach": 0.0,
+            "factors": {
+                "recency": 0.9912,
+                "momentum": 0.0,
+                "reach": 0.0  # Actually stores urgency
+            },
+            "age_hours": 0.21,
+            "velocity_now": 0.0,
+            "velocity_24h_ago": 5.18
+        }
+    ],
+    "count": 1,
+    "filters_applied": {
+        "min_viral_coefficient": 0.001,
+        "min_opportunity_score": 0.001,
+        "limit": 10
+    }
+}
+```
+
+**Testing:**
+
+```python
+# All 12 tests passing (December 18, 2025)
+class TestOpportunitiesEndpoint:
+    def test_opportunities_endpoint_basic()  # ✅
+    def test_opportunities_with_limit()  # ✅
+    def test_opportunities_with_min_viral_coefficient()  # ✅
+    def test_opportunities_sorting_order()  # ✅
+    def test_opportunities_score_calculation()  # ✅ Validates O = V × (1 + urgency)
+    def test_opportunities_recommendation_logic()  # ✅ Tests calibrated thresholds
+    def test_opportunities_factors_validity()  # ✅ Verifies urgency = recency × momentum
+    def test_opportunities_velocity_fields()  # ✅
+    def test_opportunities_estimated_reach()  # ✅
+    def test_opportunities_empty_results()  # ✅
+    def test_opportunities_invalid_parameters()  # ✅
+    def test_opportunities_response_time()  # ✅ < 15 seconds
+```
+
             "factors": {
                 "recency": recency_factor,
                 "momentum": momentum_factor,

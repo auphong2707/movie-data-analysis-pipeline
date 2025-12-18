@@ -75,8 +75,12 @@
 Current Sentiment (S_current):
   S_current = merge_sentiment(S_batch, S_speed)
   where:
-    - If movie was discussed in last 48h: S_current = S_speed (real-time Reddit sentiment)
+    - If movie was discussed in last 48h: S_current = S_speed (average Reddit sentiment across all windows in 48h)
     - Else: S_current = S_batch (historical sentiment from review analysis)
+  
+  S_speed calculation:
+    S_speed = AVG(metrics.avg_sentiment) across all speed_views windows in last 48h
+    Note: speed_views stores multiple time windows per movie, we average for overall sentiment
 
 Baseline Calculation:
   The API fetches ALL available baseline types and returns complete analysis:
@@ -201,12 +205,22 @@ Crisis Threshold:
 
 **Query Logic:**
 ```python
-# Step 1: Get all movies with recent discussions (speed layer)
-# Note: speed_views is a MongoDB collection, not Cassandra
+# Step 1: Aggregate sentiment across all windows for each movie (last 48h)
+# Note: speed_views stores multiple windows per movie, we average for overall sentiment
 cutoff_time = datetime.utcnow() - timedelta(hours=48)
-speed_movies = db.speed_views.find({
-    "window_start": {"$gte": cutoff_time}
-})
+speed_movies = db.speed_views.aggregate([
+    # Filter to recent windows
+    {"$match": {"window_start": {"$gte": cutoff_time}}},
+    
+    # Group by movie, average sentiment across all windows
+    {"$group": {
+        "_id": "$movie_title",
+        "movie_title": {"$first": "$movie_title"},
+        "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},  # Average across 48h period
+        "latest_window": {"$max": "$window_start"},
+        "window_count": {"$sum": 1}
+    }}
+])
 
 # Step 2: Match with batch layer and calculate deviation
 alerts = []
@@ -222,7 +236,7 @@ for speed_movie in speed_movies:
     if not batch_movie:
         continue
     
-    S_current = speed_movie['metrics']['avg_sentiment']  # -1.0 to 1.0
+    S_current = speed_movie['avg_sentiment']  # Averaged across all windows in 48h
     
     # Get baseline using priority fallback
     baseline = get_sentiment_baseline(batch_movie)  # franchise → genre → year
@@ -461,39 +475,60 @@ Seasons (Northern Hemisphere):
 
 Viral Status:
   status = {
-    "viral" if V ≥ 1.5
-    "trending" if 1.0 ≤ V < 1.5
-    "growing" if 0.5 ≤ V < 1.0
-    "stable" if V < 0.5
+    "viral" if V ≥ 0.3      # Top 5% (extremely high engagement)
+    "trending" if 0.15 ≤ V < 0.3  # Top 10% (high engagement)
+    "growing" if 0.05 ≤ V < 0.15  # Top 25% (moderate engagement)
+    "stable" if V < 0.05    # Below top 25% (normal/low engagement)
   }
+  
+  Note: Thresholds derived from actual data distribution:
+    - p95 = 0.039 (top 5%)
+    - p90 = 0.027 (top 10%)
+    - p75 = 0.009 (top 25%)
+    - Rounded up for clearer thresholds (0.3, 0.15, 0.05)
 ```
 
 **Ranking Algorithm:**
 ```python
-# Query MongoDB speed_views collection (synced from Cassandra)
+# Aggregate speed_views to get one record per movie (handles multiple time windows)
+# Note: speed_views stores one document per 5-minute window, so movies appear multiple times
 cutoff_time = datetime.utcnow() - timedelta(hours=48)
-speed_data = db.speed_views.find(
-    {
-        "window_start": {"$gte": cutoff_time}
-    }
-).sort("metrics.viral_score", -1)
+speed_data = db.speed_views.aggregate([
+    # Filter to recent windows
+    {"$match": {"window_start": {"$gte": cutoff_time}}},
+    
+    # Group by movie, summing metrics across all windows (more discussion = more viral)
+    {"$group": {
+        "_id": "$movie_title",
+        "movie_title": {"$first": "$movie_title"},
+        "total_viral_score": {"$sum": "$metrics.viral_score"},  # Sum across all windows
+        "latest_window": {"$max": "$window_start"},
+        "total_upvotes": {"$sum": "$metrics.total_upvotes"},
+        "total_comments": {"$sum": "$metrics.total_comments"},
+        "total_awards": {"$sum": "$metrics.total_awards"},
+        "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
+        "max_upvote_velocity": {"$max": "$metrics.upvote_velocity"},
+        "max_comment_velocity": {"$max": "$metrics.comment_velocity"},
+        "max_award_velocity": {"$max": "$metrics.award_velocity"}
+    }},
+    
+    # Sort by total viral score descending
+    {"$sort": {"total_viral_score": -1}}
+])
 
 movies = []
 for row in speed_data:
-    # Velocity metrics are in the 'metrics' subdocument
-    velocity = row['metrics']['upvote_velocity'] + (row['metrics']['comment_velocity'] * 2.0)
-    
-    # Match with batch layer to get genre/budget
-    normalized_title = normalize_movie_title(row.movie_title)
-    batch_movie = movie_intelligence.find_one({
+    # Match with batch layer to get movie intelligence data
+    normalized_title = normalize_movie_title(row['movie_title'])
+    batch_movie = db.movie_intelligence.find_one({
         "title": {"$regex": f"^{re.escape(normalized_title)}$", "$options": "i"}
     })
     
     if not batch_movie:
         continue
     
-    # Get threshold for genre only (single dimension)
-    # Note: genre in movie_intelligence is already a single string, not array
+    # Get threshold for genre only (SINGLE dimension as per schema)
+    # Note: genre in movie_intelligence is a single string, not array
     genre = batch_movie.get("genre", "")
     threshold_doc = db.viral_thresholds.find_one({
         "genre": genre,
@@ -512,21 +547,59 @@ for row in speed_data:
     if not threshold_doc:
         continue
     
-    threshold = threshold_doc["viral_threshold"]
+    # Use avg_popularity as threshold (current TMDB buzz)
+    # NOT viral_threshold (which is 99th percentile of vote_count)
+    threshold = threshold_doc["avg_popularity"]
     
-    # Calculate viral coefficient using metrics from speed_views
-    viral_score = row['metrics']['viral_score']
+    # Calculate viral coefficient using total viral_score (summed across all windows)
+    viral_score = row['total_viral_score']
     V = viral_score / threshold
     
+    # Determine viral status based on percentile thresholds
+    if V >= 0.3:
+        status = "viral"
+    elif V >= 0.15:
+        status = "trending"
+    elif V >= 0.05:
+        status = "growing"
+    else:
+        status = "stable"
+    
     movies.append({
+        # Movie identification
         "movie_id": batch_movie.get("movie_id"),
         "movie_title": batch_movie.get("title"),
-        "genre": genre,
+        
+        # Viral metrics (from speed layer aggregation)
         "viral_coefficient": V,
-        "upvote_velocity": row['metrics']['upvote_velocity'],
-        "comment_velocity": row['metrics']['comment_velocity'],
-        "viral_score": viral_score,
-        "viral_status": "viral" if V >= 1.0 else "trending"
+        "viral_score": viral_score,  # Total viral score across all windows
+        "viral_status": status,
+        "upvote_velocity": row['max_upvote_velocity'],
+        "comment_velocity": row['max_comment_velocity'],
+        "award_velocity": row['max_award_velocity'],
+        
+        # Reddit engagement (aggregated across all windows)
+        "total_upvotes": row['total_upvotes'],
+        "total_comments": row['total_comments'],
+        "total_awards": row['total_awards'],
+        "avg_sentiment": row['avg_sentiment'],
+        
+        # Movie intelligence (from batch layer)
+        "genre": genre,
+        "budget_tier": batch_movie.get("budget_tier"),
+        "vote_average": batch_movie.get("vote_average"),
+        "vote_count": batch_movie.get("vote_count"),
+        "popularity": batch_movie.get("popularity"),
+        "release_year": batch_movie.get("release_year"),
+        "franchise": batch_movie.get("franchise"),
+        
+        # Threshold context
+        "threshold_used": threshold,
+        "threshold_type": "avg_popularity",  # Using popularity, not vote_count
+        "threshold_dimension": "genre" if threshold_doc.get("genre") else "global",
+        
+        # Timestamps
+        "last_window_start": row['latest_window']
     })
 
 # Sort by viral coefficient descending

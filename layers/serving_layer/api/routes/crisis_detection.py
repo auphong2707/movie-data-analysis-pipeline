@@ -95,8 +95,13 @@ async def get_movie_sentiment(movie_id: int):
     
     Implements Goal #1: PR Crisis Detection formula:
     - Merges sentiment from batch and speed layers
+    - Speed layer: Averages sentiment across ALL windows in last 48h (not just latest)
     - Calculates deviation from multiple baselines (franchise, genre, year)
     - Detects crisis conditions (σ < -3.0)
+    
+    Current Sentiment Calculation:
+    - If movie discussed in last 48h: S_current = AVG(all speed_views windows)
+    - Else: S_current = batch layer historical sentiment
     """
     try:
         # Get MongoDB connection
@@ -113,28 +118,36 @@ async def get_movie_sentiment(movie_id: int):
             )
         
         # Get speed layer sentiment (last 48 hours)
+        # Changed: Average across ALL windows in 48h period, not just latest
         cutoff_time = datetime.utcnow() - timedelta(hours=48)
         speed_data = list(db.speed_views.find({
             "window_start": {"$gte": cutoff_time}
-        }).sort("window_start", -1))
+        }))
         
-        # Find matching speed layer data by title
+        # Find matching speed layer data by title and calculate average sentiment
+        # S_speed = AVG(metrics.avg_sentiment) across all speed_views windows in last 48h
         normalized_batch_title = normalize_movie_title(batch_movie.get("title", ""))
-        speed_sentiment = None
+        speed_sentiments = []
         sentiment_source = "batch_layer"
         last_window_start = None
         
         for speed_doc in speed_data:
             normalized_speed_title = normalize_movie_title(speed_doc.get("movie_title", ""))
             if normalized_speed_title == normalized_batch_title:
-                speed_sentiment = speed_doc.get("metrics", {}).get("avg_sentiment")
-                last_window_start = speed_doc.get("window_start")
-                sentiment_source = "speed_layer"
-                break
+                sentiment_val = speed_doc.get("metrics", {}).get("avg_sentiment")
+                if sentiment_val is not None:
+                    speed_sentiments.append(sentiment_val)
+                    # Track the most recent window timestamp
+                    window_start = speed_doc.get("window_start")
+                    if last_window_start is None or (window_start and window_start > last_window_start):
+                        last_window_start = window_start
         
         # Determine current sentiment (S_current)
-        if speed_sentiment is not None:
-            current_sentiment = speed_sentiment
+        # If movie was discussed in last 48h: S_current = S_speed (average across all windows)
+        # Else: S_current = S_batch (historical sentiment)
+        if speed_sentiments:
+            current_sentiment = sum(speed_sentiments) / len(speed_sentiments)
+            sentiment_source = "speed_layer"
         else:
             current_sentiment = batch_movie.get("avg_sentiment", 0.0)
         
@@ -310,6 +323,12 @@ async def get_crisis_alerts(
     
     Scans recent speed layer data and calculates deviation from baselines
     to identify movies experiencing PR crises.
+    
+    Implementation:
+    - Groups speed_views by movie (last 48h)
+    - Calculates S_current = AVG(all windows) for each movie
+    - Matches with batch layer to get baseline
+    - Returns movies with σ < -3.0
     """
     try:
         # Get MongoDB connection
@@ -318,23 +337,43 @@ async def get_crisis_alerts(
         queries = MovieQueries(db)
         
         # Step 1: Get all movies with recent discussions (speed layer)
+        # Changed: Aggregate sentiment across ALL windows for each movie (last 48h)
         cutoff_time = datetime.utcnow() - timedelta(hours=48)
-        speed_movies = list(db.speed_views.find({
+        speed_data = list(db.speed_views.find({
             "window_start": {"$gte": cutoff_time}
-        }).sort("window_start", -1))
+        }))
         
-        # Step 2: Match with batch layer and calculate deviation
-        alerts = []
-        processed_titles = set()  # Avoid duplicates
+        # Step 2: Group by movie and calculate average sentiment across all windows
+        # S_speed = AVG(metrics.avg_sentiment) across all speed_views windows in last 48h
+        movie_sentiments = {}  # {normalized_title: {"sentiments": [], "latest_window": datetime, "title": str}}
         
-        for speed_movie in speed_movies:
-            movie_title = speed_movie.get('movie_title', '')
-            
-            # Skip if already processed
+        for speed_doc in speed_data:
+            movie_title = speed_doc.get('movie_title', '')
             normalized_title = normalize_movie_title(movie_title)
-            if normalized_title in processed_titles:
-                continue
-            processed_titles.add(normalized_title)
+            
+            sentiment_val = speed_doc.get('metrics', {}).get('avg_sentiment')
+            window_start = speed_doc.get('window_start')
+            
+            if sentiment_val is not None:
+                if normalized_title not in movie_sentiments:
+                    movie_sentiments[normalized_title] = {
+                        "sentiments": [],
+                        "latest_window": window_start,
+                        "title": movie_title
+                    }
+                
+                movie_sentiments[normalized_title]["sentiments"].append(sentiment_val)
+                
+                # Track the most recent window
+                if isinstance(window_start, datetime):
+                    current_latest = movie_sentiments[normalized_title]["latest_window"]
+                    if current_latest is None or window_start > current_latest:
+                        movie_sentiments[normalized_title]["latest_window"] = window_start
+        
+        # Step 3: Match with batch layer and calculate deviation
+        alerts = []
+        
+        for normalized_title, sentiment_data in movie_sentiments.items():
             
             # Find matching movie in batch layer
             batch_movie = db.movie_intelligence.find_one({
@@ -348,10 +387,14 @@ async def get_crisis_alerts(
             if genre and batch_movie.get("genre", "").lower() != genre.lower():
                 continue
             
-            # Get current sentiment from speed layer
-            S_current = speed_movie.get('metrics', {}).get('avg_sentiment')
-            if S_current is None:
+            # Calculate average sentiment across all windows in 48h
+            # S_current = AVG(metrics.avg_sentiment) across all windows
+            sentiments = sentiment_data["sentiments"]
+            if not sentiments:
                 continue
+            
+            S_current = sum(sentiments) / len(sentiments)
+            latest_window = sentiment_data["latest_window"]
             
             # Get baseline using priority: franchise → genre → year
             baseline = None
@@ -396,9 +439,8 @@ async def get_crisis_alerts(
                     continue
                 
                 # Calculate data age
-                window_start = speed_movie.get('window_start')
-                if isinstance(window_start, datetime):
-                    data_age_hours = (datetime.utcnow() - window_start).total_seconds() / 3600
+                if isinstance(latest_window, datetime):
+                    data_age_hours = (datetime.utcnow() - latest_window).total_seconds() / 3600
                 else:
                     data_age_hours = 0.0
                 
@@ -410,11 +452,11 @@ async def get_crisis_alerts(
                     baseline_type=baseline_type,
                     deviation_sigma=round(σ, 2),
                     severity=alert_severity,
-                    alert_timestamp=window_start.isoformat() if isinstance(window_start, datetime) else str(window_start),
+                    alert_timestamp=latest_window.isoformat() if isinstance(latest_window, datetime) else str(latest_window),
                     data_age_hours=round(data_age_hours, 1)
                 ))
         
-        # Step 3: Sort by severity (most negative σ first)
+        # Step 4: Sort by severity (most negative σ first)
         alerts.sort(key=lambda x: x.deviation_sigma)
         
         # Apply limit

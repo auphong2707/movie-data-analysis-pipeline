@@ -442,38 +442,52 @@ for movie in active_movies:
 **Viral Coefficient Formula:**
 ```
 Viral Coefficient (V):
-  V = velocity / threshold
+  V = viral_score / avg_popularity
   where:
-    velocity = engagement_rate over time window
-    threshold = viral_thresholds.threshold_value for context
+    viral_score = Pre-calculated from speed_views.metrics (Reddit engagement velocity)
+    avg_popularity = Average TMDB popularity for genre (from viral_thresholds)
 
-Engagement Velocity (velocity):
-  velocity = (upvotes_48h / 48) + (comments_48h / 48) * comment_weight
-  where:
-    - upvotes_48h = total upvotes in last 48 hours
-    - comments_48h = total comments in last 48 hours
-    - comment_weight = 2.0 (comments valued 2x upvotes)
+Data Distribution:
+  - viral_score range: 0 to ~5.2 (Reddit engagement per hour)
+  - avg_popularity range: ~7 to ~19 (TMDB popularity score)
+  - Coefficient range: 0 to ~0.34 (observed from actual data)
+  - p95 = 0.039, p75 = 0.009, p50 = 0.003 (percentiles)
 
-Context-Aware Threshold:
-  threshold = viral_thresholds.find_one({
-    "genre": movie.genre,
-    "budget_tier": movie.budget_tier,  # Use existing budget_tier field
-    "season": get_season(current_date)
-  }).threshold_value
+Viral Score (from speed_views):
+  Aggregated from streaming layer:
+    viral_score = SUM(metrics.viral_score) across all windows in 48h period
+    Note: speed_views stores multiple time windows per movie, we sum for total engagement
+  
+  Components tracked separately in each window:
+    - upvote_velocity = rate of upvote change
+    - comment_velocity = rate of comment change  
+    - award_velocity = rate of award change
 
-Budget Tiers (from schema):
-  - "indie": Low-budget independent films
-  - "mid": Mid-range budget films
-  - "blockbuster": High-budget major productions
-  - "unknown": Budget information not available
+Context-Aware Threshold (SINGLE DIMENSION):
+  Priority order for threshold lookup:
+  
+  1. Genre-specific threshold (preferred):
+     threshold_doc = viral_thresholds.find_one({
+       "genre": movie.genre,
+       "budget_tier": null,
+       "season": null
+     })
+     threshold = threshold_doc["avg_popularity"]  # Use popularity, NOT viral_threshold!
+  
+  2. Global threshold (fallback):
+     threshold_doc = viral_thresholds.find_one({
+       "genre": null,
+       "budget_tier": null,
+       "season": null
+     })
+     threshold = threshold_doc["avg_popularity"]
+  
+  NOTE: We use avg_popularity instead of viral_threshold because:
+    - viral_threshold = 99th percentile of vote_count (cumulative historical)
+    - avg_popularity = current TMDB buzz metric (recent activity)
+    - Comparing "current Reddit buzz" to "current TMDB buzz" is semantically correct
 
-Seasons (Northern Hemisphere):
-  - "winter": Dec, Jan, Feb
-  - "spring": Mar, Apr, May
-  - "summer": Jun, Jul, Aug (blockbuster season)
-  - "fall": Sep, Oct, Nov
-
-Viral Status:
+Viral Status (based on percentile thresholds):
   status = {
     "viral" if V ≥ 0.3      # Top 5% (extremely high engagement)
     "trending" if 0.15 ≤ V < 0.3  # Top 10% (high engagement)

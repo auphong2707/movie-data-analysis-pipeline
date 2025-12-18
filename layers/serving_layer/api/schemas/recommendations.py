@@ -156,7 +156,7 @@ class RedditBuzzRecommendation(BaseModel):
     movie_id: int = Field(..., description="TMDB movie ID")
     movie_title: str = Field(..., description="Movie title")
     genre: Optional[str] = Field(None, description="Primary genre")
-    reddit_buzz_score: float = Field(..., description="Reddit engagement score", ge=0, le=100)
+    reddit_buzz_score: float = Field(..., description="Reddit engagement score", ge=0)
     total_engagement: int = Field(..., description="Total Reddit engagement", ge=0)
     reddit_mentions: int = Field(..., description="Number of Reddit discussions", ge=0)
     

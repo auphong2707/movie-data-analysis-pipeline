@@ -13,6 +13,7 @@ from api.schemas.recommendations import (
     InputMovie,
     SimilarMoviesResponse,
     SimilarMovieRecommendation,
+    RedditBuzzRecommendation,
     RedditBuzzResponse,
     TMDBQualityResponse
 )
@@ -454,13 +455,139 @@ async def get_similar_movies_impl(
         logger.error(f"Error in similar movies: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/reddit-buzz")
+
+@router.get("/reddit-buzz", response_model=RedditBuzzResponse)
 async def get_reddit_buzz_recommendations(
-    genre: Optional[str] = Query(None),
-    limit: int = Query(20, ge=1, le=100)
+    genre: Optional[str] = Query(None, description="Filter by genre"),
+    days_back: int = Query(7, ge=1, le=30, description="Days of Reddit data to analyze"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    queries: MovieQueries = Depends(get_movie_queries)
 ):
-    """Get top Reddit buzz movies (Reddit component only)"""
-    pass
+    """
+    Get pure Reddit buzz rankings (Reddit component only)
+    
+    Formula: Reddit_Score = weighted_engagement * recency_decay * volume_multiplier
+    - weighted_engagement: upvotes + comments*2 + awards*10
+    - recency_decay: exp(-age_hours / 24) with 24h half-life
+    - volume_multiplier: 1 + log10(post_count + 1) / 10
+    """
+    try:
+        logger.info(f"Fetching Reddit buzz recommendations: genre={genre}, days_back={days_back}, limit={limit}")
+        
+        # Get Reddit data from speed layer
+        reddit_data = queries.get_reddit_buzz_data(
+            genre=genre,
+            days_back=days_back
+        )
+        
+        if not reddit_data:
+            return RedditBuzzResponse(
+                recommendations=[],
+                total_count=0,
+                filters_applied={
+                    "genre": genre,
+                    "days_back": days_back,
+                    "limit": limit
+                }
+            )
+        
+        logger.info(f"Retrieved {len(reddit_data)} movies with Reddit data")
+        
+        # Calculate Reddit buzz scores
+        now = datetime.utcnow()
+        reddit_rankings = []
+        
+        for movie_data in reddit_data:
+            # Calculate weighted engagement
+            W = (
+                movie_data.get('total_upvotes', 0) +
+                movie_data.get('total_comments', 0) * 2 +
+                movie_data.get('total_awards', 0) * 10
+            )
+            
+            # Skip if no engagement
+            if W == 0:
+                continue
+            
+            # Calculate recency decay (exponential with 24h half-life)
+            last_window = movie_data.get('last_window_start')
+            if last_window:
+                age_hours = (now - last_window).total_seconds() / 3600
+            else:
+                age_hours = days_back * 24  # Assume oldest
+            
+            decay = math.exp(-age_hours / 24)
+            
+            # Calculate volume multiplier (log scale to prevent over-weighting)
+            post_count = movie_data.get('post_count', 1)
+            multiplier = 1 + math.log10(post_count + 1) / 10
+            
+            # Final Reddit buzz score
+            reddit_score = W * decay * multiplier
+            
+            reddit_rankings.append({
+                'movie_title': movie_data['movie_title'],
+                'reddit_buzz_score': round(reddit_score, 1),
+                'total_engagement': W,
+                'post_count': post_count,
+                'total_comments': movie_data.get('total_comments', 0),
+                'hours_since_last_window': round(age_hours, 1),
+                'viral_score': movie_data.get('viral_score', 0)
+            })
+        
+        # Sort by Reddit buzz score
+        sorted_rankings = sorted(reddit_rankings, key=lambda x: x['reddit_buzz_score'], reverse=True)
+        
+        # Get genre info from batch layer for top results
+        top_rankings = sorted_rankings[:limit]
+        movie_titles = [r['movie_title'] for r in top_rankings]
+        
+        # Fetch movie_id and genre from batch layer
+        batch_movies = {
+            m['title']: m 
+            for m in queries.movie_intelligence.find(
+                {'title': {'$in': movie_titles}},
+                {'movie_id': 1, 'title': 1, 'genre': 1, 'genres': 1, '_id': 0}
+            )
+        }
+        
+        # Build final recommendations
+        recommendations = []
+        for i, ranking in enumerate(top_rankings):
+            title = ranking['movie_title']
+            batch_movie = batch_movies.get(title, {})
+            
+            # Get genre (handle both flat and array)
+            genre_value = batch_movie.get('genre')
+            if not genre_value and 'genres' in batch_movie:
+                genres = batch_movie.get('genres', [])
+                genre_value = genres[0] if genres else None
+            
+            recommendations.append(RedditBuzzRecommendation(
+                rank=i + 1,
+                movie_id=batch_movie.get('movie_id', 0),
+                movie_title=title,
+                genre=genre_value,
+                reddit_buzz_score=ranking['reddit_buzz_score'],
+                total_engagement=ranking['total_engagement'],
+                reddit_mentions=ranking['post_count']
+            ))
+        
+        logger.info(f"Returning {len(recommendations)} Reddit buzz recommendations")
+        
+        return RedditBuzzResponse(
+            recommendations=recommendations,
+            total_count=len(recommendations),
+            filters_applied={
+                "genre": genre,
+                "days_back": days_back,
+                "limit": limit
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"Error in Reddit buzz recommendations: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/tmdb-quality")
 async def get_tmdb_quality_recommendations(

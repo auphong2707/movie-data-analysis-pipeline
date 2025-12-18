@@ -521,3 +521,84 @@ class MovieQueries:
         }
         
         return list(self.movie_intelligence.find(query, projection).limit(limit))
+    
+    def get_reddit_buzz_data(
+        self,
+        genre: Optional[str] = None,
+        days_back: int = 7
+    ) -> List[Dict]:
+        """
+        Get Reddit buzz data from speed layer for reddit-buzz recommendations
+        
+        Args:
+            genre: Optional genre filter
+            days_back: How many days back to aggregate (default: 7)
+        
+        Returns:
+            List of movies with aggregated Reddit metrics and timestamps
+        """
+        cutoff_time = datetime.utcnow() - timedelta(days=days_back)
+        
+        # Base match query - filter for reddit data types
+        match_query = {
+            'window_start': {'$gte': cutoff_time},
+            'data_type': {'$in': ['reddit_post', 'reddit_comment']}
+        }
+        
+        # Aggregation pipeline
+        pipeline = [
+            {'$match': match_query},
+            {
+                '$group': {
+                    '_id': '$movie_title',
+                    'total_upvotes': {'$sum': '$metrics.total_upvotes'},
+                    'total_comments': {'$sum': '$metrics.total_comments'},
+                    'total_awards': {'$sum': '$metrics.total_awards'},
+                    'post_count': {'$sum': '$metrics.post_count'},
+                    'last_window_start': {'$max': '$window_start'},
+                    'viral_score': {'$max': '$metrics.viral_score'}
+                }
+            },
+            {
+                '$match': {
+                    # Require at least some engagement
+                    '$or': [
+                        {'total_upvotes': {'$gt': 0}},
+                        {'total_comments': {'$gt': 0}},
+                        {'total_awards': {'$gt': 0}}
+                    ]
+                }
+            },
+            {
+                '$project': {
+                    '_id': 0,
+                    'movie_title': '$_id',
+                    'total_upvotes': 1,
+                    'total_comments': 1,
+                    'total_awards': 1,
+                    'post_count': 1,
+                    'last_window_start': 1,
+                    'viral_score': 1
+                }
+            }
+        ]
+        
+        results = list(self.speed_views.aggregate(pipeline))
+        
+        # If genre filter is specified, filter by genre from batch layer
+        if genre:
+            movie_titles = [r['movie_title'] for r in results]
+            genre_movies = self.movie_intelligence.find(
+                {
+                    'title': {'$in': movie_titles},
+                    '$or': [
+                        {'genre': genre},
+                        {'genres': genre}
+                    ]
+                },
+                {'title': 1, '_id': 0}
+            )
+            genre_titles = {m['title'] for m in genre_movies}
+            results = [r for r in results if r['movie_title'] in genre_titles]
+        
+        return results

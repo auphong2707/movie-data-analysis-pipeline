@@ -519,6 +519,187 @@ class TestSimilarMoviesEndpoint:
             pytest.skip("API is not running")
 
 
+class TestRedditBuzzEndpoint:
+    """Test GET /recommendations/reddit-buzz"""
+    
+    def test_reddit_buzz_endpoint_returns_200(self):
+        """Test that Reddit buzz endpoint returns valid response"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"limit": 10},
+                timeout=10
+            )
+            
+            assert response.status_code == 200, \
+                f"Unexpected status code: {response.status_code}"
+            
+            data = response.json()
+            print(f"\n✓ Reddit buzz recommendations retrieved successfully")
+            
+            # Verify response structure
+            assert "recommendations" in data, "Missing recommendations field"
+            assert data["recommendations"] is not None, "recommendations is None"
+            assert isinstance(data["recommendations"], list), "recommendations not a list"
+            
+            assert "total_count" in data, "Missing total_count field"
+            assert data["total_count"] is not None, "total_count is None"
+            assert isinstance(data["total_count"], int), "total_count not an integer"
+            
+            assert "filters_applied" in data, "Missing filters_applied field"
+            assert data["filters_applied"] is not None, "filters_applied is None"
+            
+            assert "timestamp" in data, "Missing timestamp field"
+            assert data["timestamp"] is not None, "timestamp is None"
+            
+            print(f"  Total recommendations: {data['total_count']}")
+            
+            # If there are recommendations, check their structure
+            if data["total_count"] > 0:
+                rec = data["recommendations"][0]
+                
+                assert "rank" in rec, "Missing rank field"
+                assert rec["rank"] == 1, "First recommendation should have rank 1"
+                
+                assert "movie_title" in rec, "Missing movie_title field"
+                assert rec["movie_title"] is not None, "movie_title is None"
+                assert len(rec["movie_title"]) > 0, "movie_title is empty"
+                
+                assert "reddit_buzz_score" in rec, "Missing reddit_buzz_score field"
+                assert rec["reddit_buzz_score"] is not None, "reddit_buzz_score is None"
+                assert rec["reddit_buzz_score"] > 0, "reddit_buzz_score should be positive"
+                
+                assert "total_engagement" in rec, "Missing total_engagement field"
+                assert rec["total_engagement"] is not None, "total_engagement is None"
+                assert rec["total_engagement"] >= 0, "total_engagement cannot be negative"
+                
+                assert "reddit_mentions" in rec, "Missing reddit_mentions field"
+                assert rec["reddit_mentions"] is not None, "reddit_mentions is None"
+                assert rec["reddit_mentions"] >= 0, "reddit_mentions cannot be negative"
+                
+                print(f"  First recommendation: {rec['movie_title']}")
+                print(f"    Reddit Buzz Score: {rec['reddit_buzz_score']:.1f}")
+                print(f"    Total Engagement: {rec['total_engagement']}")
+                print(f"    Reddit Mentions: {rec['reddit_mentions']}")
+            else:
+                print("  No recommendations found (this is okay if no recent Reddit data)")
+                
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_reddit_buzz_with_genre_filter(self):
+        """Test Reddit buzz with genre filter"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"genre": "Action", "limit": 10},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check filter was applied
+            assert data["filters_applied"]["genre"] == "Action"
+            
+            print(f"\n✓ Genre filter working: {data['total_count']} Action Reddit buzz recommendations")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_reddit_buzz_with_days_back(self):
+        """Test Reddit buzz with custom days_back parameter"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"days_back": 3, "limit": 10},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check filter was applied
+            assert data["filters_applied"]["days_back"] == 3
+            
+            print(f"\n✓ Days back filter working: {data['total_count']} recommendations from last 3 days")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_reddit_buzz_sorted_by_score(self):
+        """Test that recommendations are sorted by Reddit buzz score"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"limit": 20},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # If there are multiple recommendations, check sorting
+            if data["total_count"] > 1:
+                scores = [rec["reddit_buzz_score"] for rec in data["recommendations"]]
+                assert scores == sorted(scores, reverse=True), \
+                    "Recommendations should be sorted by Reddit buzz score (descending)"
+                
+                # Check ranks are sequential
+                for i, rec in enumerate(data["recommendations"]):
+                    assert rec["rank"] == i + 1, f"Rank mismatch at position {i}"
+                
+                print(f"\n✓ Sorting verified: scores range from {scores[0]:.1f} to {scores[-1]:.1f}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_reddit_buzz_with_limit(self):
+        """Test limit parameter"""
+        try:
+            limit = 5
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"limit": limit},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Should not exceed limit
+            assert len(data["recommendations"]) <= limit, \
+                f"Returned {len(data['recommendations'])} recommendations, exceeds limit of {limit}"
+            
+            print(f"\n✓ Limit working: requested {limit}, got {len(data['recommendations'])}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+    
+    def test_reddit_buzz_invalid_days_back(self):
+        """Test invalid days_back parameter"""
+        try:
+            # Test days_back > 30
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"days_back": 31},
+                timeout=5
+            )
+            assert response.status_code == 422
+            
+            # Test days_back < 1
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/reddit-buzz",
+                params={"days_back": 0},
+                timeout=5
+            )
+            assert response.status_code == 422
+            
+            print("\n✓ Correctly rejects invalid days_back values")
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Recommendation API Integration Tests")

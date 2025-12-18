@@ -18,6 +18,15 @@
   - Action Distribution: 75% actionable recommendations (vs 4% before calibration)
   - Status: **READY FOR PRODUCTION**
 
+**Goal #3: Content Recommendation Endpoints**
+- ✅ **TMDB Score Calibration** - Dual-success recommendation formula
+  - Dataset: 3,657 movies from production database
+  - Formula: `TMDB_Score = normalize(0.5*pop + 0.3*vote_avg*10 + 0.2*log10(vote_count))`
+  - Key Finding: Low correlation (-0.077) between popularity and vote_average
+  - Components: 50% current buzz + 30% quality + 20% credibility
+  - Documentation: `TMDB_SCORE_CALIBRATION.md`
+  - Status: **FORMULA DEFINED, READY FOR IMPLEMENTATION**
+
 ### 🚧 In Progress
 
 **Goal #2: Viral Detection Endpoints**
@@ -1038,42 +1047,17 @@ return sorted(opportunities, key=lambda x: x["opportunity_score"], reverse=True)
 }
 ```
 
-**Testing:**
-
-```python
-# All 12 tests passing (December 18, 2025)
-class TestOpportunitiesEndpoint:
-    def test_opportunities_endpoint_basic()  # ✅
-    def test_opportunities_with_limit()  # ✅
-    def test_opportunities_with_min_viral_coefficient()  # ✅
-    def test_opportunities_sorting_order()  # ✅
-    def test_opportunities_score_calculation()  # ✅ Validates O = V × (1 + urgency)
-    def test_opportunities_recommendation_logic()  # ✅ Tests calibrated thresholds
-    def test_opportunities_factors_validity()  # ✅ Verifies urgency = recency × momentum
-    def test_opportunities_velocity_fields()  # ✅
-    def test_opportunities_estimated_reach()  # ✅
-    def test_opportunities_empty_results()  # ✅
-    def test_opportunities_invalid_parameters()  # ✅
-    def test_opportunities_response_time()  # ✅ < 15 seconds
-```
-
-            "factors": {
-                "recency": recency_factor,
-                "momentum": momentum_factor,
-                "reach": reach_factor
-            }
-        })
-
-return sorted(opportunities, key=lambda x: x["opportunity_score"], reverse=True)
-```
-
 ---
 
 ### Goal #3: Recommendations - Mathematical Definitions
 
 #### 3.1 `GET /recommendations/dual-success`
 
+**Status:** ✅ **FORMULA CALIBRATED** (December 18, 2025)
+
 **Purpose:** Dual-success recommendations (60% Reddit buzz + 40% TMDB quality)
+
+**Calibration:** Based on analysis of 3,657 movies from production database. See `TMDB_SCORE_CALIBRATION.md` for details.
 
 **Dual-Success Score Formula:**
 ```
@@ -1099,23 +1083,46 @@ Reddit Buzz Score (0-100):
     
     normalize(x) = (x - min(x)) / (max(x) - min(x)) * 100
 
-TMDB Quality Score (0-100):
-  TMDB_Score = normalize(
-    (vote_average / 10) * 0.7 + 
-    (log10(vote_count + 1) / 6) * 0.3
-  ) * 100
+TMDB Popularity Score (0-100):
+  TMDB_Score = normalize(TMDB_Raw)
   where:
-    vote_average = TMDB rating (0-10)
-    vote_count = number of votes (popularity proxy)
+    TMDB_Raw = 0.5*popularity + 0.3*(vote_average*10) + 0.2*log10(vote_count+1)
     
-    Weights:
-    - 70% from average rating (quality)
-    - 30% from vote count (credibility)
+    Components (calibrated from 3,657 movies):
+    
+    1. Popularity (50% weight):
+       - Range: 0.01 to 446.11 (mean: 10.27, median: 7.85)
+       - Captures: Daily-updated buzz (views, votes, watchlist adds)
+       - Why 50%: Primary signal for "current attention"
+    
+    2. Vote Average (30% weight):
+       - Range: 0.0 to 10.0 (mean: 7.07, median: 7.40)
+       - Scaled: vote_average * 10 to match popularity range
+       - Captures: Quality rating from TMDB users
+       - Why 30%: Adds quality dimension (correlation with popularity: -0.077)
+    
+    3. Vote Count (20% weight):
+       - Range: 1 to 38,406 (mean: 3,037, median: 997)
+       - Transformed: log10(vote_count + 1) to handle skew
+       - Captures: Credibility/sample size
+       - Why 20%: Prevents low-vote movies from ranking too high
+    
+    Normalization:
+      normalize(x) = (x - min(x)) / (max(x) - min(x)) * 100
+      Applied after calculating TMDB_Raw for all movies
+    
+    Calibration Note:
+      - Low correlation (-0.077) between popularity and vote_average means
+        they capture independent signals - no redundancy
+      - Combining all three provides comprehensive TMDB quality signal
+      - Data analyzed: 3,657 movies from production database
+      - Calibration date: December 18, 2025
+      - Full report: TMDB_SCORE_CALIBRATION.md
 
 Minimum Thresholds (applied AFTER scoring):
-  - min_rating: vote_average ≥ 6.0 (default)
+  - min_rating: vote_average ≥ 6.0 (default, ensures quality filter)
   - min_reddit_engagement: total_engagement ≥ 10
-  - min_vote_count: vote_count ≥ 100
+  - min_popularity: popularity ≥ 1.0 (ensures some TMDB buzz)
 ```
 
 **Ranking Algorithm:**
@@ -1147,10 +1154,13 @@ for movie in merged_movies:
     else:
         reddit_raw = 0
     
-    # Calculate TMDB Score
-    quality_component = (movie.vote_average / 10) * 0.7
-    popularity_component = (log10(movie.vote_count + 1) / 6) * 0.3
-    tmdb_raw = quality_component + popularity_component
+    # Calculate TMDB Score (using calibrated hybrid formula)
+    # Components: 50% popularity + 30% quality + 20% credibility
+    tmdb_raw = (
+        0.5 * movie.popularity +
+        0.3 * (movie.vote_average * 10) +
+        0.2 * log10(movie.vote_count + 1)
+    )
     
     # Store for normalization
     movie.reddit_raw = reddit_raw
@@ -1169,7 +1179,8 @@ for movie in merged_movies:
     # Apply minimum thresholds
     if (movie.vote_average >= min_rating and 
         movie.total_engagement >= 10 and
-        movie.vote_count >= 100):
+        movie.popularity >= 1.0 and
+        movie.vote_count >= 50):
         
         recommendations.append({
             "rank": None,  # Assigned after sorting
@@ -1178,9 +1189,10 @@ for movie in merged_movies:
             "genre": movie.genre,  # Single genre field (string)
             "dual_success_score": round(dual_success_score, 1),
             "reddit_buzz_score": round(reddit_score, 1),
-            "tmdb_quality_score": round(tmdb_score, 1),
+            "tmdb_score": round(tmdb_score, 1),
             "vote_average": movie.vote_average,
             "vote_count": movie.vote_count,
+            "popularity": movie.popularity,
             "reddit_mentions": movie.discussion_count,
             "speed_layer_contribution": reddit_score > 0
         })
@@ -1282,7 +1294,9 @@ def get_similar_movies(movie_id, limit=10):
             "similarity_score": round(final_score, 3),
             "shared_genre": target.genre if target.genre == candidate.genre else None,
             "release_year_diff": abs(target.release_year - candidate.release_year),
-            "vote_average": candidate.vote_average
+            "popularity": candidate.popularity,  # Consistent with other recommendation endpoints
+            "vote_average": candidate.vote_average,  # Quality reference
+            "vote_count": candidate.vote_count  # Credibility reference (added for consistency with dual-success)
         })
     
     # Sort by similarity score
@@ -1558,6 +1572,7 @@ def search_movies(q, genre, year_from, year_to, limit):
 | Crisis Detection | `σ = (S_current - S_baseline) / σ_baseline` | -∞ to +∞ (crisis if < -3.0) |
 | Viral Coefficient | `V = velocity / threshold` | 0 to ∞ (viral if > 1.0) |
 | Dual-Success Score | `D = 0.6 * Reddit_Score + 0.4 * TMDB_Score` | 0 to 100 |
+| TMDB Score | `0.5*pop + 0.3*(vote_avg*10) + 0.2*log₁₀(vote_count)` | Normalized 0-100 |
 | Cosine Similarity | `sim = vec_A · vec_B / (‖vec_A‖ * ‖vec_B‖)` | -1 to 1 |
 | Reddit Buzz | `R = W * exp(-t/24) * (1 + log₁₀(post_count))` | 0 to ∞ |
 | TMDB Quality | `Q = WR * (0.7 + 0.3P) * freshness_bonus` | 0 to 10 |

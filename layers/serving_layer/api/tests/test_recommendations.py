@@ -294,6 +294,30 @@ class TestDualSuccessEndpoint:
             
         except requests.exceptions.ConnectionError:
             pytest.skip("API is not running")
+    
+    def test_dual_success_genre_all_endpoint(self):
+        """Test genre endpoint with 'All' to get recommendations from all genres"""
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recommendations/dual-success/genre/All",
+                params={"limit": 20},
+                timeout=10
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Should have no genre filter (None)
+            assert data["filters_applied"]["genre"] is None
+            
+            # Should have movies from multiple genres
+            if data["recommendations"]:
+                genres = set(rec["genre"] for rec in data["recommendations"])
+                assert len(genres) > 1, "Expected movies from multiple genres when using 'All'"
+                print(f"\n✓ Genre 'All' endpoint working: {data['total_count']} recommendations from {len(genres)} genres: {', '.join(sorted(genres))}")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("API is not running")
 
 
 class TestEndpointValidation:

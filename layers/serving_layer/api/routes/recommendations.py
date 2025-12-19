@@ -263,9 +263,16 @@ async def get_dual_success_by_genre(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
     queries: MovieQueries = Depends(get_movie_queries)
 ):
-    """Get dual-success recommendations for specific genre"""
+    """
+    Get dual-success recommendations for specific genre
+    
+    Special case: Use genre="All" to get recommendations from all genres (no genre filter)
+    """
+    # Handle "All" genre by passing None to get all genres
+    genre_filter = None if genre.lower() == "all" else genre
+    
     return await get_dual_success_recommendations(
-        genre=genre,
+        genre=genre_filter,
         min_rating=min_rating,
         limit=limit,
         queries=queries

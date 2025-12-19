@@ -421,3 +421,97 @@ async def list_all_services():
         "total_services": len(services),
         "services": services
     }
+
+
+@router.get("/status-simple")
+async def simple_status_overview():
+    """
+    Simplified status endpoint returning numeric status codes
+    Optimized for Grafana stat panels with the Infinity datasource
+    
+    Status codes:
+    - 0: healthy
+    - 1: degraded
+    - 2: unhealthy
+    - 3: unknown
+    
+    Returns:
+        dict: Simple status with numeric codes for each layer and overall system
+    """
+    system_health = await system_health_overview()
+    
+    # Map status strings to numeric codes
+    status_map = {
+        "healthy": 0,
+        "degraded": 1,
+        "unhealthy": 2,
+        "unknown": 3
+    }
+    
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "system_status": status_map.get(system_health["status"], 3),
+        "system_status_text": system_health["status"],
+        "batch_status": status_map.get(system_health["layers"]["batch"]["status"], 3),
+        "batch_status_text": system_health["layers"]["batch"]["status"],
+        "speed_status": status_map.get(system_health["layers"]["speed"]["status"], 3),
+        "speed_status_text": system_health["layers"]["speed"]["status"],
+        "serving_status": status_map.get(system_health["layers"]["serving"]["status"], 3),
+        "serving_status_text": system_health["layers"]["serving"]["status"],
+        "total_services": system_health["summary"]["total_services"],
+        "healthy_count": system_health["summary"]["healthy"],
+        "degraded_count": system_health["summary"]["degraded"],
+        "unhealthy_count": system_health["summary"]["unhealthy"],
+        "unknown_count": system_health["summary"]["unknown"]
+    }
+
+
+@router.get("/layer-status")
+async def layer_status_array():
+    """
+    Layer status as an array for easy consumption by Grafana
+    Returns each layer as an array element with status information
+    
+    Returns:
+        dict: Array of layer statuses
+    """
+    system_health = await system_health_overview()
+    
+    # Map status strings to numeric codes
+    status_map = {
+        "healthy": 0,
+        "degraded": 1,
+        "unhealthy": 2,
+        "unknown": 3
+    }
+    
+    layers_array = []
+    
+    for layer_name, layer_data in system_health["layers"].items():
+        layer_display = {
+            "serving": "Serving",
+            "batch": "Batch", 
+            "speed": "Speed"
+        }.get(layer_name, layer_name.title())
+        
+        layers_array.append({
+            "layer": layer_display,
+            "status": layer_data["status"],
+            "status_code": status_map.get(layer_data["status"], 3),
+            "total_services": layer_data["total_services"],
+            "healthy_count": layer_data["healthy_count"]
+        })
+    
+    # Add overall system as a layer
+    layers_array.insert(0, {
+        "layer": "Overall System",
+        "status": system_health["status"],
+        "status_code": status_map.get(system_health["status"], 3),
+        "total_services": system_health["summary"]["total_services"],
+        "healthy_count": system_health["summary"]["healthy"]
+    })
+    
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "layers": layers_array
+    }

@@ -34,30 +34,40 @@
           "mappings": [
             {
               "options": {
-                "healthy": {
+                "0": {
                   "color": "green",
                   "index": 0,
-                  "text": "✅ Healthy"
+                  "text": "✅ HEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "degraded": {
+                "1": {
                   "color": "yellow",
                   "index": 1,
-                  "text": "⚠️ Degraded"
+                  "text": "⚠️ DEGRADED"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unhealthy": {
+                "2": {
                   "color": "red",
                   "index": 2,
-                  "text": "🔴 Unhealthy"
+                  "text": "🔴 UNHEALTHY"
+                }
+              },
+              "type": "value"
+            },
+            {
+              "options": {
+                "3": {
+                  "color": "dark-blue",
+                  "index": 3,
+                  "text": "⚫ UNKNOWN"
                 }
               },
               "type": "value"
@@ -77,6 +87,10 @@
               {
                 "color": "red",
                 "value": 2
+              },
+              {
+                "color": "dark-blue",
+                "value": 3
               }
             ]
           },
@@ -112,9 +126,9 @@
         {
           "columns": [
             {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
+              "selector": "system_status",
+              "text": "System Status Code",
+              "type": "number"
             }
           ],
           "datasource": {
@@ -128,14 +142,15 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://serving-api:8000/api/v1/health/system",
+          "url": "http://serving-api:8000/api/v1/health/status-simple",
           "url_options": {
             "data": "",
             "method": "GET"
-          }
+          },
+          "parser": "backend"
         }
       ],
-      "title": "🏥 Overall System Status",
+      "title": "🌐 Overall System Status",
       "type": "stat"
     },
     {
@@ -151,40 +166,40 @@
           "mappings": [
             {
               "options": {
-                "healthy": {
+                "0": {
                   "color": "green",
                   "index": 0,
-                  "text": "Healthy"
+                  "text": "✅ HEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "degraded": {
+                "1": {
                   "color": "yellow",
                   "index": 1,
-                  "text": "Degraded"
+                  "text": "⚠️ DEGRADED"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unhealthy": {
+                "2": {
                   "color": "red",
                   "index": 2,
-                  "text": "Unhealthy"
+                  "text": "🔴 UNHEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unknown": {
-                  "color": "gray",
+                "3": {
+                  "color": "dark-blue",
                   "index": 3,
-                  "text": "Unknown"
+                  "text": "⚫ UNKNOWN"
                 }
               },
               "type": "value"
@@ -196,6 +211,18 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              },
+              {
+                "color": "dark-blue",
+                "value": 3
               }
             ]
           },
@@ -231,9 +258,9 @@
         {
           "columns": [
             {
-              "selector": "layers.serving.status",
-              "text": "status",
-              "type": "string"
+              "selector": "batch_status",
+              "text": "Batch Status Code",
+              "type": "number"
             }
           ],
           "datasource": {
@@ -247,14 +274,15 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://serving-api:8000/api/v1/health/system",
+          "url": "http://serving-api:8000/api/v1/health/status-simple",
           "url_options": {
             "data": "",
             "method": "GET"
-          }
+          },
+          "parser": "backend"
         }
       ],
-      "title": "📊 Serving Layer",
+      "title": "📦 Batch Layer Status (5 Services)",
       "type": "stat"
     },
     {
@@ -270,40 +298,40 @@
           "mappings": [
             {
               "options": {
-                "healthy": {
+                "0": {
                   "color": "green",
                   "index": 0,
-                  "text": "Healthy"
+                  "text": "✅ HEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "degraded": {
+                "1": {
                   "color": "yellow",
                   "index": 1,
-                  "text": "Degraded"
+                  "text": "⚠️ DEGRADED"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unhealthy": {
+                "2": {
                   "color": "red",
                   "index": 2,
-                  "text": "Unhealthy"
+                  "text": "🔴 UNHEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unknown": {
-                  "color": "gray",
+                "3": {
+                  "color": "dark-blue",
                   "index": 3,
-                  "text": "Unknown"
+                  "text": "⚫ UNKNOWN"
                 }
               },
               "type": "value"
@@ -315,6 +343,18 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              },
+              {
+                "color": "dark-blue",
+                "value": 3
               }
             ]
           },
@@ -350,9 +390,9 @@
         {
           "columns": [
             {
-              "selector": "layers.batch.status",
-              "text": "status",
-              "type": "string"
+              "selector": "speed_status",
+              "text": "Speed Status Code",
+              "type": "number"
             }
           ],
           "datasource": {
@@ -366,14 +406,15 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://serving-api:8000/api/v1/health/system",
+          "url": "http://serving-api:8000/api/v1/health/status-simple",
           "url_options": {
             "data": "",
             "method": "GET"
-          }
+          },
+          "parser": "backend"
         }
       ],
-      "title": "⏱️ Batch Layer",
+      "title": "⚡ Speed Layer Status (9 Services)",
       "type": "stat"
     },
     {
@@ -389,40 +430,40 @@
           "mappings": [
             {
               "options": {
-                "healthy": {
+                "0": {
                   "color": "green",
                   "index": 0,
-                  "text": "Healthy"
+                  "text": "✅ HEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "degraded": {
+                "1": {
                   "color": "yellow",
                   "index": 1,
-                  "text": "Degraded"
+                  "text": "⚠️ DEGRADED"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unhealthy": {
+                "2": {
                   "color": "red",
                   "index": 2,
-                  "text": "Unhealthy"
+                  "text": "🔴 UNHEALTHY"
                 }
               },
               "type": "value"
             },
             {
               "options": {
-                "unknown": {
-                  "color": "gray",
+                "3": {
+                  "color": "dark-blue",
                   "index": 3,
-                  "text": "Unknown"
+                  "text": "⚫ UNKNOWN"
                 }
               },
               "type": "value"
@@ -434,6 +475,18 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              },
+              {
+                "color": "dark-blue",
+                "value": 3
               }
             ]
           },
@@ -469,9 +522,9 @@
         {
           "columns": [
             {
-              "selector": "layers.speed.status",
-              "text": "status",
-              "type": "string"
+              "selector": "serving_status",
+              "text": "Serving Status Code",
+              "type": "number"
             }
           ],
           "datasource": {
@@ -485,14 +538,15 @@
           "root_selector": "",
           "source": "url",
           "type": "json",
-          "url": "http://serving-api:8000/api/v1/health/system",
+          "url": "http://serving-api:8000/api/v1/health/status-simple",
           "url_options": {
             "data": "",
             "method": "GET"
-          }
+          },
+          "parser": "backend"
         }
       ],
-      "title": "⚡ Speed Layer",
+      "title": "🎯 Serving Layer Status (6 Services)",
       "type": "stat"
     },
     {
@@ -555,7 +609,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "gray"
+                  "fixedColor": "dark-blue"
                 }
               }
             ]

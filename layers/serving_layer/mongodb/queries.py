@@ -471,6 +471,7 @@ class MovieQueries:
         self,
         exclude_ids: List[int],
         genres: Optional[List[str]] = None,
+        franchises: Optional[List[str]] = None,
         year_min: Optional[int] = None,
         year_max: Optional[int] = None,
         limit: int = 500
@@ -481,8 +482,9 @@ class MovieQueries:
         Args:
             exclude_ids: Movie IDs to exclude (the input movies)
             genres: Optional list of genres to filter by
-            year_min: Optional minimum release year
-            year_max: Optional maximum release year
+            franchises: Optional list of franchises to prioritize
+            year_min: Optional minimum release year (deprecated, not used)
+            year_max: Optional maximum release year (deprecated, not used)
             limit: Maximum number of candidates to return
         
         Returns:
@@ -490,19 +492,17 @@ class MovieQueries:
         """
         query = {'movie_id': {'$nin': exclude_ids}}
         
-        # Build OR conditions for genre/year filtering
+        # Build OR conditions for genre/franchise filtering (year removed)
         or_conditions = []
         
         if genres:
             or_conditions.append({'genre': {'$in': genres}})
         
-        if year_min is not None and year_max is not None:
-            or_conditions.append({
-                'release_year': {
-                    '$gte': year_min,
-                    '$lte': year_max
-                }
-            })
+        if franchises:
+            # Also include franchise matches (high priority)
+            or_conditions.append({'franchise': {'$in': franchises}})
+        
+        # Year filtering removed - similarity engine handles year proximity with decay
         
         if or_conditions:
             query['$or'] = or_conditions

@@ -113,7 +113,7 @@ async def get_movie_details(movie_id: int):
 @router.get("/grafana/movies")
 async def get_movies_for_grafana(
     q: Optional[str] = Query(None, description="Search query (movie title)"),
-    limit: int = Query(200, ge=1, le=500, description="Maximum number of results")
+    limit: Optional[int] = Query(None, ge=1, le=5000, description="Optional limit (default: all movies)")
 ):
     """
     Get movies formatted for Grafana variable dropdowns
@@ -123,7 +123,7 @@ async def get_movies_for_grafana(
     
     Args:
         q: Optional search query (partial title match, case-insensitive)
-        limit: Maximum results (default 200 popular movies)
+        limit: Optional limit (default: returns all movies, sorted by popularity)
     
     Returns:
         Array of objects with:
@@ -152,7 +152,11 @@ async def get_movies_for_grafana(
         cursor = collection.find(
             query_filter,
             {'movie_id': 1, 'title': 1, 'release_year': 1, '_id': 0}
-        ).sort('popularity', -1).limit(limit)
+        ).sort('popularity', -1)
+        
+        # Apply limit only if specified
+        if limit:
+            cursor = cursor.limit(limit)
         
         # Format for Grafana
         movies = []

@@ -3,9 +3,9 @@ Similarity Engine - Content-Based Filtering
 Goal #3: Content Recommendation Optimization
 
 Implements cosine similarity for movie recommendations based on:
-- Genre matching
-- Director matching  
-- Franchise matching
+- Genre matching (with related genres support)
+- Director matching (with co-directors support)
+- Franchise matching (heavily weighted)
 - Budget tier similarity
 - Release year proximity
 """
@@ -18,6 +18,36 @@ logger = logging.getLogger(__name__)
 
 # Budget tier ordering for adjacency calculation
 BUDGET_TIERS = ["indie", "mid", "blockbuster", "unknown"]
+
+# Related genres mapping (genres that often go together)
+RELATED_GENRES = {
+    'Action': ['Adventure', 'Science Fiction', 'Thriller'],
+    'Adventure': ['Action', 'Fantasy', 'Science Fiction'],
+    'Science Fiction': ['Action', 'Adventure', 'Thriller'],
+    'Fantasy': ['Adventure', 'Action', 'Animation'],
+    'Animation': ['Family', 'Fantasy', 'Adventure'],
+    'Family': ['Animation', 'Adventure', 'Comedy'],
+    'Comedy': ['Romance', 'Family', 'Drama'],
+    'Romance': ['Comedy', 'Drama'],
+    'Drama': ['Romance', 'Crime', 'Mystery'],
+    'Crime': ['Thriller', 'Drama', 'Mystery'],
+    'Thriller': ['Action', 'Crime', 'Mystery', 'Horror'],
+    'Horror': ['Thriller', 'Mystery'],
+    'Mystery': ['Thriller', 'Crime', 'Horror'],
+    'War': ['Action', 'Drama', 'History'],
+    'History': ['Drama', 'War'],
+    'Western': ['Action', 'Drama'],
+    'Music': ['Drama', 'Documentary'],
+    'Documentary': ['History', 'Drama']
+}
+
+# Common co-director patterns (e.g., Russo Brothers)
+CO_DIRECTOR_PAIRS = [
+    {'Anthony Russo', 'Joe Russo'},
+    {'Joel Coen', 'Ethan Coen'},
+    {'Lana Wachowski', 'Lilly Wachowski'},
+    {'Peter Farrelly', 'Bobby Farrelly'},
+]
 
 
 def build_feature_vector(movie: Dict[str, Any]) -> Dict[str, Any]:
@@ -49,24 +79,35 @@ def build_feature_vector(movie: Dict[str, Any]) -> Dict[str, Any]:
 def calculate_feature_similarity(vec_a: Dict[str, Any], vec_b: Dict[str, Any]) -> np.ndarray:
     """
     Calculate similarity between two feature vectors.
+
+    Returns a 5-element numeric vector with weighted similarity scores.
+    Each dimension represents a similarity component.
     
-    Returns a 5-element numeric vector for cosine similarity calculation.
-    Each dimension is a similarity score [0, 1].
+    Feature weights (for cosine similarity):
+    - Genre: 1.0 (standard weight - reduced importance)
+    - Director: 4.0 (4x weight - very important!)
+    - Franchise: 8.0 (8x weight - MOST important!)
+    - Budget Tier: 1.0 (standard weight)
+    - Year: 1.0 (standard weight)
+    
+    Total weight = 1 + 4 + 8 + 1 + 1 = 15
+    Franchise contribution: 8/15 = ~53% (DOMINANT)
+    Director contribution: 4/15 = ~27%
+    Genre contribution: 1/15 = ~7% (reduced)
+    Budget/Year: 1/15 each = ~7% each
     
     Args:
         vec_a: Feature vector dict
         vec_b: Feature vector dict
     
     Returns:
-        numpy array of similarity scores
+        numpy array of WEIGHTED similarity scores
     """
-    # 1. Genre Match (binary: 1 if same, 0 otherwise)
-    genre_match = 1.0 if (vec_a['genre'] and vec_b['genre'] and 
-                          vec_a['genre'] == vec_b['genre']) else 0.0
+    # 1. Genre Match (0, 0.5 for related, 1 for exact)
+    genre_match = calculate_genre_similarity(vec_a['genre'], vec_b['genre'])
     
-    # 2. Director Match (binary: 1 if same, 0 otherwise)
-    director_match = 1.0 if (vec_a['director'] and vec_b['director'] and 
-                             vec_a['director'] == vec_b['director']) else 0.0
+    # 2. Director Match (0, 0.75 for co-directors, 1 for exact)
+    director_match = calculate_director_similarity(vec_a['director'], vec_b['director'])
     
     # 3. Franchise Match (binary: 1 if same franchise, 0 otherwise)
     franchise_match = 1.0 if (vec_a['franchise'] and vec_b['franchise'] and 
@@ -84,8 +125,73 @@ def calculate_feature_similarity(vec_a: Dict[str, Any], vec_b: Dict[str, Any]) -
         vec_b['release_year']
     )
     
+    # Apply feature weights to increase importance of key features
+    # Franchise is now DOMINANT (53%), Director is important (27%), Genre reduced (7%)
+    weighted_genre = genre_match * 1.0        # Standard weight (7% - REDUCED)
+    weighted_director = director_match * 4.0  # 4x weight (27% - VERY IMPORTANT)
+    weighted_franchise = franchise_match * 8.0  # 8x weight (53% - DOMINANT!)
+    weighted_budget = budget_sim * 1.0        # Standard weight (7%)
+    weighted_year = year_prox * 1.0           # Standard weight (7%)
+    
     # Return as numpy array for cosine similarity
-    return np.array([genre_match, director_match, franchise_match, budget_sim, year_prox])
+    return np.array([weighted_genre, weighted_director, weighted_franchise, 
+                     weighted_budget, weighted_year])
+
+
+def calculate_genre_similarity(genre_a: str, genre_b: str) -> float:
+    """
+    Calculate similarity between genres, considering related genres.
+    
+    Args:
+        genre_a: First genre
+        genre_b: Second genre
+    
+    Returns:
+        1.0 if exact match
+        0.5 if related genres
+        0.0 if unrelated
+    """
+    if not genre_a or not genre_b:
+        return 0.0
+    
+    if genre_a == genre_b:
+        return 1.0
+    
+    # Check if genres are related
+    if genre_a in RELATED_GENRES:
+        if genre_b in RELATED_GENRES[genre_a]:
+            return 0.5
+    
+    return 0.0
+
+
+def calculate_director_similarity(director_a: str, director_b: str) -> float:
+    """
+    Calculate similarity between directors, considering co-director teams.
+    
+    For example, Anthony Russo and Joe Russo (Russo Brothers) should match.
+    
+    Args:
+        director_a: First director
+        director_b: Second director
+    
+    Returns:
+        1.0 if exact match
+        0.75 if co-directors (e.g., Russo Brothers)
+        0.0 if different
+    """
+    if not director_a or not director_b:
+        return 0.0
+    
+    if director_a == director_b:
+        return 1.0
+    
+    # Check if they are co-directors
+    for pair in CO_DIRECTOR_PAIRS:
+        if director_a in pair and director_b in pair:
+            return 0.75
+    
+    return 0.0
 
 
 def calculate_budget_tier_similarity(tier_a: str, tier_b: str) -> float:

@@ -357,32 +357,22 @@ async def get_similar_movies_impl(
         # Prepare candidate search criteria
         exclude_ids = movie_ids
         
-        if len(targets) == 1:
-            # Single movie: narrow search
-            target = targets[0]
-            genres = [target.get('genre')] if target.get('genre') else None
-            year = target.get('release_year')
-            year_min = year - 3 if year else None
-            year_max = year + 3 if year else None
-        else:
-            # Multiple movies: broader search
-            all_genres = list(set([t.get('genre') for t in targets if t.get('genre')]))
-            genres = all_genres if all_genres else None
-            all_years = [t.get('release_year') for t in targets if t.get('release_year')]
-            if all_years:
-                year_min = min(all_years) - 3
-                year_max = max(all_years) + 3
-            else:
-                year_min = None
-                year_max = None
+        # Collect franchises from target movies (important for franchise-based matching)
+        franchises = list(set([t.get('franchise') for t in targets if t.get('franchise')]))
+        franchises = franchises if franchises else None
         
-        # Get candidate movies
+        # Collect genres from target movies
+        all_genres = list(set([t.get('genre') for t in targets if t.get('genre')]))
+        genres = all_genres if all_genres else None
+        
+        # Get candidate movies - franchise and genre based only (no year filtering)
         candidates = queries.get_candidate_movies_for_similarity(
             exclude_ids=exclude_ids,
             genres=genres,
-            year_min=year_min,
-            year_max=year_max,
-            limit=500
+            franchises=franchises,  # Include franchise matches
+            year_min=None,  # Removed year filtering
+            year_max=None,  # Removed year filtering
+            limit=1000  # Increased from 500 to ensure franchise movies are included
         )
         
         if not candidates:

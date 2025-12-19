@@ -1796,6 +1796,315 @@
       ],
       "title": "🎨 Genre Performance Heatmap",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rank"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "movie_title"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "similarity_score"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.6
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_average"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 6
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 7
+                    },
+                    {
+                      "color": "green",
+                      "value": 8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "matched_with"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 2
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 12,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rank",
+            "desc": false
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "movie_id": true
+            },
+            "indexByName": {
+              "rank": 0,
+              "movie_title": 1,
+              "similarity_score": 2,
+              "shared_genre": 3,
+              "release_year_diff": 4,
+              "matched_with": 5,
+              "vote_average": 6,
+              "popularity": 7,
+              "vote_count": 8
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "movie_title": "Movie Title",
+              "similarity_score": "Similarity",
+              "shared_genre": "Shared Genre",
+              "release_year_diff": "Year Diff",
+              "matched_with": "Matches",
+              "vote_average": "Rating",
+              "popularity": "Popularity",
+              "vote_count": "Votes"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "number"
+            },
+            {
+              "selector": "movie_id",
+              "text": "movie_id",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "movie_title",
+              "type": "string"
+            },
+            {
+              "selector": "similarity_score",
+              "text": "similarity_score",
+              "type": "number"
+            },
+            {
+              "selector": "shared_genre",
+              "text": "shared_genre",
+              "type": "string"
+            },
+            {
+              "selector": "release_year_diff",
+              "text": "release_year_diff",
+              "type": "number"
+            },
+            {
+              "selector": "matched_with",
+              "text": "matched_with",
+              "type": "number"
+            },
+            {
+              "selector": "vote_average",
+              "text": "vote_average",
+              "type": "number"
+            },
+            {
+              "selector": "popularity",
+              "text": "popularity",
+              "type": "number"
+            },
+            {
+              "selector": "vote_count",
+              "text": "vote_count",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "similar_movies",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/similar?ids=${user_movies:csv}&strategy=${similarity_strategy}&limit=20",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🎯 Personalized Recommendations (Select 2-5 favorite movies from dropdown above)",
+      "type": "table",
+      "description": "💡 How to use: 1) Click 'Your Favorite Movies' dropdown above, 2) Type movie name to search (e.g., 'Avengers', 'Matrix'), 3) Select 2-5 movies, 4) Choose strategy. The algorithm finds similar movies based on genre, director, franchise, budget tier, and release year. Current selection: Avengers: Endgame + Interstellar (default examples)."
     }
   ],
   "refresh": "5m",
@@ -1906,6 +2215,85 @@
           }
         ],
         "query": "All,Action,Adventure,Animation,Comedy,Crime,Documentary,Drama,Family,Fantasy,Horror,Mystery,Romance,Science Fiction,Thriller,War,Western",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "Avengers: Endgame (2019)",
+            "Interstellar (2014)"
+          ],
+          "value": [
+            "299534",
+            "157336"
+          ]
+        },
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "infinity"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Your Favorite Movies (Type to search in dropdown)",
+        "multi": true,
+        "name": "user_movies",
+        "options": [],
+        "query": {
+          "infinityQuery": {
+            "columns": [],
+            "filters": [],
+            "format": "table",
+            "refId": "variable",
+            "root_selector": "",
+            "source": "url",
+            "type": "json",
+            "url": "http://serving-api:8000/api/v1/utilities/grafana/movies?limit=200",
+            "url_options": {
+              "data": "",
+              "method": "GET"
+            }
+          },
+          "query": "http://serving-api:8000/api/v1/utilities/grafana/movies?limit=200",
+          "queryType": "infinity"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "average",
+          "value": "average"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Recommendation Strategy",
+        "multi": false,
+        "name": "similarity_strategy",
+        "options": [
+          {
+            "selected": true,
+            "text": "average",
+            "value": "average"
+          },
+          {
+            "selected": false,
+            "text": "union",
+            "value": "union"
+          },
+          {
+            "selected": false,
+            "text": "intersection",
+            "value": "intersection"
+          }
+        ],
+        "query": "average,union,intersection",
         "skipUrlSync": false,
         "type": "custom"
       }

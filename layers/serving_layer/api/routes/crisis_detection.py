@@ -37,20 +37,21 @@ def get_severity(deviation_sigma: float) -> str:
     """
     Calculate severity level from deviation sigma
     
-    Thresholds calibrated using AVERAGE sentiment (Strategy 4 - Round Numbers):
-    - Critical: σ < -70 (bottom 1% of negative deviations)
-    - High: σ < -30 (bottom 5% of negative deviations)
-    - Warning: σ < -25 (bottom 15% of negative deviations)
-    - Normal: σ >= -25
+    Thresholds calibrated after fixing baseline compression (Rounded for clarity):
+    - Critical: σ < -8.0 (mean - 3σ) → ~6% of movies
+    - High: σ < -5.0 (mean - 2σ) → ~6% of movies  
+    - Warning: σ < -2.0 (mean - 1σ) → ~10% of movies
+    - Normal: σ >= -2.0
     
-    Based on percentiles: 1%=-74.1, 5%=-54.6, 15%=-27.2
-    Rounded for practical use and easy interpretation
+    Calibration date: 2025-12-19
+    Dataset: 62 movies, mean=1.196, stddev=2.979
+    Based on: 1%=-7.85, 5%=-5.17, 10%=-1.75
     """
-    if deviation_sigma < -70:
+    if deviation_sigma < -8.0:
         return "critical"
-    elif deviation_sigma < -30:
+    elif deviation_sigma < -5.0:
         return "high"
-    elif deviation_sigma < -25:
+    elif deviation_sigma < -2.0:
         return "warning"
     else:
         return "normal"
@@ -460,8 +461,8 @@ async def get_crisis_alerts(
                 alerts.append(CrisisAlert(
                     movie_id=batch_movie.get("movie_id"),
                     movie_title=batch_movie.get("title"),
-                    current_sentiment=round(S_current, 2),
-                    baseline_sentiment=round(S_baseline, 2),
+                    current_sentiment=round(S_current, 3),
+                    baseline_sentiment=round(S_baseline, 4),
                     baseline_type=baseline_type,
                     deviation_sigma=round(σ, 2),
                     severity=alert_severity,
@@ -790,20 +791,11 @@ async def get_monitoring_data():
             σ = (S_current - S_baseline) / σ_baseline
             severity = get_severity(σ)
             
-            # Count by severity (Round Numbers - Strategy 4)
-            # - Critical: σ < -70 (bottom 1% of negative deviations)
-            # - High: σ < -30 (bottom 5% of negative deviations)
-            # - Warning: σ < -25 (bottom 15% of negative deviations)
-            if σ < -70:
-                severity_counts["critical"] += 1
+            # Count by severity using get_severity function
+            severity_counts[severity] += 1
+            
+            if severity in ["critical", "high"]:
                 crisis_movies += 1
-            elif σ < -30:
-                severity_counts["high"] += 1
-                crisis_movies += 1
-            elif σ < -25:
-                severity_counts["warning"] += 1
-            else:
-                severity_counts["normal"] += 1
             
             # Calculate sentiment velocity (rate of change)
             # Get sentiment from 1 hour ago

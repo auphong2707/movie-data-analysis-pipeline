@@ -40,97 +40,6 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "orange",
-                "value": 3
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.0.0",
-      "targets": [
-        {
-          "columns": [
-            {
-              "selector": "crisis_movies",
-              "text": "Crisis Movies",
-              "type": "number"
-            }
-          ],
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "infinity"
-          },
-          "filters": [],
-          "format": "table",
-          "global_query_id": "",
-          "refId": "A",
-          "root_selector": "",
-          "source": "url",
-          "type": "json",
-          "url": "http://serving-api:8000/api/v1/crisis-detection/monitoring",
-          "url_options": {
-            "data": "",
-            "method": "GET"
-          },
-          "parser": "backend"
-        }
-      ],
-      "title": "🚨 Active Alerts",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "infinity"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
                 "color": "dark-red",
                 "value": 1
               }
@@ -141,9 +50,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
+        "h": 5,
+        "w": 8,
+        "x": 0,
         "y": 0
       },
       "id": 2,
@@ -192,7 +101,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🔴 Critical Alerts (σ < -70)",
+      "title": "🔴 Critical Alerts (σ < -8.0)",
       "type": "stat"
     },
     {
@@ -224,9 +133,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
+        "h": 5,
+        "w": 8,
+        "x": 8,
         "y": 0
       },
       "id": 3,
@@ -275,7 +184,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🟠 High Alerts (-70 ≤ σ < -30)",
+      "title": "🟠 High Alerts (-8.0 ≤ σ < -5.0)",
       "type": "stat"
     },
     {
@@ -307,9 +216,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
+        "h": 5,
+        "w": 8,
+        "x": 16,
         "y": 0
       },
       "id": 4,
@@ -358,7 +267,7 @@
           "parser": "backend"
         }
       ],
-      "title": "🟡 Warning Alerts (-30 ≤ σ < -25)",
+      "title": "🟡 Warning Alerts (-5.0 ≤ σ < -2.0)",
       "type": "stat"
     },
     {
@@ -391,7 +300,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "dark-red"
+                  "fixedColor": "red"
                 }
               }
             ]
@@ -406,7 +315,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "dark-orange"
+                  "fixedColor": "orange"
                 }
               }
             ]
@@ -421,7 +330,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "dark-yellow"
+                  "fixedColor": "yellow"
                 }
               }
             ]
@@ -430,9 +339,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 10,
         "x": 0,
-        "y": 4
+        "y": 5
       },
       "id": 5,
       "options": {
@@ -462,22 +371,22 @@
         }
       },
       "pluginVersion": "11.0.0",
-      "targets": [
+        "targets": [
         {
           "columns": [
             {
               "selector": "critical",
-              "text": "Critical",
+              "text": "critical",
               "type": "number"
             },
             {
               "selector": "high",
-              "text": "High",
+              "text": "high",
               "type": "number"
             },
             {
               "selector": "warning",
-              "text": "Warning",
+              "text": "warning",
               "type": "number"
             }
           ],
@@ -552,9 +461,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 16,
-        "x": 8,
-        "y": 4
+        "w": 14,
+        "x": 10,
+        "y": 5
       },
       "id": 6,
       "options": {
@@ -663,7 +572,7 @@
             "properties": [
               {
                 "id": "decimals",
-                "value": 2
+                "value": 3
               },
               {
                 "id": "custom.width",
@@ -679,11 +588,11 @@
             "properties": [
               {
                 "id": "decimals",
-                "value": 2
+                "value": 4
               },
               {
                 "id": "custom.width",
-                "value": 150
+                "value": 160
               }
             ]
           },

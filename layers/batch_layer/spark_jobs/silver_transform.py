@@ -385,12 +385,26 @@ class BaselineCalculationJob:
         Generate sentiment baselines for Business Goal #1: PR Crisis Detection.
         
         Produces genre/franchise/director/temporal sentiment patterns.
+        
+        CRITICAL FIX: Filters out movies with no reviews (review_count=0 or avg_sentiment=0)
+        to prevent zero-sentiment movies from compressing baselines and causing scale mismatch
+        with speed layer sentiments.
         """
         logger.info("Generating sentiment baselines for Goal #1")
         
         try:
+            # FILTER: Only include movies with actual reviews to prevent baseline compression
+            # Movies with review_count=0 or avg_sentiment=0.0 dilute baselines by ~1000x
+            movies_with_reviews = enriched_movies_df.filter(
+                (F.col("review_count") > 0) & (F.col("avg_sentiment") != 0.0)
+            )
+            
+            movies_before = enriched_movies_df.count()
+            movies_after = movies_with_reviews.count()
+            logger.info(f"Filtered movies: {movies_before} -> {movies_after} (removed {movies_before - movies_after} with no reviews)")
+            
             # Genre-level baselines
-            genre_baselines = enriched_movies_df.groupBy("primary_genre").agg(
+            genre_baselines = movies_with_reviews.groupBy("primary_genre").agg(
                 F.avg("avg_sentiment").alias("avg_sentiment"),
                 F.stddev("avg_sentiment").alias("sentiment_stddev"),
                 F.count("*").alias("movie_count"),
@@ -408,7 +422,7 @@ class BaselineCalculationJob:
             )
             
             # Franchise-level baselines (franchise dimension only, genre=null)
-            franchise_baselines = enriched_movies_df.filter(
+            franchise_baselines = movies_with_reviews.filter(
                 F.col("franchise").isNotNull()
             ).groupBy("franchise").agg(
                 F.avg("avg_sentiment").alias("franchise_avg_sentiment"),
@@ -428,7 +442,7 @@ class BaselineCalculationJob:
             )
             
             # Year-level baselines (year dimension only, genre=null)
-            yearly_baselines = enriched_movies_df.filter(
+            yearly_baselines = movies_with_reviews.filter(
                 F.col("release_year").isNotNull()
             ).groupBy("release_year").agg(
                 F.avg("avg_sentiment").alias("yearly_sentiment"),

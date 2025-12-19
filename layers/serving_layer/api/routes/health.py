@@ -381,3 +381,43 @@ async def system_metrics():
             }
         }
     }
+
+
+@router.get("/services")
+async def list_all_services():
+    """
+    List all services across all layers in a flat array format
+    Optimized for Grafana table visualization
+    
+    Returns:
+        dict: Flat list of all services with their status
+    """
+    # Get the full system health
+    system_health = await system_health_overview()
+    
+    services = []
+    
+    # Extract services from each layer
+    for layer_name, layer_data in system_health["layers"].items():
+        layer_display = {
+            "serving": "Serving",
+            "batch": "Batch", 
+            "speed": "Speed"
+        }.get(layer_name, layer_name.title())
+        
+        for service_name, service_data in layer_data["services"].items():
+            if isinstance(service_data, dict):
+                services.append({
+                    "layer": layer_display,
+                    "service": service_name.replace("_", " ").title(),
+                    "status": service_data.get("status", "unknown"),
+                    "response_time_ms": service_data.get("response_time_ms"),
+                    "note": service_data.get("note"),
+                    "status_code": service_data.get("status_code")
+                })
+    
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_services": len(services),
+        "services": services
+    }

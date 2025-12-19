@@ -1,0 +1,1321 @@
+"""
+View Merger - Merge Batch and Speed Layer Views
+
+Implements the 48-hour cutoff strategy for merging batch accuracy 
+with speed freshness in the Lambda Architecture.
+"""
+
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from pymongo.database import Database
+import logging
+import math
+
+from .utils import normalize_title, fuzzy_match_title, extract_base_title
+
+logger = logging.getLogger(__name__)
+
+
+class ViewMerger:
+    """
+    Merges batch and speed layer views with 48-hour cutoff strategy
+    
+    Updated to work with 3 separate batch collections:
+    - sentiment_baselines: Genre/franchise/yearly sentiment patterns
+    - viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+    - movie_intelligence: Individual movie competitive data
+    
+    Strategy:
+    - Data older than 48 hours: Use batch layer (accurate, complete)
+    - Data within 48 hours: Use speed layer (fresh, approximate)
+    - On overlap: Speed layer takes precedence (fresher data)
+    """
+    
+    def __init__(self, db: Database, cutoff_hours: int = 48):
+        """
+        Initialize view merger
+        
+        Args:
+            db: MongoDB database instance
+            cutoff_hours: Cutoff time in hours (default: 48)
+        """
+        self.db = db
+        # 3 separate batch collections
+        self.sentiment_baselines = db.sentiment_baselines
+        self.viral_thresholds = db.viral_thresholds
+        self.movie_intelligence = db.movie_intelligence
+        # Speed layer collection
+        self.speed_views = db.speed_views
+        self.cutoff_hours = cutoff_hours
+    
+    def get_cutoff_time(self) -> datetime:
+        """
+        Calculate cutoff time for batch/speed separation
+        
+        Returns:
+            Cutoff datetime (UTC)
+        """
+        return datetime.utcnow() - timedelta(hours=self.cutoff_hours)
+    
+    def _find_movie_intelligence(self, movie_title_key: str) -> Optional[Dict]:
+        """
+        Find movie intelligence with fuzzy matching fallback
+        
+        Strategy:
+        1. Try exact match on title field
+        2. Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
+        3. Try fuzzy matching against all movie_intelligence docs
+        
+        Args:
+            movie_title_key: Movie title from speed layer
+            
+        Returns:
+            Movie intelligence document or None if not found
+        """
+        # Try exact match first (movie_intelligence collection)
+        movie_intel = self.movie_intelligence.find_one({
+            "title": movie_title_key
+        })
+        
+        if movie_intel:
+            logger.debug(f"Exact match found for '{movie_title_key}'")
+            return movie_intel
+        
+        # Try base title without numbers (e.g., "Zootopia 2" -> "Zootopia")
+        base_title = extract_base_title(movie_title_key)
+        if base_title != movie_title_key:
+            movie_intel = self.movie_intelligence.find_one({
+                "title": base_title
+            })
+            
+            if movie_intel:
+                logger.info(f"Base title match: '{movie_title_key}' -> '{base_title}'")
+                return movie_intel
+        
+        # Try fuzzy matching (more expensive, limit results)
+        normalized_search = normalize_title(movie_title_key)
+        
+        # Get all movie_intelligence docs and fuzzy match
+        candidates = self.movie_intelligence.find({}).limit(1000)  # Limit to avoid performance issues
+        
+        for candidate in candidates:
+            candidate_title = candidate.get("title")
+            if candidate_title and fuzzy_match_title(movie_title_key, candidate_title, threshold=0.85):
+                logger.info(f"Fuzzy matched '{movie_title_key}' -> '{candidate_title}'")
+                return candidate
+        
+        logger.warning(f"No match found for movie_title: '{movie_title_key}'")
+        return None
+    
+    def merge_movie_views(
+        self,
+        movie_id: int
+    ) -> Dict[str, Any]:
+        """
+        Merge batch and speed views for a specific movie
+        
+        Returns complete movie information by merging:
+        - Batch: movie_intelligence collection (static metadata)
+        - Speed: stats data_type (real-time stats)
+        
+        Args:
+            movie_id: TMDB movie ID
+        
+        Returns:
+            Complete movie information with both metadata and current stats
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        # Get movie_intelligence from batch layer (static metadata)
+        batch_details = self.movie_intelligence.find_one({
+            'movie_id': movie_id
+        })
+        
+        # Get latest stats from speed layer (real-time)
+        speed_stats = self.speed_views.find_one(
+            {
+                'movie_id': movie_id,
+                'data_type': 'stats',
+                'hour': {'$gte': cutoff_time}
+            },
+            sort=[('hour', -1)]
+        )
+        
+        if not batch_details and not speed_stats:
+            return {'movie_id': movie_id, 'found': False}
+        
+        # Build response
+        result = {
+            'movie_id': movie_id,
+            'found': True,
+            'data_source': None,
+            'last_updated': None
+        }
+        
+        # Add metadata from batch layer
+        if batch_details:
+            # Handle both old schema (with 'data' field) and new schema (flat structure)
+            if 'data' in batch_details:
+                data = batch_details['data']
+                result.update({
+                    'title': data.get('title'),
+                    'release_date': data.get('release_date'),
+                    'genres': data.get('genres', []),
+                    'runtime': data.get('runtime'),
+                    'budget': data.get('budget'),
+                    'revenue': data.get('revenue'),
+                    'overview': data.get('overview'),
+                    'original_language': data.get('original_language')
+                })
+            else:
+                # New schema - flat structure (movie_intelligence)
+                result.update({
+                    'title': batch_details.get('title'),
+                    'release_date': batch_details.get('release_date'),
+                    'genres': [batch_details.get('genre')] if batch_details.get('genre') else [],
+                    'runtime': batch_details.get('runtime'),
+                    'budget': batch_details.get('budget'),
+                    'revenue': None,  # not in movie_intelligence schema
+                    'overview': None,  # not in movie_intelligence schema
+                    'original_language': None  # not in movie_intelligence schema
+                })
+        
+        # Add current stats - prefer speed layer if available
+        if speed_stats and 'stats' in speed_stats:
+            stats = speed_stats['stats']
+            result.update({
+                'vote_average': stats.get('vote_average'),
+                'vote_count': stats.get('vote_count'),
+                'popularity': stats.get('popularity'),
+                'data_source': 'speed',
+                'last_updated': speed_stats.get('hour')
+            })
+        elif batch_details:
+            # Fallback to batch layer stats
+            if 'data' in batch_details:
+                data = batch_details['data']
+                result.update({
+                    'vote_average': data.get('vote_average'),
+                    'vote_count': data.get('vote_count'),
+                    'popularity': data.get('popularity'),
+                    'data_source': 'batch',
+                    'last_updated': batch_details.get('computed_at')
+                })
+            else:
+                # New schema - flat structure
+                result.update({
+                    'vote_average': batch_details.get('vote_average'),
+                    'vote_count': batch_details.get('vote_count'),
+                    'popularity': batch_details.get('popularity'),
+                    'data_source': 'batch',
+                    'last_updated': batch_details.get('updated_at')
+                })
+        
+        return result
+    
+    def merge_sentiment_views(
+        self,
+        movie_id: int,
+        window: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Merge sentiment data from batch and speed layers
+        
+        Updated schema:
+        - Batch: sentiment_baselines collection (genre/franchise/yearly patterns)
+        - Batch: movie_intelligence collection (per-movie avg_sentiment)
+        - Speed: data_type='sentiment', data={avg_sentiment, review_count, sentiment_velocity, ...}
+        
+        Args:
+            movie_id: TMDB movie ID
+            window: Time window (7d, 30d, all)
+        
+        Returns:
+            Merged sentiment analysis with breakdown
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        # Get movie details from movie_intelligence collection
+        movie_details = self.movie_intelligence.find_one({
+            'movie_id': movie_id
+        })
+        
+        # Extract title
+        if movie_details:
+            title = movie_details.get('title')
+        else:
+            title = None
+        
+        # Get batch sentiment from movie_intelligence collection
+        batch_sentiment = movie_details  # movie_intelligence has avg_sentiment field
+        
+        # Query speed layer for recent sentiment (< 48h)
+        # Speed layer uses movie_title, not movie_id
+        speed_sentiment_docs = []
+        if title:
+            speed_sentiment_docs = list(
+                self.speed_views.find({
+                    'movie_title': title,
+                    'data_type': {'$in': ['reddit_post', 'reddit_comment']},
+                    'hour': {'$gte': cutoff_time}
+                }).sort('hour', -1)
+            )
+        
+        # Calculate overall sentiment
+        overall_sentiment = {}
+        breakdown = []
+        
+        if batch_sentiment:
+            # Use movie_intelligence schema (flat structure)
+            avg_sent = batch_sentiment.get('avg_sentiment', 0)
+            review_cnt = batch_sentiment.get('review_count', 0)
+            overall_sentiment = {
+                'overall_score': avg_sent,
+                'label': self._get_sentiment_label(avg_sent),
+                'positive_count': 0,  # not in movie_intelligence schema
+                'negative_count': 0,  # not in movie_intelligence schema
+                'neutral_count': 0,   # not in movie_intelligence schema
+                'total_reviews': review_cnt,
+                'velocity': 0,
+                'confidence': 0.7 if review_cnt > 0 else 0.3
+            }
+        
+        # Add speed layer sentiment (recent updates from Reddit)
+        if speed_sentiment_docs:
+            # Aggregate Reddit metrics across all recent documents
+            total_post_count = 0
+            total_sentiment_sum = 0
+            
+            for doc in speed_sentiment_docs:
+                if 'metrics' in doc:
+                    metrics = doc['metrics']
+                    post_count = metrics.get('post_count', 0)
+                    avg_sentiment = metrics.get('avg_sentiment', 0)
+                    
+                    total_post_count += post_count
+                    total_sentiment_sum += avg_sentiment * post_count
+                    
+                    # Create breakdown from speed layer hourly data
+                    if 'hour' in doc:
+                        data_type = doc.get('data_type', 'reddit')
+                        # Use appropriate field name based on data type
+                        if data_type == 'reddit_comment':
+                            breakdown.append({
+                                'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
+                                'avg_sentiment': avg_sentiment,
+                                'comment_count': post_count,
+                                'data_type': data_type
+                            })
+                        else:
+                            breakdown.append({
+                                'date': doc['hour'].strftime('%Y-%m-%d %H:%M') if isinstance(doc['hour'], datetime) else str(doc['hour']),
+                                'avg_sentiment': avg_sentiment,
+                                'post_count': post_count,
+                                'data_type': data_type
+                            })
+            
+            # Calculate weighted average sentiment from speed layer
+            if total_post_count > 0:
+                speed_avg_sentiment = total_sentiment_sum / total_post_count
+                
+                # Merge with batch sentiment
+                if overall_sentiment:
+                    batch_reviews = overall_sentiment.get('total_reviews', 0)
+                    total_reviews = batch_reviews + total_post_count
+                    
+                    if total_reviews > 0:
+                        batch_weight = batch_reviews / total_reviews
+                        speed_weight = total_post_count / total_reviews
+                        
+                        overall_score = (
+                            overall_sentiment.get('overall_score', 0) * batch_weight +
+                            speed_avg_sentiment * speed_weight
+                        )
+                    else:
+                        overall_score = speed_avg_sentiment
+                    
+                    overall_sentiment.update({
+                        'overall_score': overall_score,
+                        'label': self._get_sentiment_label(overall_score),
+                        'total_reviews': total_reviews,
+                        'reddit_mentions': total_post_count,
+                        'confidence': 0.85
+                    })
+                else:
+                    # No batch data, use only speed layer
+                    overall_sentiment = {
+                        'overall_score': speed_avg_sentiment,
+                        'label': self._get_sentiment_label(speed_avg_sentiment),
+                        'positive_count': 0,
+                        'negative_count': 0,
+                        'neutral_count': 0,
+                        'total_reviews': 0,
+                        'reddit_mentions': total_post_count,
+                        'velocity': 0,
+                        'confidence': 0.6
+                    }
+        
+        # Get genres from batch movie intelligence view
+        genres = []
+        try:
+            batch_movie = self.db['batch_views'].find_one({
+                'movie_id': movie_id,
+                'view_type': 'movie_intelligence'
+            }, {'genre': 1})
+            if batch_movie and batch_movie.get('genre'):
+                # batch_views stores single genre string, convert to array for consistency
+                genres = [batch_movie.get('genre')]
+        except Exception as e:
+            self.logger.warning(f"Could not fetch genres for movie {movie_id}: {e}")
+        
+        return {
+            'movie_id': movie_id,
+            'title': title,
+            'genres': genres,
+            'sentiment': overall_sentiment,
+            'breakdown': breakdown,
+            'data_sources': {
+                'batch': cutoff_time.isoformat() if batch_sentiment else None,
+                'speed': datetime.utcnow().isoformat() if speed_sentiment_docs else None
+            }
+        }
+    
+    def _get_sentiment_label(self, score: float) -> str:
+        """Convert sentiment score to label"""
+        if score > 0.3:
+            return 'positive'
+        elif score < -0.3:
+            return 'negative'
+        else:
+            return 'neutral'
+    
+    def merge_trending_views(
+        self,
+        genre: Optional[str] = None,
+        limit: int = 20,
+        window_hours: int = 6
+    ) -> Dict[str, Any]:
+        """
+        Get trending movies from speed layer with real-time stats
+        
+        Calculates trending_score based on:
+        - Popularity (weight: 0.4)
+        - Rating velocity (weight: 0.3)
+        - Vote average (weight: 0.2)
+        - Vote count growth (weight: 0.1)
+        
+        Args:
+            genre: Optional genre filter
+            limit: Maximum number of results
+            window_hours: Time window for trending calculation
+        
+        Returns:
+            List of trending movies with metadata
+        """
+        cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
+        
+        # Aggregate trending from speed layer
+        pipeline = [
+            {'$match': {
+                'data_type': 'stats',
+                'hour': {'$gte': cutoff_time}
+            }},
+            {'$sort': {'hour': 1}},  # Sort ascending to get earliest first
+            # Get stats per movie
+            {'$group': {
+                '_id': '$movie_id',
+                'earliest_stats': {'$first': '$stats'},
+                'earliest_hour': {'$first': '$hour'},
+                'latest_stats': {'$last': '$stats'},
+                'latest_hour': {'$last': '$hour'},
+                'data_points': {'$sum': 1}
+            }},
+            # Calculate trending score and velocity
+            {'$project': {
+                'movie_id': '$_id',
+                'popularity': '$latest_stats.popularity',
+                'vote_average': '$latest_stats.vote_average',
+                'vote_count': '$latest_stats.vote_count',
+                'rating_velocity': '$latest_stats.rating_velocity',
+                'popularity_velocity': {
+                    '$divide': [
+                        {
+                            '$subtract': [
+                                '$latest_stats.popularity',
+                                '$earliest_stats.popularity'
+                            ]
+                        },
+                        {'$max': ['$data_points', 1]}
+                    ]
+                },
+                'trending_score': {
+                    '$add': [
+                        # Popularity contribution (40%)
+                        {'$multiply': [
+                            {'$ifNull': ['$latest_stats.popularity', 0]},
+                            0.4
+                        ]},
+                        # Rating velocity contribution (30%)
+                        {'$multiply': [
+                            {'$ifNull': ['$latest_stats.rating_velocity', 0]},
+                            300
+                        ]},
+                        # Vote average contribution (20%)
+                        {'$multiply': [
+                            {'$ifNull': ['$latest_stats.vote_average', 0]},
+                            2
+                        ]},
+                        # Vote velocity contribution (10%)
+                        {'$multiply': [
+                            {'$ifNull': ['$latest_stats.vote_velocity', 0]},
+                            0.01
+                        ]}
+                    ]
+                },
+                'latest_hour': 1
+            }},
+            {'$sort': {'trending_score': -1}},
+            {'$limit': limit}
+        ]
+        
+        trending_movies = list(self.speed_views.aggregate(pipeline))
+        
+        # Enrich with metadata from movie_intelligence collection
+        enriched_movies = []
+        for rank, movie in enumerate(trending_movies, 1):
+            batch_metadata = self.movie_intelligence.find_one({
+                'movie_id': movie['movie_id']
+            })
+            
+            enriched = {
+                'rank': rank,
+                'movie_id': movie['movie_id'],
+                'title': 'Unknown',
+                'genres': [],
+                'trending_score': round(movie.get('trending_score', 0), 2),
+                'velocity': round(movie.get('popularity_velocity', 0), 2),
+                'acceleration': round(movie.get('rating_velocity', 0), 3),
+                'popularity': round(movie.get('popularity', 0), 2),
+                'vote_average': round(movie.get('vote_average', 0), 2),
+                'vote_count': movie.get('vote_count', 0)
+            }
+            
+            if batch_metadata:
+                enriched['title'] = batch_metadata.get('title', 'Unknown')
+                # Handle both flat genre and genres array
+                genres = batch_metadata.get('genres', [])
+                if not genres:
+                    genre_field = batch_metadata.get('genre')
+                    genres = [genre_field] if genre_field else []
+                enriched['genres'] = genres
+                
+                # Apply genre filter if specified
+                if genre and genre not in enriched['genres']:
+                    continue
+            
+            enriched_movies.append(enriched)
+        
+        return {
+            'trending_movies': enriched_movies[:limit],
+            'generated_at': datetime.utcnow().isoformat(),
+            'window': f'{window_hours}h',
+            'data_source': 'speed'
+        }
+    
+    def merge_analytics_views(
+        self,
+        genre: str,
+        year: Optional[int] = None,
+        month: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Get genre analytics from batch layer
+        
+        Updated to aggregate from movie_intelligence and sentiment_baselines collections
+        
+        Args:
+            genre: Genre to analyze
+            year: Optional year filter
+            month: Optional month filter
+        
+        Returns:
+            Genre analytics with statistics and top movies
+        """
+        # Build query for movie_intelligence collection
+        query = {
+            '$or': [
+                {'genre': genre},
+                {'genres': genre}
+            ]
+        }
+        
+        # Apply year filter if specified
+        if year:
+            query['release_year'] = year
+        
+        # Get movies from movie_intelligence collection
+        movies = list(self.movie_intelligence.find(query))
+        
+        if not movies:
+            return {
+                'genre': genre,
+                'year': year,
+                'month': month,
+                'statistics': {},
+                'top_movies': [],
+                'trends': {},
+                'data_source': 'batch',
+                'found': False
+            }
+        
+        # Calculate statistics from movie_intelligence
+        total_movies = len(movies)
+        avg_rating = sum(m.get('vote_average', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_sentiment = sum(m.get('avg_sentiment', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_popularity = sum(m.get('popularity', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        total_revenue = sum(m.get('revenue', 0) for m in movies)
+        avg_budget = sum(m.get('budget', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        avg_runtime = sum(m.get('runtime', 0) for m in movies) / total_movies if total_movies > 0 else 0
+        
+        # Get sentiment baseline for this genre
+        sentiment_baseline = self.sentiment_baselines.find_one({
+            'genre': genre,
+            'year': year
+        }) if year else self.sentiment_baselines.find_one({'genre': genre})
+        
+        # Build top movies list
+        sorted_movies = sorted(movies, key=lambda x: x.get('vote_average', 0), reverse=True)
+        top_movies = []
+        for movie in sorted_movies:
+            top_movies.append({
+                'movie_id': movie.get('movie_id'),
+                'title': movie.get('title', 'Unknown'),
+                'vote_average': round(movie.get('vote_average', 0), 2),
+                'popularity': round(movie.get('popularity', 0), 2),
+                'vote_count': movie.get('vote_count', 0),
+                'release_date': movie.get('release_date')
+            })
+        
+        result = {
+            'genre': genre,
+            'year': year,
+            'month': month,
+            'statistics': {
+                'total_movies': total_movies,
+                'avg_rating': round(avg_rating, 2),
+                'avg_sentiment': round(avg_sentiment, 3),
+                'avg_popularity': round(avg_popularity, 2),
+                'total_revenue': total_revenue,
+                'avg_budget': round(avg_budget, 2),
+                'avg_runtime': round(avg_runtime, 2),
+                'sentiment_baseline': sentiment_baseline.get('avg_sentiment') if sentiment_baseline else None
+            },
+            'top_movies': top_movies,
+            'trends': {
+                'rating_trend': 'stable',
+                'sentiment_trend': 'stable',
+                'popularity_trend': 'stable'
+            },
+            'data_source': 'batch'
+        }
+        
+        return result
+    
+    def get_temporal_trends(
+        self,
+        metric: str,
+        movie_id: Optional[int] = None,
+        genre: Optional[str] = None,
+        window: str = '30d'
+    ) -> Dict[str, Any]:
+        """
+        Get temporal trends from batch layer
+        
+        Schema: view_type='temporal_trends'
+        data: {metric, col2 (value), col3 (count), date}
+        
+        Args:
+            metric: rating, sentiment, or popularity
+            movie_id: Optional movie filter
+            genre: Optional genre filter  
+            window: Time window (7d, 30d, 90d)
+        
+        Returns:
+            Time-series data points with summary statistics
+        """
+        # Parse window
+        days = int(window.replace('d', ''))
+        start_date = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d')
+        
+        # Build query
+        query = {
+            'view_type': 'temporal_trends',
+            'data.metric': metric,
+            'data.date': {'$gte': start_date}
+        }
+        
+        # Note: movie_id and genre filters not available in current schema
+        
+        # Get trends from batch layer (newest first for real-time relevance)
+        trends = list(
+            self.batch_views.find(query).sort('data.date', -1).limit(1000)
+        )
+        
+        # Extract data points
+        data_points = []
+        values = []
+        
+        for doc in trends:
+            if 'data' in doc:
+                data = doc['data']
+                value = data.get('col2', 0)  # col2 is the value
+                count = data.get('col3', 0)  # col3 is the count
+                point = {
+                    'date': data.get('date'),
+                    'value': round(value, 3) if value else 0,
+                    'count': int(count) if count else 0
+                }
+                data_points.append(point)
+                if value:
+                    values.append(value)
+        
+        # Calculate summary statistics
+        summary = {}
+        if values:
+            summary = {
+                'avg': round(sum(values) / len(values), 3),
+                'min': round(min(values), 3),
+                'max': round(max(values), 3),
+                'trend': self._calculate_trend_direction(values),
+                'change_rate': self._calculate_change_rate(values, days)
+            }
+        else:
+            summary = {
+                'avg': 0,
+                'min': 0,
+                'max': 0,
+                'trend': 'no_data',
+                'change_rate': 0
+            }
+        
+        return {
+            'metric': metric,
+            'window': window,
+            'movie_id': movie_id,
+            'genre': genre,
+            'data_points': data_points,
+            'summary': summary
+        }
+    
+    def _calculate_trend_direction(self, values: List[float]) -> str:
+        """Calculate trend direction from values"""
+        if len(values) < 2:
+            return 'stable'
+        
+        # Simple linear trend
+        first_third = sum(values[:len(values)//3]) / (len(values)//3)
+        last_third = sum(values[-len(values)//3:]) / (len(values)//3)
+        
+        change = (last_third - first_third) / first_third if first_third != 0 else 0
+        
+        if change > 0.05:
+            return 'increasing'
+        elif change < -0.05:
+            return 'decreasing'
+        else:
+            return 'stable'
+    
+    def _calculate_change_rate(self, values: List[float], days: int) -> float:
+        """Calculate change rate per day"""
+        if len(values) < 2:
+            return 0.0
+        
+        total_change = values[-1] - values[0]
+        return round(total_change / days, 6)
+        
+        if batch_analytics:
+            result['statistics'] = {
+                'total_movies': batch_analytics.get('total_movies', 0),
+                'avg_rating': batch_analytics.get('avg_rating', 0),
+                'avg_sentiment': batch_analytics.get('avg_sentiment', 0),
+                'avg_popularity': batch_analytics.get('avg_popularity', 0),
+            }
+            result['data_sources']['batch'] = batch_analytics.get('computed_at')
+        
+        # Add speed layer adjustments
+        if speed_stats:
+            result['statistics']['recent_avg_rating'] = speed_stats.get('avg_rating')
+            result['statistics']['recent_avg_popularity'] = speed_stats.get('avg_popularity')
+            result['data_sources']['speed'] = datetime.utcnow().isoformat()
+        
+        return result
+    
+    # --- Helper Methods ---
+    
+    def _merge_data_points(
+        self,
+        batch_data: List[Dict],
+        speed_data: List[Dict]
+    ) -> List[Dict]:
+        """
+        Merge batch and speed data points, speed takes precedence
+        
+        Args:
+            batch_data: List of batch layer documents
+            speed_data: List of speed layer documents
+        
+        Returns:
+            Merged and deduplicated list
+        """
+        # Create a dict with speed data (takes precedence)
+        merged = {}
+        
+        # Add speed data first
+        for doc in speed_data:
+            timestamp = doc.get('hour')
+            if timestamp:
+                merged[timestamp] = {
+                    'timestamp': timestamp,
+                    'data': doc,
+                    'source': 'speed'
+                }
+        
+        # Add batch data for non-overlapping times
+        for doc in batch_data:
+            timestamp = doc.get('computed_at')
+            if timestamp and timestamp not in merged:
+                merged[timestamp] = {
+                    'timestamp': timestamp,
+                    'data': doc,
+                    'source': 'batch'
+                }
+        
+        # Sort by timestamp (newest first)
+        return sorted(
+            merged.values(),
+            key=lambda x: x['timestamp'],
+            reverse=True
+        )
+    
+    def _calculate_overall_sentiment(
+        self,
+        batch_sentiment: List[Dict],
+        speed_sentiment: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Calculate overall sentiment from batch and speed data
+        
+        Args:
+            batch_sentiment: Batch sentiment documents
+            speed_sentiment: Speed sentiment documents
+        
+        Returns:
+            Overall sentiment metrics
+        """
+        # Prefer speed layer for most recent sentiment
+        if speed_sentiment:
+            latest = speed_sentiment[0]
+            return {
+                'overall_score': latest.get('data', {}).get('avg_sentiment', 0),
+                'label': self._get_sentiment_label(
+                    latest.get('data', {}).get('avg_sentiment', 0)
+                ),
+                'positive_count': latest.get('data', {}).get('positive_count', 0),
+                'negative_count': latest.get('data', {}).get('negative_count', 0),
+                'neutral_count': latest.get('data', {}).get('neutral_count', 0),
+                'total_reviews': latest.get('data', {}).get('review_count', 0),
+                'velocity': latest.get('data', {}).get('sentiment_velocity', 0),
+                'source': 'speed'
+            }
+        elif batch_sentiment:
+            latest = batch_sentiment[0]
+            return {
+                'overall_score': latest.get('data', {}).get('avg_sentiment', 0),
+                'label': self._get_sentiment_label(
+                    latest.get('data', {}).get('avg_sentiment', 0)
+                ),
+                'source': 'batch'
+            }
+        else:
+            return {
+                'overall_score': 0,
+                'label': 'neutral',
+                'source': 'none'
+            }
+    
+    def _create_sentiment_breakdown(
+        self,
+        batch_sentiment: List[Dict],
+        speed_sentiment: List[Dict]
+    ) -> List[Dict]:
+        """
+        Create daily sentiment breakdown
+        
+        Args:
+            batch_sentiment: Batch sentiment documents
+            speed_sentiment: Speed sentiment documents
+        
+        Returns:
+            List of daily sentiment breakdowns
+        """
+        breakdown = []
+        
+        # Add speed data (recent)
+        for doc in speed_sentiment:
+            breakdown.append({
+                'date': doc.get('hour'),
+                'avg_sentiment': doc.get('data', {}).get('avg_sentiment', 0),
+                'review_count': doc.get('data', {}).get('review_count', 0),
+                'source': 'speed'
+            })
+        
+        # Add batch data (historical)
+        for doc in batch_sentiment:
+            breakdown.append({
+                'date': doc.get('computed_at'),
+                'avg_sentiment': doc.get('data', {}).get('avg_sentiment', 0),
+                'review_count': doc.get('data', {}).get('review_count', 0),
+                'source': 'batch'
+            })
+        
+        # Sort by date (newest first)
+        breakdown.sort(key=lambda x: x['date'], reverse=True)
+        
+        return breakdown
+    
+    @staticmethod
+    def _get_sentiment_label(score: float) -> str:
+        """
+        Convert sentiment score to label
+        
+        Args:
+            score: Sentiment score (-1 to 1)
+        
+        Returns:
+            Sentiment label (positive/neutral/negative)
+        """
+        if score > 0.05:
+            return 'positive'
+        elif score < -0.05:
+            return 'negative'
+        else:
+            return 'neutral'
+    
+    def merge_sentiment_data(
+        self,
+        movie_title: str,
+        window_hours: int = 48,
+        crisis_threshold_sigma: float = 3.0
+    ) -> Dict[str, Any]:
+        """
+        Enhanced sentiment analysis with crisis detection (Business Goal #1)
+        
+        Compares current Reddit sentiment against TMDB historical baselines
+        to detect PR crises using statistical deviation.
+        
+        Args:
+            movie_title: Movie title to analyze
+            window_hours: Time window for speed layer data (default: 48h)
+            crisis_threshold_sigma: Number of standard deviations for crisis (default: 3.0)
+        
+        Returns:
+            Comprehensive sentiment analysis with crisis detection
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        result = {
+            "movie_title": movie_title,
+            "current_sentiment": None,
+            "genre_baseline": None,
+            "franchise_baseline": None,
+            "crisis_detection": {
+                "is_crisis": False,
+                "severity": "none",
+                "deviation_sigma": 0.0,
+                "message": None
+            },
+            "sentiment_velocity": None,
+            "breakdown": [],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Step 1: Get current Reddit sentiment from speed layer
+        speed_posts = list(self.speed_views.find({
+            "movie_title": movie_title,
+            "data_type": "reddit_post",
+            "hour": {"$gte": cutoff_time}
+        }).sort("hour", -1).limit(50))
+        
+        if not speed_posts:
+            result["crisis_detection"]["message"] = "No recent Reddit data available"
+            return result
+        
+        # Aggregate current sentiment from Reddit posts
+        total_sentiment = 0
+        total_upvotes = 0
+        sentiment_by_hour = {}
+        
+        for post in speed_posts:
+            metrics = post.get("metrics", {})
+            sentiment = metrics.get("sentiment_score", 0)
+            upvotes = metrics.get("upvotes", 0)
+            hour = post.get("hour")
+            
+            total_sentiment += sentiment * upvotes  # Weight by upvotes
+            total_upvotes += upvotes
+            
+            # Track hourly sentiment for velocity calculation
+            hour_key = hour.strftime("%Y-%m-%d %H:00") if isinstance(hour, datetime) else str(hour)
+            if hour_key not in sentiment_by_hour:
+                sentiment_by_hour[hour_key] = {"sentiment": 0, "count": 0}
+            sentiment_by_hour[hour_key]["sentiment"] += sentiment
+            sentiment_by_hour[hour_key]["count"] += 1
+        
+        current_sentiment = total_sentiment / total_upvotes if total_upvotes > 0 else 0
+        result["current_sentiment"] = {
+            "score": round(current_sentiment, 3),
+            "label": self._get_sentiment_label(current_sentiment),
+            "sample_size": len(speed_posts),
+            "total_upvotes": total_upvotes
+        }
+        
+        # Step 2: Calculate sentiment velocity (6-hour window)
+        if len(sentiment_by_hour) >= 2:
+            sorted_hours = sorted(sentiment_by_hour.items())
+            recent_hours = sorted_hours[-6:]  # Last 6 hours
+            
+            if len(recent_hours) >= 2:
+                first_sentiment = recent_hours[0][1]["sentiment"] / recent_hours[0][1]["count"]
+                last_sentiment = recent_hours[-1][1]["sentiment"] / recent_hours[-1][1]["count"]
+                velocity = last_sentiment - first_sentiment
+                
+                result["sentiment_velocity"] = {
+                    "value": round(velocity, 3),
+                    "direction": "increasing" if velocity > 0 else ("decreasing" if velocity < 0 else "stable"),
+                    "window_hours": len(recent_hours)
+                }
+        
+        # Step 3: Get genre baseline from batch layer
+        # First, get movie intelligence to find genre
+        movie_intel = self.batch_views.find_one({
+            "view_type": "movie_intelligence",
+            "data.title": movie_title
+        })
+        
+        if movie_intel and "data" in movie_intel:
+            genres = movie_intel["data"].get("genres", [])
+            
+            if genres:
+                primary_genre = genres[0] if isinstance(genres, list) else genres
+                
+                # Get genre sentiment baseline
+                genre_baseline = self.batch_views.find_one({
+                    "view_type": "sentiment_baseline",
+                    "genre": primary_genre
+                })
+                
+                if genre_baseline:
+                    baseline_sentiment = genre_baseline.get("avg_sentiment", 0)
+                    baseline_stddev = genre_baseline.get("sentiment_stddev", 0.15)
+                    
+                    result["genre_baseline"] = {
+                        "genre": primary_genre,
+                        "avg_sentiment": round(baseline_sentiment, 3),
+                        "stddev": round(baseline_stddev, 3),
+                        "sample_size": genre_baseline.get("sample_size", 0)
+                    }
+                    
+                    # Step 4: Crisis Detection - Calculate deviation
+                    deviation = current_sentiment - baseline_sentiment
+                    sigma_deviation = abs(deviation) / baseline_stddev if baseline_stddev > 0 else 0
+                    
+                    result["crisis_detection"]["deviation_sigma"] = round(sigma_deviation, 2)
+                    
+                    # Determine crisis severity
+                    if deviation < 0 and sigma_deviation >= crisis_threshold_sigma:
+                        result["crisis_detection"]["is_crisis"] = True
+                        result["crisis_detection"]["severity"] = "critical"
+                        result["crisis_detection"]["message"] = (
+                            f"CRITICAL: Sentiment dropped {abs(deviation):.2f} "
+                            f"({sigma_deviation:.1f}σ below baseline). Immediate PR response needed."
+                        )
+                    elif deviation < 0 and sigma_deviation >= (crisis_threshold_sigma * 0.67):
+                        result["crisis_detection"]["is_crisis"] = True
+                        result["crisis_detection"]["severity"] = "warning"
+                        result["crisis_detection"]["message"] = (
+                            f"WARNING: Sentiment {abs(deviation):.2f} below baseline "
+                            f"({sigma_deviation:.1f}σ). Monitor closely."
+                        )
+                    else:
+                        result["crisis_detection"]["message"] = f"Sentiment within normal range ({sigma_deviation:.1f}σ)"
+        
+        # Step 5: Get franchise baseline (if applicable)
+        if movie_intel and "data" in movie_intel:
+            franchise_info = movie_intel["data"].get("belongs_to_collection")
+            if franchise_info:
+                franchise_name = franchise_info.get("name") if isinstance(franchise_info, dict) else None
+                
+                if franchise_name:
+                    franchise_baseline = self.batch_views.find_one({
+                        "view_type": "sentiment_baseline",
+                        "franchise": franchise_name
+                    })
+                    
+                    if franchise_baseline:
+                        result["franchise_baseline"] = {
+                            "franchise": franchise_name,
+                            "avg_sentiment": round(franchise_baseline.get("avg_sentiment", 0), 3),
+                            "stddev": round(franchise_baseline.get("sentiment_stddev", 0.15), 3)
+                        }
+        
+        # Step 6: Create sentiment breakdown (hourly) - sorted newest first for real-time relevance
+        for hour_key, data in sorted(sentiment_by_hour.items(), reverse=True):
+            result["breakdown"].append({
+                "hour": hour_key,
+                "avg_sentiment": round(data["sentiment"] / data["count"], 3),
+                "sample_size": data["count"]
+            })
+        
+        return result
+    
+    def merge_viral_data(
+        self,
+        movie_title: Optional[str] = None,
+        genre: Optional[str] = None,
+        limit: int = 20,
+        viral_coefficient_threshold: float = 1.0
+    ) -> Dict[str, Any]:
+        """
+        Viral content detection with threshold comparison (Business Goal #2)
+        
+        Identifies viral content by comparing current Reddit engagement velocity
+        against historical viral thresholds from batch layer.
+        
+        Args:
+            movie_title: Specific movie to analyze (optional)
+            genre: Filter by genre (optional)
+            limit: Number of results to return
+            viral_coefficient_threshold: Minimum viral coefficient (default: 1.0)
+        
+        Returns:
+            List of viral movies with engagement metrics and viral coefficients
+        """
+        cutoff_time = self.get_cutoff_time()
+        
+        result = {
+            "viral_movies": [],
+            "total_trending": 0,
+            "threshold_used": viral_coefficient_threshold,
+            "window_hours": self.cutoff_hours,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Step 1: Query speed layer for Reddit engagement data
+        match_criteria = {
+            "data_type": "reddit_post",
+            "hour": {"$gte": cutoff_time}
+        }
+        
+        if movie_title:
+            match_criteria["movie_title"] = movie_title
+        
+        # Aggregate Reddit metrics by movie
+        pipeline = [
+            {"$match": match_criteria},
+            {
+                "$group": {
+                    "_id": "$movie_title",
+                    "total_upvotes": {"$sum": "$metrics.total_upvotes"},
+                    "total_comments": {"$sum": "$metrics.total_comments"},
+                    "total_awards": {"$sum": "$metrics.total_awards"},
+                    "avg_sentiment": {"$avg": "$metrics.avg_sentiment"},
+                    "post_count": {"$sum": "$metrics.post_count"},
+                    "earliest_hour": {"$min": "$hour"},
+                    "latest_hour": {"$max": "$hour"}
+                }
+            }
+        ]
+        
+        reddit_aggregated = list(self.speed_views.aggregate(pipeline))
+        
+        if not reddit_aggregated:
+            result["message"] = "No recent Reddit data found"
+            return result
+        
+        # Step 2: Calculate velocities and match with viral thresholds
+        viral_movies = []
+        
+        for movie_data in reddit_aggregated:
+            movie_title_key = movie_data["_id"]
+            
+            # Calculate time span in hours
+            earliest = movie_data["earliest_hour"]
+            latest = movie_data["latest_hour"]
+            
+            # Calculate time span - if earliest == latest, use cutoff window
+            if isinstance(earliest, datetime) and isinstance(latest, datetime):
+                time_span_hours = (latest - earliest).total_seconds() / 3600
+                if time_span_hours == 0:
+                    # All data has same timestamp - use cutoff window (48h default)
+                    time_span_hours = self.cutoff_hours
+                    # Adjust latest to reflect actual window
+                    latest = earliest + timedelta(hours=self.cutoff_hours)
+            else:
+                time_span_hours = self.cutoff_hours
+            
+            time_span_hours = max(time_span_hours, 1)  # Avoid division by zero
+            
+            # Calculate velocities (per hour)
+            upvote_velocity = movie_data["total_upvotes"] / time_span_hours
+            comment_velocity = movie_data["total_comments"] / time_span_hours
+            award_velocity = movie_data["total_awards"] / time_span_hours
+            
+            # Step 3: Get movie intelligence for genre using fuzzy matching
+            movie_intel = self._find_movie_intelligence(movie_title_key)
+            
+            if not movie_intel:
+                # No match found - skip this movie
+                continue
+            
+            # Handle both flat and nested schema for genres
+            # New schema: single "genre" field (string) - convert to array for consistency
+            # Old schema: "genres" field (array) or nested in "data"
+            if "genre" in movie_intel:
+                primary_genre = movie_intel.get("genre", "Unknown")
+                genres = [primary_genre] if primary_genre else ["Unknown"]
+            elif "genres" in movie_intel:
+                genres = movie_intel.get("genres", [])
+                if isinstance(genres, list) and genres:
+                    primary_genre = genres[0]
+                else:
+                    genres = ["Unknown"]
+                    primary_genre = "Unknown"
+            else:
+                genres = movie_intel.get("data", {}).get("genres", [])
+                if isinstance(genres, list) and genres:
+                    primary_genre = genres[0]
+                else:
+                    genres = ["Unknown"]
+                    primary_genre = "Unknown"
+            
+            # Apply genre filter if specified
+            # Empty string or None means "All Genres" - no filtering
+            if genre and genre.strip() and primary_genre != genre:
+                continue
+            
+            # Step 4: Lookup viral threshold from batch layer
+            # NOTE: Current batch layer viral_threshold represents TMDB vote_count p99,
+            # NOT Reddit engagement velocity. This is a schema mismatch.
+            # For now, we use reasonable Reddit-specific defaults until batch layer
+            # is updated to calculate Reddit velocity thresholds.
+            
+            viral_threshold_doc = self.batch_views.find_one({
+                "view_type": "viral_threshold",
+                "genre": primary_genre
+            })
+            
+            if not viral_threshold_doc:
+                # Try to get global threshold (genre=null)
+                viral_threshold_doc = self.batch_views.find_one({
+                    "view_type": "viral_threshold",
+                    "genre": None
+                })
+            
+            # Use Reddit-specific velocity thresholds (per hour)
+            # Based on typical Reddit engagement patterns for movie discussions
+            if viral_threshold_doc:
+                # Use genre as indicator of baseline engagement, scaled appropriately
+                # Higher vote_count genres typically have higher Reddit engagement
+                base_vote_count = viral_threshold_doc.get("viral_threshold", 1000)
+                # Scale down from vote_count (thousands) to hourly velocity (tens)
+                # Assumption: viral movies get ~1% of their total votes per hour during viral period
+                scale_factor = 0.01
+                base_velocity = max(base_vote_count * scale_factor, 10.0)
+                
+                upvote_threshold = base_velocity * 0.7  # 70% upvotes
+                comment_threshold = base_velocity * 0.3  # 30% comments
+                engagement_threshold = base_velocity
+            else:
+                # Use default thresholds for Reddit hourly velocity
+                # These represent typical "viral" thresholds for movie subreddits
+                upvote_threshold = 50.0  # 50 upvotes per hour
+                comment_threshold = 20.0  # 20 comments per hour
+                engagement_threshold = 70.0  # 70 total engagements per hour
+            
+            # Step 5: Calculate viral coefficient
+            # Viral coefficient = current velocity / threshold velocity
+            # Calculate combined engagement velocity (with null safety)
+            engagement_velocity = (upvote_velocity or 0) + (comment_velocity or 0)
+            
+            # Viral coefficient (how many times above threshold) - with null safety
+            if engagement_threshold and engagement_threshold > 0:
+                viral_coefficient = engagement_velocity / engagement_threshold
+            else:
+                viral_coefficient = 0.0
+            
+            # Step 6: Calculate percentile ranking (with null safety)
+            if viral_coefficient is not None:
+                percentile = min(99.9, 50 + (viral_coefficient - 1) * 20)  # Rough percentile estimate
+            else:
+                percentile = 0.0
+            
+            # Only include if above viral threshold
+            if viral_coefficient >= viral_coefficient_threshold:
+                # Get TMDB data from movie intelligence
+                vote_average = movie_intel.get("vote_average")
+                popularity = movie_intel.get("popularity")
+                
+                # Create Grafana-compatible flat structure
+                viral_entry = {
+                    # Grafana table fields (flat structure for easy mapping)
+                    "title": movie_title_key,
+                    "genre": primary_genre,  # Singular for Grafana compatibility
+                    "genres": genres,  # Array for programmatic access
+                    "trending_score": round(viral_coefficient, 2) if viral_coefficient is not None else 0.0,
+                    "velocity": round(engagement_velocity, 1) if engagement_velocity is not None else 0.0,
+                    "vote_average": vote_average,
+                    "popularity": popularity,
+                    
+                    # Detailed metrics (nested for API consumers)
+                    "viral_metrics": {
+                        "viral_coefficient": round(viral_coefficient, 2) if viral_coefficient is not None else 0.0,
+                        "percentile_rank": round(percentile, 1) if percentile is not None else 0.0,
+                        "upvote_velocity": round(upvote_velocity, 1) if upvote_velocity is not None else 0.0,
+                        "comment_velocity": round(comment_velocity, 1) if comment_velocity is not None else 0.0,
+                        "award_velocity": round(award_velocity, 2) if award_velocity is not None else 0.0,
+                        "engagement_velocity": round(engagement_velocity, 1) if engagement_velocity is not None else 0.0
+                    },
+                    "thresholds": {
+                        "upvote_p99": upvote_threshold,
+                        "comment_p99": comment_threshold,
+                        "engagement_p99": engagement_threshold
+                    },
+                    "reddit_stats": {
+                        "total_upvotes": movie_data["total_upvotes"],
+                        "total_comments": movie_data["total_comments"],
+                        "total_awards": movie_data["total_awards"],
+                        "avg_sentiment": round(movie_data["avg_sentiment"], 3),
+                        "post_count": movie_data["post_count"]
+                    },
+                    "viral_status": "viral" if viral_coefficient >= 1.0 else "trending",
+                    "time_window": {
+                        "start": earliest.isoformat() if isinstance(earliest, datetime) else str(earliest),
+                        "end": latest.isoformat() if isinstance(latest, datetime) else str(latest),
+                        "hours": round(time_span_hours, 1)
+                    }
+                }
+                
+                viral_movies.append(viral_entry)
+        
+        # Step 8: Sort by viral coefficient (descending)
+        viral_movies.sort(key=lambda x: x["viral_metrics"]["viral_coefficient"], reverse=True)
+        
+        # Add rank to each movie (1-indexed)
+        for idx, movie in enumerate(viral_movies[:limit], start=1):
+            movie["rank"] = idx
+        
+        result["viral_movies"] = viral_movies[:limit]
+        result["trending_movies"] = viral_movies[:limit]  # Grafana compatibility
+        result["total_trending"] = len(viral_movies)
+        
+        return result

@@ -2,14 +2,23 @@ FROM apache/airflow:2.7.3-python3.11
 
 USER root
 
-# Install OpenJDK 11 for PySpark
+# Install OpenJDK 11 and procps for PySpark
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openjdk-11-jre-headless && \
+    apt-get install -y --no-install-recommends \
+    openjdk-11-jre-headless \
+    procps && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Set JAVA_HOME
-ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+# Set JAVA_HOME (multi-platform: AMD64 and ARM64)
+# Automatically detects correct path for Intel/AMD or Apple Silicon
+RUN if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then \
+        ln -sf /usr/lib/jvm/java-11-openjdk-arm64 /usr/lib/jvm/java-11-current; \
+    else \
+        ln -sf /usr/lib/jvm/java-11-openjdk-amd64 /usr/lib/jvm/java-11-current; \
+    fi
+
+ENV JAVA_HOME=/usr/lib/jvm/java-11-current
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 USER airflow
@@ -27,3 +36,17 @@ RUN curl -o ${SPARK_HOME}/jars/hadoop-aws-3.3.4.jar \
         https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar && \
     curl -o ${SPARK_HOME}/jars/aws-java-sdk-bundle-1.12.262.jar \
         https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+
+# =====================================================================
+# 🚀 Usage Guide:
+# =====================================================================
+# Build image for your platform (auto-detect):
+#   docker build -f Dockerfile.airflow -t movie-pipeline-airflow:latest ..
+#
+# Build for specific platform:
+#   docker build --platform linux/amd64 -f Dockerfile.airflow -t movie-pipeline-airflow:amd64 ..
+#   docker build --platform linux/arm64 -f Dockerfile.airflow -t movie-pipeline-airflow:arm64 ..
+#
+# Build multi-platform image (requires buildx):
+#   docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.airflow -t movie-pipeline-airflow:latest ..
+# =====================================================================

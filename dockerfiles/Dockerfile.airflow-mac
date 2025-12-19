@@ -1,0 +1,49 @@
+# =====================================================================
+# Batch Layer Airflow Dockerfile - PySpark Integration (MAC ARM64)
+# =====================================================================
+# Description: Airflow container with PySpark for batch processing
+# Stack: Apache Airflow 2.7.3 + Python 3.11 + Java 11 + PySpark 3.5.4
+# Optimized for: Apple Silicon (M1/M2/M3) - ARM64 Architecture
+# =====================================================================
+
+FROM apache/airflow:2.7.3-python3.11
+
+USER root
+
+# Install OpenJDK 11 and procps for PySpark
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    openjdk-11-jre-headless \
+    procps && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME for ARM64 (Mac M1/M2/M3)
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-arm64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+USER airflow
+
+# Install Python dependencies
+COPY requirements-airflow.txt /tmp/requirements-airflow.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-airflow.txt
+
+# Set SPARK_HOME and create jars directory
+ENV SPARK_HOME=/home/airflow/.local/lib/python3.11/site-packages/pyspark
+RUN mkdir -p ${SPARK_HOME}/jars
+
+# Download Spark S3A JARs to Spark's jars directory
+RUN curl -o ${SPARK_HOME}/jars/hadoop-aws-3.3.4.jar \
+        https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar && \
+    curl -o ${SPARK_HOME}/jars/aws-java-sdk-bundle-1.12.262.jar \
+        https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+
+# =====================================================================
+# 🚀 Usage Guide:
+# =====================================================================
+# Build image:
+#   docker build -f Dockerfile.airflow-mac -t movie-pipeline-airflow:latest ..
+#
+# This Dockerfile is specifically for Mac ARM64 (Apple Silicon)
+# For Intel/AMD64, use Dockerfile.airflow instead
+# =====================================================================

@@ -1,10 +1,10 @@
-# TMDB Batch Layer - Movie Data Pipeline
+# TMDB Batch Layer - Baseline Calculation Pipeline
 
 > **📢 IMPORTANT**: This layer is now part of the unified setup at project root.  
 > **See the root [README.md](../../README.md) for the recommended way to run the complete Lambda Architecture.**  
 > The instructions below are for running the batch layer in isolation (development/testing only).
 
-**One-command deployment**: Fetch, transform, and analyze movie data from TMDB API using Apache Spark, MinIO, and MongoDB.
+**One-command deployment**: Calculate historical baselines from TMDB metadata for comparison with real-time Reddit data using Apache Spark, MinIO, and MongoDB.
 
 ---
 
@@ -28,19 +28,19 @@
 ## 📦 What This Does
 
 ```
-TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoDB
-              ↓                ↓                    ↓
-           MinIO            MinIO                MinIO
+TMDB API → Bronze (Metadata) → Silver (Baselines) → Gold (Export) → MongoDB
+              ↓                    ↓                     ↓
+           MinIO                MinIO                 MinIO
 ```
 
 ### Pipeline Flow
-1. **Bronze**: Fetch 80 movies from TMDB API → Store raw JSON in MinIO
-2. **Silver**: Clean, deduplicate, validate → Store Parquet in MinIO  
-3. **Gold**: Aggregate by genre (avg rating, revenue, count) → Store Parquet
-4. **Export**: Load analytical results into MongoDB for serving
+1. **Bronze**: Fetch ~2000 movies metadata from TMDB API → Store raw JSON in MinIO
+2. **Silver**: Calculate genre-level baselines (sentiment, vote thresholds) → Store Parquet in MinIO  
+3. **Gold**: Add metadata and prepare for export → Store Parquet
+4. **Export**: Load baseline data into MongoDB for serving layer comparison with Reddit data
 
 ### Services Running
-- **Airflow Web UI**: http://localhost:8088 (admin/admin)
+- **Airflow Web UI**: http://localhost:8080 (admin/admin)
 - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
 - **MongoDB**: mongodb://localhost:27017
 - **PostgreSQL**: Internal metadata store
@@ -53,7 +53,7 @@ TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoD
 ### 1. Trigger the Pipeline
 - Open http://localhost:8088
 - Login: `admin` / `admin`
-- Find DAG: `tmdb_batch_pipeline`
+- Find DAG: `tmdb_baseline_pipeline`
 - Click "Play" button → "Trigger DAG"
 - Wait 5-8 minutes for all tasks to turn green
 
@@ -61,33 +61,82 @@ TMDB API → Bronze (JSON) → Silver (Parquet) → Gold (Aggregated) → MongoD
 - Open http://localhost:9001
 - Login: `minioadmin` / `minioadmin`
 - Browse buckets:
-  - `bronze/movies/` → Raw JSON files
-  - `silver/movies/` → Cleaned Parquet files  
-  - `gold/movies_by_genre/` → Aggregated Parquet files
+  - `bronze/tmdb_movies/` → Raw movie metadata JSON files
+  - `bronze/tmdb_genres/` → Genre list JSON
+  - `silver/genre_baselines/` → Calculated baseline Parquet files  
+  - `gold/baselines/` → Final baseline Parquet files
 
 ### 3. Query MongoDB Results
-```bash
-# Count genre documents (expect ~19-20)
-docker exec -it serving-mongodb mongosh --eval "use tmdb_analytics; db.movies_by_genre.countDocuments()"
 
-# View Drama genre statistics
-docker exec -it serving-mongodb mongosh --eval "
-  use tmdb_analytics;
-  db.movies_by_genre.find(
-    {genre: 'Drama'}, 
-    {genre: 1, avg_vote_average: 1, total_movies: 1}
-  ).pretty()
-"
+**Step 1: Connect to MongoDB**
+```bash
+docker exec -it serving-mongodb mongosh --username admin --authenticationDatabase admin moviedb
+```
+
+**Step 2: Run queries inside the authenticated shell**
+```js
+// Count total documents (expect ~3000-4000)
+db.batch_views.countDocuments()
+
+// Count by view type
+db.batch_views.aggregate([
+  { $group: { _id: "$view_type", count: { $sum: 1 } } }
+])
+
+// View Action genre sentiment baseline
+db.batch_views.findOne(
+  { view_type: 'sentiment_baseline', genre: 'Action' }, 
+  { genre: 1, avg_sentiment: 1, sentiment_stddev: 1, movie_count: 1, review_count: 1, _id: 0 }
+)
+
+// View viral threshold for Action blockbusters in summer
+db.batch_views.findOne(
+  { view_type: 'viral_threshold', genre: 'Action', budget_tier: 'blockbuster', season: 'summer' },
+  { genre: 1, budget_tier: 1, season: 1, viral_threshold: 1, avg_popularity: 1, _id: 0 }
+)
+
+// View individual movie intelligence
+db.batch_views.findOne(
+  { view_type: 'movie_intelligence', title: { $exists: true } },
+  { movie_id: 1, title: 1, genre: 1, vote_average: 1, avg_sentiment: 1, _id: 0 }
+)
+
+// Exit mongosh when done
+exit
 ```
 
 **Expected Output:**
-```json
+```
+3979
+
+[
+  { _id: 'movie_intelligence', count: 3295 },
+  { _id: 'sentiment_baseline', count: 658 },
+  { _id: 'viral_threshold', count: 26 }
+]
+
 {
-  "genre": "Drama",
-  "total_movies": 25,
-  "avg_vote_average": 7.2,
-  "avg_popularity": 45.3,
-  "total_revenue": 1500000000
+  genre: 'Action',
+  avg_sentiment: 0.0021077661263748473,
+  sentiment_stddev: 0.016247547088559453,
+  movie_count: 393,
+  review_count: 33
+}
+
+{
+  genre: 'Action',
+  budget_tier: 'blockbuster',
+  season: 'summer',
+  viral_threshold: 29058,
+  avg_popularity: 15.234
+}
+
+{
+  movie_id: 914,
+  title: 'The Great Dictator',
+  genre: 'Comedy',
+  vote_average: 8.3,
+  avg_sentiment: 0
 }
 ```
 
@@ -156,19 +205,17 @@ docker compose -f docker-compose.batch.yml build --no-cache
 layers/batch_layer/
 ├── docker-compose.batch.yml       # Orchestrates all services
 ├── Dockerfile.airflow              # Custom Airflow + PySpark image
-├── .env                            # TMDB API key (committed)
-├── start.sh                        # One-click startup
-├── dags/
-│   └── tmdb_batch_pipeline.py     # Airflow DAG (12 tasks)
-├── master_dataset/
-│   └── ingestion.py               # Bronze: Fetch from TMDB API
+├── .env.example                    # Environment variables template
+├── airflow_dags/
+│   └── tmdb_baseline_pipeline.py  # Airflow DAG (baseline calculation)
 ├── spark_jobs/
-│   ├── silver_transformation.py   # Silver: Clean & validate
-│   ├── gold_aggregation.py        # Gold: Aggregate by genre
+│   ├── bronze_ingest.py           # Bronze: Fetch TMDB metadata
+│   ├── silver_transform.py        # Silver: Calculate baselines
+│   ├── gold_aggregate.py          # Gold: Prepare baseline export
 │   ├── export_to_mongo.py         # Export: Load to MongoDB
 │   └── utils/                     # Shared Spark utilities
-└── config/
-    └── expectations/               # Data quality rules
+└── tests/
+    └── test_integration.py        # Integration tests
 ```
 
 ---
@@ -206,17 +253,21 @@ docker compose -f docker-compose.batch.yml up -d
 ```
 
 ### Change Pipeline Schedule
-Edit `dags/tmdb_batch_pipeline.py`:
+Edit `airflow_dags/tmdb_baseline_pipeline.py`:
 ```python
-default_args = {
-    'schedule_interval': '@daily',  # Options: '@hourly', '0 0 * * *', None
-}
+dag = DAG(
+    'tmdb_baseline_pipeline',
+    schedule_interval='0 2 * * *',  # Daily at 2 AM (default)
+    # Options: '@daily', '@weekly', '0 0 * * *', None
+)
 ```
 
 ### Increase Movie Count
-Edit `master_dataset/ingestion.py`:
+Edit `spark_jobs/bronze_ingest.py`:
 ```python
-MAX_PAGES = 4  # Change to 10 for 200 movies, 20 for 400 movies
+# In TMDBBaselineIngestion class
+def fetch_movies(self):
+    for page in range(1, 100):  # Change to 200 for ~4000 movies
 ```
 
 ---
@@ -224,30 +275,96 @@ MAX_PAGES = 4  # Change to 10 for 200 movies, 20 for 400 movies
 ## 💡 Key Features
 
 - **Dockerized**: No Python dependencies on host machine
-- **Portable**: Includes API key in `.env` (committed to repo)
+- **Portable**: Includes API key in `.env.example` template
 - **Resilient**: Retry logic for network timeouts (pip, curl)
 - **Observable**: Airflow UI shows real-time progress
 - **Validated**: Data quality checks at each stage
 - **Production-Ready**: Uses industry-standard tools (Spark, Airflow, MinIO)
+- **Baseline-Focused**: Calculates historical baselines for Reddit comparison
 
 ---
 
 ## 📊 Sample MongoDB Output
 
-After successful run:
+After successful run, the `batch_views` collection contains **3 view types** in a unified schema:
+
+### 1. Sentiment Baseline (Genre/Franchise/Year Aggregations)
 
 ```json
 {
   "_id": ObjectId("..."),
+  "view_type": "sentiment_baseline",
   "genre": "Action",
-  "total_movies": 18,
-  "avg_vote_average": 6.8,
-  "avg_popularity": 52.1,
-  "total_revenue": 2500000000,
-  "avg_revenue_per_movie": 138888888,
-  "last_updated": "2024-11-10T16:45:00Z"
+  "franchise": null,
+  "year": null,
+  "avg_sentiment": 0.0021077661263748473,
+  "sentiment_stddev": 0.016247547088559453,
+  "movie_count": 393,
+  "review_count": 33,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "data_period_start": "1900-01-01",
+  "data_period_end": "2025-12-05",
+  "updated_at": "2025-12-05T17:27:00.196Z"
 }
 ```
+
+**Other Genre Examples:**
+```json
+{ "genre": "Science Fiction", "avg_sentiment": 0.084, "movie_count": 375 }
+{ "genre": "Comedy", "avg_sentiment": 0.114, "movie_count": 989 }
+{ "genre": "Horror", "avg_sentiment": 0.004, "movie_count": 363 }
+```
+
+### 2. Viral Threshold (Genre×Budget×Season Thresholds)
+
+```json
+{
+  "_id": ObjectId("..."),
+  "view_type": "viral_threshold",
+  "genre": "Action",
+  "budget_tier": "blockbuster",
+  "season": "summer",
+  "viral_threshold": 29058,
+  "avg_popularity": 6.973233333333333,
+  "movie_count": 3,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "aggregation_granularity": "all_time",
+  "updated_at": "2025-12-05T17:27:03.808Z"
+}
+```
+
+### 3. Movie Intelligence (Individual Movie Data)
+
+```json
+{
+  "_id": ObjectId("..."),
+  "view_type": "movie_intelligence",
+  "movie_id": 914,
+  "title": "The Great Dictator",
+  "director": "Charlie Chaplin",
+  "genre": "Comedy",
+  "budget": 2000000,
+  "budget_tier": "indie",
+  "runtime": 125,
+  "release_date": "1940-10-15",
+  "release_year": 1940,
+  "vote_average": 8.3,
+  "vote_count": 3566,
+  "popularity": 2.5774,
+  "avg_sentiment": 0,
+  "review_count": 0,
+  "batch_run_timestamp": "2025-12-05T17:27:13.987915Z",
+  "updated_at": "2025-12-05T17:27:05.500Z"
+}
+```
+
+**Collection Stats**:
+- **Total documents**: ~3,979
+- **Movie Intelligence**: ~3,295 (individual movies)
+- **Sentiment Baselines**: ~658 (genre/franchise/year aggregations)
+- **Viral Thresholds**: ~26 (genre×budget×season combinations)
+- **Genres covered**: 19 (Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Science Fiction, TV Movie, Thriller, War, Western)
 
 ---
 

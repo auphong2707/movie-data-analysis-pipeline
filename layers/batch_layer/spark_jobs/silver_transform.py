@@ -1,11 +1,13 @@
 """
-Silver Layer Transformation - Clean, Deduplicate, and Enrich
+Silver Layer - Multi-Goal Baseline Calculation
 
-Reads Bronze layer Parquet, performs cleaning, deduplication, enrichment,
-and sentiment analysis, then writes to Silver layer.
+Generates three optimized datasets for business goals:
+1. Sentiment Baselines: Genre/franchise/director/temporal sentiment patterns
+2. Viral Thresholds: Genre/budget-tier/seasonal viral cutoffs  
+3. Movie Intelligence: Individual movie data for competitive analysis
 
 Usage:
-    spark-submit silver_transform.py --lookback-hours 4
+    spark-submit silver_transform.py
 """
 
 import argparse
@@ -102,354 +104,562 @@ def sentiment_label_udf(text):
     return result['label']
 
 
-class SilverTransformationJob:
+class BaselineCalculationJob:
     """
-    Silver Layer transformation job.
+    Multi-Goal Baseline Calculation Job for Silver Layer.
+    
+    Generates three optimized datasets:
+    1. Sentiment Baselines: Genre/franchise/director/temporal patterns
+    2. Viral Thresholds: Genre/budget-tier/seasonal cutoffs
+    3. Movie Intelligence: Individual movie data for competitive analysis
     
     Processes:
-    1. Read Bronze layer data
-    2. Deduplicate by movie_id
-    3. Clean and validate data
-    4. Enrich with genre names, cast info
-    5. Compute sentiment scores
-    6. Write to Silver layer
+    1. Load TMDB movies, reviews, genres from Bronze
+    2. Enrich with franchise, director, budget tier classification
+    3. Calculate three separate datasets optimized per business goal
+    4. Write to three separate Parquet files in Silver layer
     """
+    
+    # Budget tier thresholds (in USD)
+    BUDGET_TIERS = {
+        'indie': (0, 20_000_000),
+        'mid': (20_000_000, 100_000_000),
+        'blockbuster': (100_000_000, float('inf'))
+    }
     
     def __init__(self, spark):
         self.spark = spark
-        self.metrics = JobMetrics("silver_transform")
+        self.metrics = JobMetrics("multi_goal_baseline_calculation")
         
         # Register UDFs
         self.spark.udf.register("sentiment_score", sentiment_score_udf, DoubleType())
         self.spark.udf.register("sentiment_label", sentiment_label_udf, StringType())
     
-    @log_execution(logger, "silver_transform")
-    def run(self, lookback_hours: int = 4):
+    @log_execution(logger, "multi_goal_baseline_calculation")
+    def run(self):
         """
-        Run Silver layer transformation.
+        Run multi-goal baseline calculation.
         
-        Args:
-            lookback_hours: Hours of Bronze data to process
+        Generates three datasets:
+        1. sentiment_baselines: Genre/franchise/director/temporal sentiment patterns
+        2. viral_thresholds: Genre/budget-tier/seasonal viral cutoffs
+        3. movie_intelligence: Individual movie competitive data
         """
-        logger.info("Starting Silver layer transformation",
-                   extra={"context": {"lookback_hours": lookback_hours}})
+        logger.info("Starting multi-goal baseline calculation from TMDB data")
         
-        # Process movies
-        movies_df = self._process_movies(lookback_hours)
-        if movies_df:
-            self._write_to_silver(movies_df, "movies")
+        # Load Bronze data
+        movies_df = self._load_bronze_movies()
+        reviews_df = self._load_bronze_reviews()
+        genres_df = self._load_bronze_genres()
         
-        # Process reviews with sentiment
-        reviews_df = self._process_reviews(lookback_hours)
-        if reviews_df:
-            self._write_to_silver(reviews_df, "reviews")
+        if movies_df is None or genres_df is None:
+            logger.error("Cannot calculate baselines without movies and genres")
+            return
         
-        # Process credits
-        credits_df = self._process_credits(lookback_hours)
-        if credits_df:
-            self._write_to_silver(credits_df, "credits")
+        # Enrich movies with derived fields
+        enriched_movies_df = self._enrich_movies(movies_df, reviews_df, genres_df)
+        
+        if enriched_movies_df is None:
+            logger.error("Movie enrichment failed")
+            return
+        
+        # Generate three datasets
+        sentiment_baselines_df = self._generate_sentiment_baselines(enriched_movies_df)
+        viral_thresholds_df = self._generate_viral_thresholds(enriched_movies_df)
+        movie_intelligence_df = self._generate_movie_intelligence(enriched_movies_df)
+        
+        # Write to Silver layer
+        if sentiment_baselines_df:
+            self._write_to_silver(sentiment_baselines_df, "sentiment_baselines")
+        if viral_thresholds_df:
+            self._write_to_silver(viral_thresholds_df, "viral_thresholds")
+        if movie_intelligence_df:
+            self._write_to_silver(movie_intelligence_df, "movie_intelligence")
         
         # Log metrics
         self.metrics.log(logger)
-        logger.info("Silver layer transformation completed successfully")
+        logger.info("Multi-goal baseline calculation completed successfully")
     
-    def _process_movies(self, lookback_hours: int) -> Optional[DataFrame]:
-        """
-        Process movies from Bronze to Silver.
-        
-        Steps:
-        1. Read Bronze movies
-        2. Deduplicate by movie_id
-        3. Extract and clean fields
-        4. Enrich with genre names
-        5. Validate data quality
-        """
-        logger.info("Processing movies from Bronze")
-        
+    def _load_bronze_movies(self) -> Optional[DataFrame]:
+        """Load movies from Bronze layer."""
         try:
-            # Read Bronze movies (last N hours)
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("movies", None).rstrip('/')
+            bronze_path = get_bronze_path("tmdb_movies", None).rstrip('/')
+            logger.info(f"Loading movies from Bronze: {bronze_path}")
             
             df = self.spark.read.parquet(bronze_path)
+            count = df.count()
             
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
+            logger.info(f"Loaded {count} movies from Bronze")
+            self.metrics.add_metric("bronze_movies_loaded", count)
+            
+            return df if count > 0 else None
+            
+        except Exception as e:
+            logger.error(f"Failed to load Bronze movies: {str(e)}", exc_info=True)
+            return None
+    
+    def _load_bronze_reviews(self) -> Optional[DataFrame]:
+        """Load reviews from Bronze layer."""
+        try:
+            bronze_path = get_bronze_path("tmdb_reviews", None).rstrip('/')
+            logger.info(f"Loading reviews from Bronze: {bronze_path}")
+            
+            df = self.spark.read.parquet(bronze_path)
+            count = df.count()
+            
+            logger.info(f"Loaded {count} reviews from Bronze")
+            self.metrics.add_metric("bronze_reviews_loaded", count)
+            
+            return df if count > 0 else None
+            
+        except Exception as e:
+            logger.warning(f"No reviews found in Bronze (optional for baselines): {str(e)}")
+            return None
+    
+    def _load_bronze_genres(self) -> Optional[DataFrame]:
+        """Load genres from Bronze layer."""
+        try:
+            bronze_path = get_bronze_path("tmdb_genres", None).rstrip('/')
+            logger.info(f"Loading genres from Bronze: {bronze_path}")
+            
+            df = self.spark.read.parquet(bronze_path)
+            count = df.count()
+            
+            logger.info(f"Loaded {count} genres from Bronze")
+            self.metrics.add_metric("bronze_genres_loaded", count)
+            
+            return df if count > 0 else None
+            
+        except Exception as e:
+            logger.error(f"Failed to load Bronze genres: {str(e)}", exc_info=True)
+            return None
+    
+    def _enrich_movies(
+        self,
+        movies_df: DataFrame,
+        reviews_df: Optional[DataFrame],
+        genres_df: DataFrame
+    ) -> Optional[DataFrame]:
+        """
+        Enrich movies with derived fields for business goals.
+        
+        Adds:
+        - genre_names: Array of genre names (not just IDs)
+        - primary_genre: First genre for categorization
+        - franchise: From belongs_to_collection
+        - director: From credits (if available)
+        - budget_tier: indie/mid/blockbuster classification
+        - release_month, release_year: Temporal fields
+        - avg_sentiment: Movie-level sentiment from reviews
+        """
+        logger.info("Enriching movies with derived fields")
+        
+        try:
+            # Join with genres to get genre names
+            genre_map = genres_df.select(
+                F.col("id").alias("genre_id"),
+                F.col("name").alias("genre_name")
             )
             
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} movies from Bronze")
-            self.metrics.add_metric("bronze_movies_read", bronze_count)
+            # Create genre_names array from genre_ids
+            # Note: This requires exploding and collecting, which is expensive
+            # For simplicity, we'll use the first genre as primary
+            enriched = movies_df.withColumn(
+                "primary_genre_id",
+                F.when(F.size(F.col("genre_ids")) > 0, F.col("genre_ids")[0])
+                .otherwise(F.lit(None))
+            )
             
-            if bronze_count == 0:
-                logger.warning("No movies found in Bronze layer")
-                return None
+            enriched = enriched.join(
+                genre_map.select(
+                    F.col("genre_id").alias("primary_genre_id"),
+                    F.col("genre_name").alias("primary_genre")
+                ),
+                on="primary_genre_id",
+                how="left"
+            )
             
-            # Deduplicate by movie_id (keep latest)
-            window_spec = Window.partitionBy("id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
+            # Extract franchise from belongs_to_collection (if available)
+            # Note: Bronze layer now stores collection name directly as string
+            if "belongs_to_collection" in enriched.columns:
+                enriched = enriched.withColumnRenamed("belongs_to_collection", "franchise")
+            else:
+                logger.warning("belongs_to_collection field not available - franchise will be null")
+                enriched = enriched.withColumn("franchise", F.lit(None).cast(StringType()))
             
-            deduplicated_count = df.count()
-            logger.info(f"After deduplication: {deduplicated_count} unique movies")
-            self.metrics.add_metric("movies_deduplicated", deduplicated_count)
+            # Classify budget tier (handle missing budget field)
+            if "budget" in enriched.columns:
+                enriched = enriched.withColumn(
+                    "budget_tier",
+                    F.when(F.col("budget") >= self.BUDGET_TIERS['blockbuster'][0], "blockbuster")
+                    .when(F.col("budget") >= self.BUDGET_TIERS['mid'][0], "mid")
+                    .when(F.col("budget") > 0, "indie")
+                    .otherwise(F.lit("unknown"))
+                )
+            else:
+                logger.warning("budget field not available - budget_tier will be unknown")
+                enriched = enriched.withColumn("budget_tier", F.lit("unknown"))
+                enriched = enriched.withColumn("budget", F.lit(0))
             
-            # Extract and clean fields
-            df = df.select(
+            # Extract temporal fields
+            enriched = enriched.withColumn(
+                "release_year",
+                F.year(F.col("release_date"))
+            ).withColumn(
+                "release_month",
+                F.month(F.col("release_date"))
+            ).withColumn(
+                "release_month_name",
+                F.date_format(F.col("release_date"), "MMMM")
+            )
+            
+            # Map month to season
+            enriched = enriched.withColumn(
+                "season",
+                F.when(F.col("release_month").isin([12, 1, 2]), "winter")
+                .when(F.col("release_month").isin([3, 4, 5]), "spring")
+                .when(F.col("release_month").isin([6, 7, 8]), "summer")
+                .when(F.col("release_month").isin([9, 10, 11]), "fall")
+                .otherwise(F.lit("unknown"))
+            )
+            
+            # Extract director from credits if available
+            # Note: TMDB API includes crew in separate endpoint - not in basic movie data
+            if "director" in enriched.columns:
+                # Field exists, use it
+                pass
+            else:
+                logger.warning("director field not available - will be null (requires detailed movie API call)")
+                enriched = enriched.withColumn("director", F.lit(None).cast(StringType()))
+            
+            # Calculate movie-level sentiment from reviews
+            if reviews_df is not None:
+                logger.info("Calculating movie-level sentiment from reviews")
+                
+                reviews_with_sentiment = reviews_df.select(
+                    F.col("movie_id"),
+                    F.expr("sentiment_score(content)").alias("sentiment_score")
+                )
+                
+                movie_sentiments = reviews_with_sentiment.groupBy("movie_id").agg(
+                    F.avg("sentiment_score").alias("avg_sentiment"),
+                    F.count("*").alias("review_count")
+                )
+                
+                enriched = enriched.join(
+                    movie_sentiments,
+                    enriched.id == movie_sentiments.movie_id,
+                    how="left"
+                ).drop("movie_id")
+            else:
+                # Use vote_average as sentiment proxy
+                logger.warning("No reviews - using rating as sentiment proxy")
+                enriched = enriched.withColumn(
+                    "avg_sentiment",
+                    (F.col("vote_average") - 5) / 5  # Normalize to -1 to 1
+                ).withColumn(
+                    "review_count",
+                    F.lit(0)
+                )
+            
+            # Fill nulls
+            enriched = enriched.fillna({
+                "avg_sentiment": 0.0,
+                "review_count": 0,
+                "budget": 0,
+                "popularity": 0.0
+            })
+            
+            count = enriched.count()
+            logger.info(f"Enriched {count} movies with derived fields")
+            self.metrics.add_metric("movies_enriched", count)
+            
+            return enriched
+            
+        except Exception as e:
+            logger.error(f"Failed to enrich movies: {str(e)}", exc_info=True)
+            return None
+    
+    def _generate_sentiment_baselines(self, enriched_movies_df: DataFrame) -> Optional[DataFrame]:
+        """
+        Generate sentiment baselines for Business Goal #1: PR Crisis Detection.
+        
+        Produces genre/franchise/director/temporal sentiment patterns.
+        
+        CRITICAL FIX: Filters out movies with no reviews (review_count=0 or avg_sentiment=0)
+        to prevent zero-sentiment movies from compressing baselines and causing scale mismatch
+        with speed layer sentiments.
+        """
+        logger.info("Generating sentiment baselines for Goal #1")
+        
+        try:
+            # FILTER: Only include movies with actual reviews to prevent baseline compression
+            # Movies with review_count=0 or avg_sentiment=0.0 dilute baselines by ~1000x
+            movies_with_reviews = enriched_movies_df.filter(
+                (F.col("review_count") > 0) & (F.col("avg_sentiment") != 0.0)
+            )
+            
+            movies_before = enriched_movies_df.count()
+            movies_after = movies_with_reviews.count()
+            logger.info(f"Filtered movies: {movies_before} -> {movies_after} (removed {movies_before - movies_after} with no reviews)")
+            
+            # Genre-level baselines
+            genre_baselines = movies_with_reviews.groupBy("primary_genre").agg(
+                F.avg("avg_sentiment").alias("avg_sentiment"),
+                F.stddev("avg_sentiment").alias("sentiment_stddev"),
+                F.count("*").alias("movie_count"),
+                F.sum("review_count").alias("review_count")
+            ).select(
+                F.col("primary_genre"),
+                F.col("avg_sentiment"),
+                F.col("sentiment_stddev"),
+                F.col("movie_count"),
+                F.col("review_count"),
+                F.lit(None).cast(StringType()).alias("franchise"),
+                F.lit(None).cast(DoubleType()).alias("franchise_avg_sentiment"),
+                F.lit(None).cast(IntegerType()).alias("year"),
+                F.lit(None).cast(DoubleType()).alias("yearly_sentiment")
+            )
+            
+            # Franchise-level baselines (franchise dimension only, genre=null)
+            franchise_baselines = movies_with_reviews.filter(
+                F.col("franchise").isNotNull()
+            ).groupBy("franchise").agg(
+                F.avg("avg_sentiment").alias("franchise_avg_sentiment"),
+                F.stddev("avg_sentiment").alias("sentiment_stddev"),
+                F.count("*").alias("movie_count"),
+                F.sum("review_count").alias("review_count")
+            ).select(
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("franchise_avg_sentiment").alias("avg_sentiment"),
+                F.col("sentiment_stddev"),
+                F.col("movie_count"),
+                F.col("review_count"),
+                F.col("franchise"),
+                F.col("franchise_avg_sentiment"),
+                F.lit(None).cast(IntegerType()).alias("year"),
+                F.lit(None).cast(DoubleType()).alias("yearly_sentiment")
+            )
+            
+            # Year-level baselines (year dimension only, genre=null)
+            yearly_baselines = movies_with_reviews.filter(
+                F.col("release_year").isNotNull()
+            ).groupBy("release_year").agg(
+                F.avg("avg_sentiment").alias("yearly_sentiment"),
+                F.stddev("avg_sentiment").alias("sentiment_stddev"),
+                F.count("*").alias("movie_count"),
+                F.sum("review_count").alias("review_count")
+            ).select(
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("yearly_sentiment").alias("avg_sentiment"),
+                F.col("sentiment_stddev"),
+                F.col("movie_count"),
+                F.col("review_count"),
+                F.lit(None).cast(StringType()).alias("franchise"),
+                F.lit(None).cast(DoubleType()).alias("franchise_avg_sentiment"),
+                F.col("release_year").alias("year"),
+                F.col("yearly_sentiment")
+            )
+            
+            # Union all baselines
+            sentiment_baselines = genre_baselines.union(franchise_baselines).union(yearly_baselines)
+            
+            # Add metadata
+            sentiment_baselines = sentiment_baselines \
+                .withColumn("type", F.lit("sentiment_baseline")) \
+                .withColumn("updated_at", F.current_timestamp()) \
+                .withColumnRenamed("primary_genre", "genre") \
+                .fillna({
+                    "avg_sentiment": 0.0,
+                    "sentiment_stddev": 0.1,
+                    "review_count": 0
+                })
+            
+            count = sentiment_baselines.count()
+            logger.info(f"Generated {count} sentiment baseline records")
+            self.metrics.add_metric("sentiment_baselines_generated", count)
+            
+            return sentiment_baselines
+            
+        except Exception as e:
+            logger.error(f"Failed to generate sentiment baselines: {str(e)}", exc_info=True)
+            return None
+    
+    def _generate_viral_thresholds(self, enriched_movies_df: DataFrame) -> Optional[DataFrame]:
+        """
+        Generate viral thresholds for Business Goal #2: Viral Content Identification.
+        
+        Produces genre/budget-tier/seasonal viral cutoffs.
+        """
+        logger.info("Generating viral thresholds for Goal #2")
+        
+        try:
+            # Genre-level thresholds (99th percentile for viral, not 75th)
+            genre_thresholds = enriched_movies_df.groupBy("primary_genre").agg(
+                F.expr("percentile_approx(vote_count, 0.99)").alias("viral_threshold"),
+                F.avg("popularity").alias("avg_popularity"),
+                F.count("*").alias("movie_count")
+            ).select(
+                F.col("primary_genre"),
+                F.col("viral_threshold").cast(IntegerType()),
+                F.col("avg_popularity"),
+                F.col("movie_count"),
+                F.lit(None).cast(StringType()).alias("budget_tier"),
+                F.lit(None).cast(IntegerType()).alias("budget_tier_threshold"),
+                F.lit(None).cast(DoubleType()).alias("budget_tier_coefficient"),
+                F.lit(None).cast(StringType()).alias("season"),
+                F.lit(None).cast(IntegerType()).alias("seasonal_threshold")
+            )
+            
+            # Budget tier thresholds (budget dimension only, genre=null)
+            budget_thresholds = enriched_movies_df.filter(
+                F.col("budget_tier") != "unknown"
+            ).groupBy("budget_tier").agg(
+                F.expr("percentile_approx(vote_count, 0.99)").alias("budget_tier_threshold"),
+                F.expr("percentile_approx(vote_count, 0.99)").alias("viral_threshold"),
+                F.avg("popularity").alias("avg_popularity"),
+                F.count("*").alias("movie_count")
+            ).select(
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("viral_threshold").cast(IntegerType()),
+                F.col("avg_popularity"),
+                F.col("movie_count"),
+                F.col("budget_tier"),
+                F.col("budget_tier_threshold"),
+                F.lit(2.5).cast(DoubleType()).alias("budget_tier_coefficient"),  # Hardcoded breakout multiplier
+                F.lit(None).cast(StringType()).alias("season"),
+                F.lit(None).cast(IntegerType()).alias("seasonal_threshold")
+            )
+            
+            # Seasonal thresholds (season dimension only, genre=null)
+            seasonal_thresholds = enriched_movies_df.filter(
+                F.col("season") != "unknown"
+            ).groupBy("season").agg(
+                F.expr("percentile_approx(vote_count, 0.99)").alias("seasonal_threshold"),
+                F.expr("percentile_approx(vote_count, 0.99)").alias("viral_threshold"),
+                F.avg("popularity").alias("avg_popularity"),
+                F.count("*").alias("movie_count")
+            ).select(
+                F.lit(None).cast(StringType()).alias("primary_genre"),
+                F.col("viral_threshold").cast(IntegerType()),
+                F.col("avg_popularity"),
+                F.col("movie_count"),
+                F.lit(None).cast(StringType()).alias("budget_tier"),
+                F.lit(None).cast(IntegerType()).alias("budget_tier_threshold"),
+                F.lit(None).cast(DoubleType()).alias("budget_tier_coefficient"),
+                F.col("season"),
+                F.col("seasonal_threshold")
+            )
+            
+            # Union all thresholds
+            viral_thresholds = genre_thresholds.union(budget_thresholds).union(seasonal_thresholds)
+            
+            # Add metadata
+            viral_thresholds = viral_thresholds \
+                .withColumn("type", F.lit("viral_threshold")) \
+                .withColumn("updated_at", F.current_timestamp()) \
+                .withColumnRenamed("primary_genre", "genre")
+            
+            count = viral_thresholds.count()
+            logger.info(f"Generated {count} viral threshold records")
+            self.metrics.add_metric("viral_thresholds_generated", count)
+            
+            return viral_thresholds
+            
+        except Exception as e:
+            logger.error(f"Failed to generate viral thresholds: {str(e)}", exc_info=True)
+            return None
+    
+    def _generate_movie_intelligence(self, enriched_movies_df: DataFrame) -> Optional[DataFrame]:
+        """
+        Generate movie intelligence for Business Goal #3: Competitive Intelligence.
+        
+        Produces individual movie records with competitive context.
+        """
+        logger.info("Generating movie intelligence for Goal #3")
+        
+        try:
+            # Select relevant fields for movie intelligence
+            # Handle potentially missing fields
+            select_fields = [
                 F.col("id").alias("movie_id"),
                 F.col("title"),
-                F.col("original_title"),
-                F.col("overview"),
-                F.to_date(F.col("release_date")).alias("release_date"),
-                F.col("adult").cast("boolean"),
-                F.col("popularity").cast("double"),
-                F.col("vote_average").cast("double"),
-                F.col("vote_count").cast("int"),
-                F.col("poster_path"),
-                F.col("backdrop_path"),
-                F.col("original_language"),
-                F.col("genre_ids"),  # Will convert to genre names
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
-            )
+                F.array(F.col("primary_genre")).alias("genre"),  # Array for consistency
+                F.col("release_date"),
+                F.col("release_month_name").alias("release_month"),
+                F.col("release_year"),
+                F.col("avg_sentiment"),
+                F.col("vote_average"),
+                F.col("vote_count"),
+                F.col("popularity"),
+                F.col("budget"),
+                F.col("budget_tier"),
+                F.col("franchise"),
+                F.col("director")
+            ]
             
-            # Convert genre IDs to genre names
-            genre_map = {
-                28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
-                80: "Crime", 99: "Documentary", 18: "Drama", 10751: "Family",
-                14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
-                9648: "Mystery", 10749: "Romance", 878: "Science Fiction",
-                10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western"
-            }
-            
-            # Create genre names array
-            def map_genres(genre_ids):
-                if not genre_ids:
-                    return []
-                return [genre_map.get(gid, "Unknown") for gid in genre_ids]
-            
-            map_genres_udf = F.udf(map_genres, ArrayType(StringType()))
-            df = df.withColumn("genres", map_genres_udf(F.col("genre_ids")))
-            df = df.drop("genre_ids")
-            
-            # Add data quality flag
-            df = df.withColumn(
-                "quality_flag",
-                F.when(
-                    (F.col("title").isNull()) | (F.col("release_date").isNull()),
-                    "WARNING"
-                ).otherwise("OK")
-            )
-            
-            # Add partition columns
-            df = df.withColumn("partition_year", F.year(F.col("release_date")))
-            df = df.withColumn("partition_month", F.month(F.col("release_date")))
-            
-            # For movies without release_date, use extraction time
-            df = df.withColumn(
-                "partition_year",
-                F.when(F.col("partition_year").isNull(), 
-                       F.year(F.col("processed_timestamp"))).otherwise(F.col("partition_year"))
-            )
-            df = df.withColumn(
-                "partition_month",
-                F.when(F.col("partition_month").isNull(), 
-                       F.month(F.col("processed_timestamp"))).otherwise(F.col("partition_month"))
-            )
-            
-            # Add primary genre for partitioning (first genre in list)
-            df = df.withColumn(
-                "partition_genre",
-                F.when(F.size(F.col("genres")) > 0, F.col("genres")[0]).otherwise("Unknown")
-            )
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} movies for Silver layer")
-            self.metrics.add_metric("movies_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process movies: {str(e)}", exc_info=True)
-            return None
-    
-    def _process_reviews(self, lookback_hours: int) -> Optional[DataFrame]:
-        """
-        Process reviews from Bronze to Silver with sentiment analysis.
-        """
-        logger.info("Processing reviews from Bronze")
-        
-        try:
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("reviews", None).rstrip('/')
-            
-            df = self.spark.read.parquet(bronze_path)
-            
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
-            )
-            
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} reviews from Bronze")
-            self.metrics.add_metric("bronze_reviews_read", bronze_count)
-            
-            if bronze_count == 0:
-                logger.warning("No reviews found in Bronze layer")
-                return None
-            
-            # Deduplicate by review ID
-            window_spec = Window.partitionBy("id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
-            
-            # Extract fields and compute sentiment
-            df = df.select(
-                F.col("id").alias("review_id"),
-                F.col("movie_id"),
-                F.col("author"),
-                F.col("content"),
-                F.to_date(F.col("created_at")).alias("review_date"),
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
-            )
-            
-            # Compute sentiment scores
-            df = df.withColumn("sentiment_score", 
-                             F.expr("sentiment_score(content)"))
-            df = df.withColumn("sentiment_label", 
-                             F.expr("sentiment_label(content)"))
-            
-            # Add partition columns
-            df = df.withColumn("partition_year", F.year(F.col("review_date")))
-            df = df.withColumn("partition_month", F.month(F.col("review_date")))
-            
-            # Handle nulls
-            df = df.withColumn(
-                "partition_year",
-                F.when(F.col("partition_year").isNull(), 
-                       F.year(F.col("processed_timestamp"))).otherwise(F.col("partition_year"))
-            )
-            df = df.withColumn(
-                "partition_month",
-                F.when(F.col("partition_month").isNull(), 
-                       F.month(F.col("processed_timestamp"))).otherwise(F.col("partition_month"))
-            )
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} reviews for Silver layer")
-            self.metrics.add_metric("reviews_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process reviews: {str(e)}", exc_info=True)
-            return None
-    
-    def _process_credits(self, lookback_hours: int) -> Optional[DataFrame]:
-        """Process credits from Bronze to Silver."""
-        logger.info("Processing credits from Bronze")
-        
-        try:
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(hours=lookback_hours)
-            
-            bronze_path = get_bronze_path("credits", None).rstrip('/')
-            
-            df = self.spark.read.parquet(bronze_path)
-            
-            # Filter by time window
-            df = df.filter(
-                (F.col("extraction_timestamp") >= start_time.isoformat()) &
-                (F.col("extraction_timestamp") <= end_time.isoformat())
-            )
-            
-            bronze_count = df.count()
-            logger.info(f"Read {bronze_count} credits from Bronze")
-            self.metrics.add_metric("bronze_credits_read", bronze_count)
-            
-            if bronze_count == 0:
-                logger.warning("No credits found in Bronze layer")
-                return None
-            
-            # Deduplicate by movie_id
-            window_spec = Window.partitionBy("movie_id").orderBy(F.col("extraction_timestamp").desc())
-            df = df.withColumn("row_num", F.row_number().over(window_spec))
-            df = df.filter(F.col("row_num") == 1).drop("row_num")
-            
-            # Extract fields
-            df = df.select(
-                F.col("movie_id"),
-                F.col("cast"),
-                F.col("crew"),
-                F.col("extraction_timestamp").cast("timestamp").alias("processed_timestamp")
-            )
-            
-            # Add partition columns (use extraction time)
-            df = df.withColumn("partition_year", F.year(F.col("processed_timestamp")))
-            df = df.withColumn("partition_month", F.month(F.col("processed_timestamp")))
-            
-            final_count = df.count()
-            logger.info(f"Processed {final_count} credits for Silver layer")
-            self.metrics.add_metric("credits_processed", final_count)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to process credits: {str(e)}", exc_info=True)
-            return None
-    
-    def _write_to_silver(self, df: DataFrame, data_type: str):
-        """Write DataFrame to Silver layer."""
-        try:
-            output_path = get_silver_path(data_type, None).rstrip('/')
-            
-            logger.info(f"Writing {data_type} to Silver layer: {output_path}")
-            
-            # Partition by year, month, and genre (if applicable)
-            if data_type == "movies":
-                partition_cols = ["partition_year", "partition_month", "partition_genre"]
+            # Add runtime if available
+            if "runtime" in enriched_movies_df.columns:
+                select_fields.append(F.col("runtime"))
             else:
-                partition_cols = ["partition_year", "partition_month"]
+                select_fields.append(F.lit(None).cast(IntegerType()).alias("runtime"))
+            
+            select_fields.append(F.col("review_count"))
+            
+            movie_intelligence = enriched_movies_df.select(*select_fields)
+            
+            # Add metadata
+            movie_intelligence = movie_intelligence \
+                .withColumn("type", F.lit("movie_intelligence")) \
+                .withColumn("updated_at", F.current_timestamp())
+            
+            count = movie_intelligence.count()
+            logger.info(f"Generated {count} movie intelligence records")
+            self.metrics.add_metric("movie_intelligence_generated", count)
+            
+            return movie_intelligence
+            
+        except Exception as e:
+            logger.error(f"Failed to generate movie intelligence: {str(e)}", exc_info=True)
+            return None
+    
+    def _write_to_silver(self, df: DataFrame, dataset_name: str):
+        """Write dataset to Silver layer."""
+        try:
+            output_path = get_silver_path(dataset_name, None).rstrip('/')
+            
+            logger.info(f"Writing {dataset_name} to Silver layer: {output_path}")
             
             df.write \
-                .mode("append") \
-                .partitionBy(*partition_cols) \
+                .mode("overwrite") \
                 .parquet(output_path)
             
             count = df.count()
-            logger.info(f"Successfully wrote {count} {data_type} to Silver layer")
-            self.metrics.add_metric(f"{data_type}_written_to_silver", count)
+            logger.info(f"Successfully wrote {count} records to {dataset_name}")
+            self.metrics.add_metric(f"{dataset_name}_written", count)
             
         except Exception as e:
-            logger.error(f"Failed to write {data_type} to Silver: {str(e)}", exc_info=True)
+            logger.error(f"Failed to write {dataset_name} to Silver: {str(e)}", exc_info=True)
             raise
 
 
 def main():
-    """Main entry point for Silver transformation job."""
-    parser = argparse.ArgumentParser(description="Silver Layer Transformation")
-    parser.add_argument("--lookback-hours", type=int, default=4,
-                       help="Hours of Bronze data to process (default: 4)")
+    """Main entry point for multi-goal baseline calculation job."""
+    parser = argparse.ArgumentParser(description="Silver Layer Multi-Goal Baseline Calculation")
     
     args = parser.parse_args()
     
     spark = None
     try:
         # Create Spark session
-        spark = get_spark_session("silver_transform")
+        spark = get_spark_session("multi_goal_baseline_calculation")
         
-        # Run transformation
-        job = SilverTransformationJob(spark)
-        job.run(lookback_hours=args.lookback_hours)
+        # Run baseline calculation
+        job = BaselineCalculationJob(spark)
+        job.run()
         
     except Exception as e:
-        logger.error(f"Silver transformation failed: {str(e)}", exc_info=True)
+        logger.error(f"Multi-goal baseline calculation failed: {str(e)}", exc_info=True)
         sys.exit(1)
     
     finally:

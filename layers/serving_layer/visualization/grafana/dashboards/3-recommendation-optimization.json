@@ -1,0 +1,2319 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "dual_success_score",
+              "text": "Top Score",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=1",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🏆 Top Dual-Success Score",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "speed_layer_contribution",
+              "text": "Has Reddit",
+              "type": "boolean"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=100",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "equal",
+                  "options": {
+                    "value": true
+                  }
+                },
+                "fieldName": "Has Reddit"
+              }
+            ],
+            "match": "all",
+            "type": "include"
+          }
+        },
+        {
+          "id": "reduce",
+          "options": {
+            "includeTimeField": false,
+            "mode": "reduceFields",
+            "reducers": ["count"]
+          }
+        }
+      ],
+      "title": "🔥 Reddit Buzz Powered",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "count"
+          ],
+          "fields": ""
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "tmdb_score",
+              "text": "TMDB Score",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=100",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "greater",
+                  "options": {
+                    "value": 70
+                  }
+                },
+                "fieldName": "TMDB Score"
+              }
+            ],
+            "match": "all",
+            "type": "include"
+          }
+        }
+      ],
+      "title": "📚 TMDB Quality Leaders",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 70,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 14,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "movie_title",
+              "text": "Movie",
+              "type": "string"
+            },
+            {
+              "selector": "dual_success_score",
+              "text": "Dual Success Score",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=10",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🎬 Top 10 Dual-Success Rankings",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "pointSize": {
+              "fixed": 5
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "points"
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 10,
+        "x": 14,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "displayModeBar": true,
+        "onclick": "console.log",
+        "config": {
+          "displayModeBar": true
+        },
+        "layout": {
+          "xaxis": {
+            "title": "TMDB Score"
+          },
+          "yaxis": {
+            "title": "Reddit Buzz Score"
+          },
+          "hovermode": "closest",
+          "showlegend": false
+        },
+        "script": "const x = data.series[0].fields.find(f => f.name === 'TMDB Score').values;\nconst y = data.series[0].fields.find(f => f.name === 'Reddit Buzz Score').values;\nconst text = data.series[0].fields.find(f => f.name === 'Movie').values;\n\nreturn {\n  data: [{\n    x: x,\n    y: y,\n    text: text,\n    type: 'scatter',\n    mode: 'markers',\n    marker: {\n      size: 10,\n      color: '#1f77b4',\n      opacity: 0.7\n    },\n    hovertemplate: '<b>%{text}</b><br>TMDB: %{x:.1f}<br>Reddit: %{y:.1f}<extra></extra>'\n  }],\n  layout: {\n    xaxis: { title: 'TMDB Score', range: [0, 100] },\n    yaxis: { title: 'Reddit Buzz Score', range: [0, 100] },\n    hovermode: 'closest',\n    showlegend: false\n  }\n};"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "tmdb_score",
+              "text": "TMDB Score",
+              "type": "number"
+            },
+            {
+              "selector": "reddit_buzz_score",
+              "text": "Reddit Buzz Score",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "Movie",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=50",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "📊 Reddit vs TMDB Score Distribution",
+      "type": "ae3e-plotly-panel"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rank"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "movie_title"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reddit_buzz_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 50
+                    },
+                    {
+                      "color": "green",
+                      "value": 75
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_engagement"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reddit_mentions"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rank",
+            "desc": false
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "rank": 0,
+              "movie_title": 1,
+              "reddit_buzz_score": 2,
+              "total_engagement": 3,
+              "reddit_mentions": 4
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "movie_title": "Movie",
+              "reddit_buzz_score": "Reddit Buzz",
+              "total_engagement": "Engagement",
+              "reddit_mentions": "Mentions"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rank",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "",
+              "type": "string"
+            },
+            {
+              "selector": "reddit_buzz_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "total_engagement",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "reddit_mentions",
+              "text": "",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/reddit-buzz?days_back=7&limit=15",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🔥 Pure Reddit Buzz Rankings",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rank"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "movie_title"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_average"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 7
+                    },
+                    {
+                      "color": "green",
+                      "value": 8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tmdb_quality_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 14
+      },
+      "id": 8,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rank",
+            "desc": false
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "rank": 0,
+              "movie_title": 1,
+              "tmdb_quality_score": 2,
+              "vote_average": 3,
+              "vote_count": 4
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "movie_title": "Movie",
+              "tmdb_quality_score": "TMDB Score",
+              "vote_average": "Rating",
+              "vote_count": "Votes"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rank",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "",
+              "type": "string"
+            },
+            {
+              "selector": "tmdb_quality_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "vote_average",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "vote_count",
+              "text": "",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/tmdb-quality?min_vote_count=100&limit=15",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "📚 Pure TMDB Quality Rankings",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "Reddit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "TMDB"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "id": 9,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.5,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "normal",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "movie_title",
+              "text": "Movie",
+              "type": "string"
+            },
+            {
+              "selector": "reddit_buzz_score",
+              "text": "Reddit Score",
+              "type": "number"
+            },
+            {
+              "selector": "tmdb_score",
+              "text": "TMDB Score",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=5",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "Reddit (60%)",
+            "binary": {
+              "left": "Reddit Score",
+              "operator": "*",
+              "right": "0.6"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "TMDB (40%)",
+            "binary": {
+              "left": "TMDB Score",
+              "operator": "*",
+              "right": "0.4"
+            },
+            "mode": "binary",
+            "reduce": {
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Reddit Score": true,
+              "TMDB Score": true
+            },
+            "indexByName": {
+              "Movie": 0,
+              "Reddit (60%)": 1,
+              "TMDB (40%)": 2
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "title": "📊 Score Component Breakdown (Top 5)",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rank"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "movie_title"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dual_success_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 60
+                    },
+                    {
+                      "color": "green",
+                      "value": 80
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reddit_buzz_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tmdb_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_average"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 7
+                    },
+                    {
+                      "color": "green",
+                      "value": 8
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rank",
+            "desc": false
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "rank": 0,
+              "movie_title": 1,
+              "dual_success_score": 2,
+              "reddit_buzz_score": 3,
+              "tmdb_score": 4,
+              "vote_average": 5
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "movie_title": "Movie",
+              "dual_success_score": "Dual Success",
+              "reddit_buzz_score": "Reddit Buzz",
+              "tmdb_score": "TMDB Score",
+              "vote_average": "Rating"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rank",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "",
+              "type": "string"
+            },
+            {
+              "selector": "dual_success_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "reddit_buzz_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "tmdb_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "vote_average",
+              "text": "",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success/genre/${genre}?limit=10",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🎭 Top Movies by Genre: ${genre}",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "genre"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_dual_success"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-GrYlRd"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_reddit_buzz"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlYlRd"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_tmdb_score"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlPu"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "id": 11,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "avg_dual_success",
+            "desc": true
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "dual_success_score": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              },
+              "genre": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "movie_title": {
+                "aggregations": [
+                  "count"
+                ],
+                "operation": "aggregate"
+              },
+              "reddit_buzz_score": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              },
+              "tmdb_score": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "genre": 0,
+              "dual_success_score (mean)": 1,
+              "reddit_buzz_score (mean)": 2,
+              "tmdb_score (mean)": 3,
+              "movie_title (count)": 4
+            },
+            "renameByName": {
+              "genre": "Genre",
+              "dual_success_score (mean)": "avg_dual_success",
+              "reddit_buzz_score (mean)": "avg_reddit_buzz",
+              "tmdb_score (mean)": "avg_tmdb_score",
+              "movie_title (count)": "count"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "avg_dual_success",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "limit",
+          "options": {
+            "limitField": 10
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "genre",
+              "text": "",
+              "type": "string"
+            },
+            {
+              "selector": "dual_success_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "reddit_buzz_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "tmdb_score",
+              "text": "",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "recommendations",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/dual-success?limit=100",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🎨 Genre Performance Heatmap",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rank"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "movie_title"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "similarity_score"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.6
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vote_average"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 6
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 7
+                    },
+                    {
+                      "color": "green",
+                      "value": 8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "matched_with"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 2
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 12,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rank",
+            "desc": false
+          }
+        ]
+      },
+      "pluginVersion": "11.0.0",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "movie_id": true
+            },
+            "indexByName": {
+              "rank": 0,
+              "movie_title": 1,
+              "similarity_score": 2,
+              "shared_genre": 3,
+              "release_year_diff": 4,
+              "matched_with": 5,
+              "vote_average": 6,
+              "popularity": 7,
+              "vote_count": 8
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "movie_title": "Movie Title",
+              "similarity_score": "Similarity",
+              "shared_genre": "Shared Genre",
+              "release_year_diff": "Year Diff",
+              "matched_with": "Matches",
+              "vote_average": "Rating",
+              "popularity": "Popularity",
+              "vote_count": "Votes"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "number"
+            },
+            {
+              "selector": "movie_id",
+              "text": "movie_id",
+              "type": "number"
+            },
+            {
+              "selector": "movie_title",
+              "text": "movie_title",
+              "type": "string"
+            },
+            {
+              "selector": "similarity_score",
+              "text": "similarity_score",
+              "type": "number"
+            },
+            {
+              "selector": "shared_genre",
+              "text": "shared_genre",
+              "type": "string"
+            },
+            {
+              "selector": "release_year_diff",
+              "text": "release_year_diff",
+              "type": "number"
+            },
+            {
+              "selector": "matched_with",
+              "text": "matched_with",
+              "type": "number"
+            },
+            {
+              "selector": "vote_average",
+              "text": "vote_average",
+              "type": "number"
+            },
+            {
+              "selector": "popularity",
+              "text": "popularity",
+              "type": "number"
+            },
+            {
+              "selector": "vote_count",
+              "text": "vote_count",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "filters": [],
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "similar_movies",
+          "source": "url",
+          "type": "json",
+          "url": "http://serving-api:8000/api/v1/recommendations/similar?ids=${user_movies:csv}&strategy=${similarity_strategy}&limit=20",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          },
+          "parser": "backend"
+        }
+      ],
+      "title": "🎯 Personalized Recommendations (Select 2-5 favorite movies from dropdown above)",
+      "type": "table",
+      "description": "💡 How to use: 1) Click 'Your Favorite Movies' dropdown above, 2) Type movie name to search (e.g., 'Avengers', 'Matrix'), 3) Select 2-5 movies, 4) Choose strategy. The algorithm finds similar movies based on genre, director, franchise, budget tier, and release year. Current selection: Avengers: Endgame + Interstellar (default examples)."
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": [
+    "recommendations",
+    "content-optimization",
+    "trending"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "All"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Genre",
+        "multi": false,
+        "name": "genre",
+        "options": [
+          {
+            "selected": true,
+            "text": "All",
+            "value": "All"
+          },
+          {
+            "selected": false,
+            "text": "Action",
+            "value": "Action"
+          },
+          {
+            "selected": false,
+            "text": "Adventure",
+            "value": "Adventure"
+          },
+          {
+            "selected": false,
+            "text": "Animation",
+            "value": "Animation"
+          },
+          {
+            "selected": false,
+            "text": "Comedy",
+            "value": "Comedy"
+          },
+          {
+            "selected": false,
+            "text": "Crime",
+            "value": "Crime"
+          },
+          {
+            "selected": false,
+            "text": "Documentary",
+            "value": "Documentary"
+          },
+          {
+            "selected": false,
+            "text": "Drama",
+            "value": "Drama"
+          },
+          {
+            "selected": false,
+            "text": "Family",
+            "value": "Family"
+          },
+          {
+            "selected": false,
+            "text": "Fantasy",
+            "value": "Fantasy"
+          },
+          {
+            "selected": false,
+            "text": "Horror",
+            "value": "Horror"
+          },
+          {
+            "selected": false,
+            "text": "Mystery",
+            "value": "Mystery"
+          },
+          {
+            "selected": false,
+            "text": "Romance",
+            "value": "Romance"
+          },
+          {
+            "selected": false,
+            "text": "Science Fiction",
+            "value": "Science Fiction"
+          },
+          {
+            "selected": false,
+            "text": "Thriller",
+            "value": "Thriller"
+          },
+          {
+            "selected": false,
+            "text": "War",
+            "value": "War"
+          },
+          {
+            "selected": false,
+            "text": "Western",
+            "value": "Western"
+          }
+        ],
+        "query": "All,Action,Adventure,Animation,Comedy,Crime,Documentary,Drama,Family,Fantasy,Horror,Mystery,Romance,Science Fiction,Thriller,War,Western",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "Avengers: Endgame (2019)",
+            "Interstellar (2014)"
+          ],
+          "value": [
+            "299534",
+            "157336"
+          ]
+        },
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "infinity"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Your Favorite Movies (Type to search in dropdown)",
+        "multi": true,
+        "name": "user_movies",
+        "options": [],
+        "query": {
+          "infinityQuery": {
+            "columns": [],
+            "filters": [],
+            "format": "table",
+            "refId": "variable",
+            "root_selector": "",
+            "source": "url",
+            "type": "json",
+            "url": "http://serving-api:8000/api/v1/utilities/grafana/movies?limit=200",
+            "url_options": {
+              "data": "",
+              "method": "GET"
+            }
+          },
+          "query": "http://serving-api:8000/api/v1/utilities/grafana/movies?limit=200",
+          "queryType": "infinity"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "average",
+          "value": "average"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Recommendation Strategy",
+        "multi": false,
+        "name": "similarity_strategy",
+        "options": [
+          {
+            "selected": true,
+            "text": "average",
+            "value": "average"
+          },
+          {
+            "selected": false,
+            "text": "union",
+            "value": "union"
+          },
+          {
+            "selected": false,
+            "text": "intersection",
+            "value": "intersection"
+          }
+        ],
+        "query": "average,union,intersection",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5m",
+      "15m",
+      "30m",
+      "1h"
+    ]
+  },
+  "timezone": "browser",
+  "title": "3. Content Recommendation Optimization",
+  "uid": "recommendation-optimization",
+  "version": 1,
+  "weekStart": ""
+}

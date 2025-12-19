@@ -55,10 +55,9 @@ RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 COPY streaming_jobs/ /app/streaming_jobs/
 
 # Copy supporting modules
-COPY kafka_producers/ /app/kafka_producers/
+COPY reddit_producers/ /app/reddit_producers/
 COPY cassandra_views/ /app/cassandra_views/
 COPY connectors/ /app/connectors/
-COPY config/ /app/config/
 
 # ---------------------------------------------------------------------
 # STEP 7: Create logs and checkpoints directories

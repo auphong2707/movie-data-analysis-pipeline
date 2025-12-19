@@ -58,11 +58,11 @@ async def get_trending_movies(
     - avg_popularity: Average TMDB popularity for genre from viral_thresholds (current TMDB buzz)
     - Compares "current Reddit buzz" to "current TMDB buzz"
     
-    Viral Status Classification (based on percentile thresholds):
-    - viral: V ≥ 0.3 (Top 5% - extremely high engagement)
-    - trending: 0.15 ≤ V < 0.3 (Top 10% - high engagement)
-    - growing: 0.05 ≤ V < 0.15 (Top 25% - moderate engagement)
-    - stable: V < 0.05 (Below top 25% - normal/low engagement)
+    Viral Status Classification (calibrated to actual data distribution):
+    - viral: V ≥ 0.10 (Top 5% - extremely high engagement)
+    - trending: 0.05 ≤ V < 0.10 (Top 20% - high engagement)
+    - growing: 0.01 ≤ V < 0.05 (Top 50% - moderate engagement)
+    - stable: V < 0.01 (Below top 50% - normal/low engagement)
     
     Data Sources:
     - speed_views: Reddit engagement metrics (48h TTL, aggregated across all windows)
@@ -172,12 +172,12 @@ async def get_trending_movies(
             if V < viral_threshold:
                 continue
             
-            # Determine viral status based on percentile thresholds
-            if V >= 0.3:
+            # Determine viral status based on calibrated percentile thresholds
+            if V >= 0.10:
                 status = "viral"
-            elif V >= 0.15:
-                status = "trending"
             elif V >= 0.05:
+                status = "trending"
+            elif V >= 0.01:
                 status = "growing"
             else:
                 status = "stable"
@@ -369,12 +369,12 @@ async def get_viral_score(movie_id: int):
         viral_score = speed_result['total_viral_score']
         V = viral_score / threshold
         
-        # Determine viral status
-        if V >= 0.3:
+        # Determine viral status (calibrated thresholds)
+        if V >= 0.10:
             viral_status = "viral"
-        elif V >= 0.15:
-            viral_status = "trending"
         elif V >= 0.05:
+            viral_status = "trending"
+        elif V >= 0.01:
             viral_status = "growing"
         else:
             viral_status = "stable"
@@ -603,11 +603,11 @@ async def get_marketing_opportunities(
     - Fresh + Accelerating = High urgency, act now!
     - Old + Decelerating = Low urgency, let it fade
     
-    Recommendation Logic (calibrated to data: O_max=0.338, 95th=0.060, 90th=0.050, 75th=0.010):
-    - amplify_immediately: O ≥ 0.060 (top 5%) and urgency ≥ 0.99 (top 10%)
-    - monitor_closely: O ≥ 0.050 (top 10%)
-    - organic_growth: O ≥ 0.010 (top 25%)
-    - evaluate: O < 0.010 (bottom 75%)
+    Recommendation Logic (calibrated to actual data distribution):
+    - amplify_immediately: O ≥ 0.10 (top tier) and urgency ≥ 0.95
+    - monitor_closely: O ≥ 0.05 (high priority)
+    - organic_growth: O ≥ 0.01 (moderate priority)
+    - evaluate: O < 0.01 (low priority)
     
     Returns top opportunities sorted by opportunity score (descending)
     """
@@ -675,16 +675,15 @@ async def get_marketing_opportunities(
             if O < min_opportunity_score:
                 continue
             
-            # Determine recommended action (calibrated to current data distribution)
-            # Data: O_max=0.338, 95th=0.060, 90th=0.050, 75th=0.010, urgency_90th=0.99
-            if O >= 0.060 and urgency >= 0.99:
-                recommended_action = "amplify_immediately"  # Top 5% score + top 10% urgency
-            elif O >= 0.050:
-                recommended_action = "monitor_closely"  # Top 10%
-            elif O >= 0.010:
-                recommended_action = "organic_growth"  # Top 25%
+            # Determine recommended action (calibrated to actual data distribution)
+            if O >= 0.10 and urgency >= 0.95:
+                recommended_action = "amplify_immediately"  # Top tier + high urgency
+            elif O >= 0.05:
+                recommended_action = "monitor_closely"  # High priority
+            elif O >= 0.01:
+                recommended_action = "organic_growth"  # Moderate priority
             else:
-                recommended_action = "evaluate"  # Bottom 75%
+                recommended_action = "evaluate"  # Low priority
             
             # Estimated reach: current_velocity * amplification_multiplier * time_horizon
             # amplification_multiplier = 3.0 (assumed 3x with marketing push)

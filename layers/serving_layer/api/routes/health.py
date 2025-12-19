@@ -515,3 +515,52 @@ async def layer_status_array():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "layers": layers_array
     }
+
+
+@router.get("/collection-counts")
+async def collection_document_counts():
+    """
+    Get document counts for all MongoDB collections
+    Returns the number of data points in each collection
+    
+    Returns:
+        dict: Document counts for each collection
+    """
+    uri = os.getenv('MONGODB_URI', 'mongodb://admin:password@serving-mongodb:27017')
+    db_name = os.getenv('MONGODB_DATABASE', 'moviedb')
+    
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        db = client[db_name]
+        
+        # Define the collections to count
+        collections = [
+            "movie_intelligence",
+            "speed_views", 
+            "viral_thresholds",
+            "sentiment_baselines"
+        ]
+        
+        counts = {}
+        for collection_name in collections:
+            try:
+                count = db[collection_name].count_documents({})
+                counts[collection_name] = count
+            except Exception as e:
+                logger.error(f"Error counting documents in {collection_name}: {e}")
+                counts[collection_name] = 0
+        
+        client.close()
+        
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "database": db_name,
+            "collections": counts,
+            "total_documents": sum(counts.values())
+        }
+    except Exception as e:
+        logger.error(f"Error getting collection counts: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to retrieve collection counts: {str(e)}"
+        )

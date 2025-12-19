@@ -136,7 +136,7 @@ async def get_dual_success_recommendations(
         for movie in batch_movies:
             movie_title = movie['title']
             
-            # Calculate Reddit Score (raw)
+            # Calculate Reddit Score using same formula as reddit-buzz endpoint
             reddit_raw = 0.0
             has_speed_data = False
             discussion_count = 0
@@ -145,26 +145,31 @@ async def get_dual_success_recommendations(
                 has_speed_data = True
                 engagement = speed_engagement[movie_title]
                 
-                # Calculate total engagement
+                # Calculate weighted engagement (same as reddit-buzz endpoint)
                 upvotes = engagement.get('total_upvotes', 0)
                 comments = engagement.get('total_comments', 0)
                 awards = engagement.get('total_awards', 0)
                 discussion_count = engagement.get('discussion_count', 0)
                 
-                total_engagement = upvotes + (comments * 2) + (awards * 10)
+                W = upvotes + (comments * 2) + (awards * 10)
                 
-                # Apply minimum engagement threshold
-                if total_engagement >= 10:
-                    # Calculate recency weight
+                # Only calculate score if there's meaningful engagement
+                if W > 0:
+                    # Calculate recency decay (exponential with 24h half-life)
                     last_window = engagement.get('last_window_start')
                     if last_window:
                         age_hours = (now - last_window).total_seconds() / 3600
-                        recency_weight = calculate_recency_weight(age_hours)
                     else:
-                        recency_weight = 0.2
+                        age_hours = 30 * 24  # Assume oldest (30 days)
                     
-                    # Calculate raw Reddit score
-                    reddit_raw = math.log10(total_engagement + 1) * recency_weight
+                    decay = math.exp(-age_hours / 24)
+                    
+                    # Calculate volume multiplier (log scale)
+                    post_count = engagement.get('post_count', 1)
+                    multiplier = 1 + math.log10(post_count + 1) / 10
+                    
+                    # Final Reddit raw score (same as reddit-buzz endpoint)
+                    reddit_raw = W * decay * multiplier
             
             # Calculate TMDB Score (raw) - Calibrated hybrid formula
             # Components: 50% popularity + 30% quality + 20% credibility

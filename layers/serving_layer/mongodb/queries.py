@@ -411,10 +411,11 @@ class MovieQueries:
             {
                 '$group': {
                     '_id': '$movie_title',
-                    'total_upvotes': {'$sum': '$total_upvotes'},
-                    'total_comments': {'$sum': '$total_comments'},
-                    'total_awards': {'$sum': '$total_awards'},
+                    'total_upvotes': {'$sum': '$metrics.total_upvotes'},
+                    'total_comments': {'$sum': '$metrics.total_comments'},
+                    'total_awards': {'$sum': '$metrics.total_awards'},
                     'discussion_count': {'$sum': 1},
+                    'post_count': {'$sum': '$metrics.post_count'},
                     'last_window_start': {'$max': '$window_start'}
                 }
             }
@@ -430,6 +431,7 @@ class MovieQueries:
                 'total_comments': result.get('total_comments', 0),
                 'total_awards': result.get('total_awards', 0),
                 'discussion_count': result.get('discussion_count', 0),
+                'post_count': result.get('post_count', 1),
                 'last_window_start': result.get('last_window_start')
             }
         

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+    kompose.version: 1.37.0 (fb0539e64)
+  labels:
+    io.kompose.service: speed-reddit-sentiment-stream
+  name: speed-reddit-sentiment-stream
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: speed-reddit-sentiment-stream
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+        kompose.version: 1.37.0 (fb0539e64)
+      labels:
+        io.kompose.service: speed-reddit-sentiment-stream
+    spec:
+      containers:
+        - args:
+            - python
+            - streaming_jobs/reddit_sentiment_stream.py
+          env:
+            - name: CASSANDRA_HOST
+              value: speed-cassandra
+            - name: SPARK_SUBMIT_OPTS
+              value: --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+          envFrom:
+            - configMapRef:
+                name: env
+          image: auphong2707/movie-pipeline-speed-layer:v2
+          imagePullPolicy: Always
+          livenessProbe:
+            exec:
+              command:
+                - ps aux | grep reddit_sentiment_stream.py | grep -v grep || exit 1
+            failureThreshold: 3
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          name: speed-reddit-sentiment-stream
+          volumeMounts:
+            - mountPath: /app/checkpoints
+              name: speed-spark-checkpoints
+      restartPolicy: Always
+      volumes:
+        - name: speed-spark-checkpoints
+          persistentVolumeClaim:
+            claimName: speed-spark-checkpoints

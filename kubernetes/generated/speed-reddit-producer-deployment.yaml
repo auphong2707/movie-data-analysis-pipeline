@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+    kompose.version: 1.37.0 (fb0539e64)
+  labels:
+    io.kompose.service: speed-reddit-producer
+  name: speed-reddit-producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: speed-reddit-producer
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+        kompose.version: 1.37.0 (fb0539e64)
+      labels:
+        io.kompose.service: speed-reddit-producer
+    spec:
+      containers:
+        - args:
+            - python
+            - reddit_producers/reddit_stream_producer.py
+            - --subreddits
+            - movies
+            - boxoffice
+            - TrueFilm
+            - --poll-interval
+            - "30"
+          env:
+            - name: POLL_INTERVAL
+              value: "30"
+            - name: REDDIT_USER_AGENT
+              value: MovieAnalytics/1.0
+          envFrom:
+            - configMapRef:
+                name: env
+          image: auphong2707/movie-pipeline-speed-layer:v2
+          imagePullPolicy: Always
+          livenessProbe:
+            exec:
+              command:
+                - ps aux | grep reddit_stream_producer.py | grep -v grep || exit 1
+            failureThreshold: 3
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+          name: speed-reddit-producer
+          volumeMounts:
+            - name: reddit-producer-code
+              mountPath: /app/reddit_producers/reddit_stream_producer.py
+              subPath: reddit_stream_producer.py
+      restartPolicy: Always
+      volumes:
+        - name: reddit-producer-code
+          configMap:
+            name: reddit-producer-code

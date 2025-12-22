@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+    kompose.version: 1.37.0 (fb0539e64)
+  labels:
+    io.kompose.service: batch-minio-init
+  name: batch-minio-init
+spec:
+  containers:
+    - command:
+        - /bin/sh
+        - -c
+        - ' sleep 5; mc alias set myminio http://batch-minio:9000 minioadmin minioadmin; mc mb myminio/bronze-data || true; mc mb myminio/silver-data || true; mc mb myminio/gold-data || true; echo ''Buckets created successfully''; '
+      image: minio/mc:latest
+      name: batch-minio-init
+  restartPolicy: Never

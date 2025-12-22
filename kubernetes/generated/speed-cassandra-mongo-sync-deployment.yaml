@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+    kompose.version: 1.37.0 (fb0539e64)
+  labels:
+    io.kompose.service: speed-cassandra-mongo-sync
+  name: speed-cassandra-mongo-sync
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: speed-cassandra-mongo-sync
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -f docker-compose.yml -o kubernetes/generated/
+        kompose.version: 1.37.0 (fb0539e64)
+      labels:
+        io.kompose.service: speed-cassandra-mongo-sync
+    spec:
+      containers:
+        - args:
+            - python
+            - connectors/reddit_sync.py
+            - --cassandra-hosts
+            - speed-cassandra
+            - --mongo-uri
+            - mongodb://admin:password@serving-mongodb:27017
+          env:
+            - name: MONGO_DATABASE
+              value: moviedb
+            - name: MONGO_URI
+              value: mongodb://admin:password@serving-mongodb:27017
+          envFrom:
+            - configMapRef:
+                name: env
+          image: auphong2707/movie-pipeline-speed-layer:v2
+          imagePullPolicy: Always
+          livenessProbe:
+            exec:
+              command:
+                - ps aux | grep reddit_sync.py | grep -v grep || exit 1
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          name: speed-cassandra-mongo-sync
+      restartPolicy: Always

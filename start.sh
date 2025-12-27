@@ -243,11 +243,11 @@ fi
 
 echo ""
 log_info "========================================="
-log_info "Phase 4: Speed Layer Verification"
+log_info "Phase 4: Speed Layer Startup"
 log_info "========================================="
 echo ""
 
-log_info "Verifying speed layer services..."
+log_info "Verifying speed layer infrastructure..."
 
 # Check Kafka
 if docker ps | grep -q "speed-kafka-1.*healthy"; then
@@ -263,18 +263,63 @@ else
     log_warning "Cassandra is still starting..."
 fi
 
-# Check speed layer applications
-sleep 5
-if docker ps | grep -q "speed-reddit-producer"; then
-    log_success "Reddit producer is running"
-else
-    log_warning "Reddit producer is not yet running"
+# Start speed layer processing containers
+log_info "Starting speed layer processing containers..."
+
+# Start Kafka topics initialization (dependency for other speed containers)
+if ! docker ps | grep -q "speed-kafka-topics-init"; then
+    log_info "Starting Kafka topics initialization..."
+    docker-compose up -d speed-kafka-topics-init
+    sleep 5
 fi
 
-if docker ps | grep -q "speed-reddit-sentiment-stream"; then
-    log_success "Reddit sentiment stream is running"
+# Start Reddit producer
+if ! docker ps | grep -q "speed-reddit-producer"; then
+    log_info "Starting Reddit producer..."
+    docker-compose up -d speed-reddit-producer
+    sleep 3
 else
-    log_warning "Reddit sentiment stream is not yet running"
+    log_success "Reddit producer is already running"
+fi
+
+# Start Reddit sentiment stream
+if ! docker ps | grep -q "speed-reddit-sentiment-stream"; then
+    log_info "Starting Reddit sentiment stream..."
+    docker-compose up -d speed-reddit-sentiment-stream
+    sleep 3
+else
+    log_success "Reddit sentiment stream is already running"
+fi
+
+# Start Cassandra to MongoDB sync
+if ! docker ps | grep -q "speed-cassandra-mongo-sync"; then
+    log_info "Starting Cassandra to MongoDB sync..."
+    docker-compose up -d speed-cassandra-mongo-sync
+    sleep 3
+else
+    log_success "Cassandra to MongoDB sync is already running"
+fi
+
+# Verify all speed layer containers are running
+log_info "Verifying speed layer containers..."
+sleep 5
+
+if docker ps | grep -q "speed-reddit-producer.*Up"; then
+    log_success "✓ Reddit producer is running"
+else
+    log_warning "✗ Reddit producer failed to start"
+fi
+
+if docker ps | grep -q "speed-reddit-sentiment-stream.*Up"; then
+    log_success "✓ Reddit sentiment stream is running"
+else
+    log_warning "✗ Reddit sentiment stream failed to start"
+fi
+
+if docker ps | grep -q "speed-cassandra-mongo-sync.*Up"; then
+    log_success "✓ Cassandra to MongoDB sync is running"
+else
+    log_warning "✗ Cassandra to MongoDB sync failed to start"
 fi
 
 echo ""

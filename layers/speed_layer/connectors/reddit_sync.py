@@ -6,17 +6,50 @@ Syncs Reddit speed layer views from Cassandra to MongoDB for serving layer acces
 import logging
 import time
 import sys
+import threading
 from typing import Dict, List
 from datetime import datetime, timedelta
 from cassandra.cluster import Cluster
 from pymongo import MongoClient, UpdateOne
 from pymongo.errors import BulkWriteError
+from flask import Flask, jsonify
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Flask app for health endpoint
+health_app = Flask(__name__)
+health_status = {
+    'status': 'starting',
+    'last_successful_sync': None,
+    'total_syncs': 0,
+    'total_records_synced': 0,
+    'last_sync_stats': {},
+    'last_error': None
+}
+
+@health_app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for monitoring."""
+    status_code = 200 if health_status['status'] == 'healthy' else 503
+    return jsonify(health_status), status_code
+
+@health_app.route('/ready', methods=['GET'])
+def readiness_check():
+    """Readiness check - is the service ready to accept traffic."""
+    ready = health_status['status'] in ['healthy', 'running']
+    status_code = 200 if ready else 503
+    return jsonify({
+        'ready': ready,
+        'status': health_status['status']
+    }), status_code
+
+def run_health_server():
+    """Run Flask health server in background thread."""
+    health_app.run(host='0.0.0.0', port=8081, debug=False, use_reloader=False)
 
 
 class RedditCassandraToMongoSync:
@@ -288,7 +321,13 @@ def main():
     logger.info("🚀 Starting Reddit Cassandra → MongoDB sync service")
     logger.info(f"⏱️ Sync interval: {SYNC_INTERVAL} seconds (5 minutes)")
     
+    # Start health check server in background thread
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    logger.info("Health check server started on port 8081")
+    
     sync = None
+    health_status['status'] = 'running'
     
     try:
         # Initialize sync connector
@@ -303,6 +342,14 @@ def main():
                 stats = sync.sync_all_views()
                 logger.info(f"📊 Sync stats: {stats}")
                 
+                # Update health status
+                health_status['status'] = 'healthy'
+                health_status['last_successful_sync'] = datetime.utcnow().isoformat()
+                health_status['total_syncs'] += 1
+                health_status['total_records_synced'] += stats.get('total_synced', 0)
+                health_status['last_sync_stats'] = stats
+                health_status['last_error'] = None
+                
                 if stats['total_synced'] > 0:
                     logger.info(f"✅ Successfully synced {stats['total_synced']} records")
                 else:
@@ -314,14 +361,19 @@ def main():
                 
             except KeyboardInterrupt:
                 logger.info("⛔ Received interrupt signal, shutting down...")
+                health_status['status'] = 'stopped'
                 break
             except Exception as e:
                 logger.error(f"❌ Sync error: {e}")
+                health_status['status'] = 'degraded'
+                health_status['last_error'] = str(e)
                 logger.info(f"⏸️ Retrying in {SYNC_INTERVAL} seconds...")
                 time.sleep(SYNC_INTERVAL)
                 
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
+        health_status['status'] = 'failed'
+        health_status['last_error'] = str(e)
         sys.exit(1)
     finally:
         if sync:

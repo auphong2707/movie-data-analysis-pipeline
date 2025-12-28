@@ -449,22 +449,57 @@ async def system_health_overview():
     # PySpark runner: Job-based service - may not always be running, mark as degraded
     
     # PySpark runner is a job executor that may not be actively running
-    pyspark_runner_check = {
-        "status": "degraded" if postgres_check.get("status") == "healthy" else "unknown",
-        "note": "⚠️ Job-based service - runs on demand. Cannot directly monitor without health endpoint. PostgreSQL is " + postgres_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or check job execution logs."
-    }
+    # Check if container is running by verifying basic connectivity
+    try:
+        # Try to resolve the container hostname - if it resolves, container is running
+        import socket
+        socket.gethostbyname("batch-pyspark-runner")
+        container_exists = True
+    except:
+        container_exists = False
+    
+    if container_exists and postgres_check.get("status") == "healthy":
+        pyspark_runner_check = {
+            "status": "healthy",
+            "note": "✓ Container is running and ready. Job-based service - executes Spark jobs on demand via Airflow.",
+            "airflow_metadata_db": "healthy"
+        }
+    elif container_exists:
+        pyspark_runner_check = {
+            "status": "degraded",
+            "note": "⚠️ Container is running but Airflow metadata DB (PostgreSQL) is unhealthy.",
+            "airflow_metadata_db": postgres_check.get("status", "unknown")
+        }
+    else:
+        pyspark_runner_check = {
+            "status": "unhealthy",
+            "note": "❌ Container is not running or not reachable.",
+            "airflow_metadata_db": postgres_check.get("status", "unknown")
+        }
     
     # For reddit producer and cassandra sync: mark as degraded if Kafka/Cassandra are healthy
     # This is an indirect health check - better than hardcoded "healthy"
-    reddit_producer_check = {
-        "status": "degraded" if kafka1_check.get("status") == "healthy" else "unknown",
-        "note": "⚠️ Cannot directly monitor - no health endpoint. Kafka is " + kafka1_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or mount Docker socket for container health checks."
-    }
+    reddit_producer_check = await HealthChecker.check_http_service(
+        "http://speed-reddit-producer:8080/health",
+        timeout=3
+    )
+    if reddit_producer_check.get("status") == "unhealthy":
+        # Fallback to Kafka check if HTTP endpoint is unavailable
+        reddit_producer_check = {
+            "status": "degraded" if kafka1_check.get("status") == "healthy" else "unknown",
+            "note": "⚠️ Health endpoint unavailable - falling back to Kafka check. Kafka is " + kafka1_check.get("status", "unknown") + "."
+        }
     
-    cassandra_sync_check = {
-        "status": "degraded" if cassandra_check.get("status") == "healthy" else "unknown",
-        "note": "⚠️ Cannot directly monitor - no health endpoint. Cassandra is " + cassandra_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or mount Docker socket for container health checks."
-    }
+    cassandra_sync_check = await HealthChecker.check_http_service(
+        "http://speed-cassandra-mongo-sync:8081/health",
+        timeout=3
+    )
+    if cassandra_sync_check.get("status") == "unhealthy":
+        # Fallback to Cassandra check if HTTP endpoint is unavailable
+        cassandra_sync_check = {
+            "status": "degraded" if cassandra_check.get("status") == "healthy" else "unknown",
+            "note": "⚠️ Health endpoint unavailable - falling back to Cassandra check. Cassandra is " + cassandra_check.get("status", "unknown") + "."
+        }
     
     reddit_producer_check = safe_check(reddit_producer_check)
     sentiment_stream_check = safe_check(sentiment_stream_check)

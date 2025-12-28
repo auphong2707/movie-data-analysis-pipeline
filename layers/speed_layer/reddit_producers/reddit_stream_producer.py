@@ -18,6 +18,8 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 import argparse
+import threading
+from flask import Flask, jsonify
 
 import requests
 from kafka import KafkaProducer
@@ -30,6 +32,37 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Flask app for health endpoint
+health_app = Flask(__name__)
+health_status = {
+    'status': 'starting',
+    'last_successful_cycle': None,
+    'total_cycles': 0,
+    'total_posts_published': 0,
+    'total_comments_published': 0,
+    'last_error': None
+}
+
+@health_app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for monitoring."""
+    status_code = 200 if health_status['status'] == 'healthy' else 503
+    return jsonify(health_status), status_code
+
+@health_app.route('/ready', methods=['GET'])
+def readiness_check():
+    """Readiness check - is the service ready to accept traffic."""
+    ready = health_status['status'] in ['healthy', 'running']
+    status_code = 200 if ready else 503
+    return jsonify({
+        'ready': ready,
+        'status': health_status['status']
+    }), status_code
+
+def run_health_server():
+    """Run Flask health server in background thread."""
+    health_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 
 class RedditStreamProducer:
@@ -262,6 +295,7 @@ class RedditStreamProducer:
         for post in posts:
             try:
                 self.producer.send('reddit.posts', value=post)
+                health_status['total_posts_published'] += 1
             except Exception as e:
                 logger.error(f"Failed to publish post {post['post_id']}: {e}")
         
@@ -269,6 +303,7 @@ class RedditStreamProducer:
         for comment in comments:
             try:
                 self.producer.send('reddit.comments', value=comment)
+                health_status['total_comments_published'] += 1
             except Exception as e:
                 logger.error(f"Failed to publish comment {comment['comment_id']}: {e}")
         
@@ -285,26 +320,39 @@ class RedditStreamProducer:
             poll_interval: Seconds between polls (default: 30)
         """
         logger.info(f"Starting Reddit stream with {poll_interval}s poll interval")
+        health_status['status'] = 'running'
         
         try:
             while True:
                 cycle_start = time.time()
                 
-                # Fetch new data
-                posts = self.fetch_new_posts()
-                comments = self.fetch_new_comments()
-                
-                # Publish to Kafka
-                if posts or comments:
-                    self.publish_to_kafka(posts, comments)
-                else:
-                    logger.info("No new posts or comments in this cycle")
-                
-                # Clean up old seen IDs (keep last 10,000)
-                if len(self.seen_posts) > 10000:
-                    self.seen_posts = set(list(self.seen_posts)[-10000:])
-                if len(self.seen_comments) > 10000:
-                    self.seen_comments = set(list(self.seen_comments)[-10000:])
+                try:
+                    # Fetch new data
+                    posts = self.fetch_new_posts()
+                    comments = self.fetch_new_comments()
+                    
+                    # Publish to Kafka
+                    if posts or comments:
+                        self.publish_to_kafka(posts, comments)
+                    else:
+                        logger.info("No new posts or comments in this cycle")
+                    
+                    # Clean up old seen IDs (keep last 10,000)
+                    if len(self.seen_posts) > 10000:
+                        self.seen_posts = set(list(self.seen_posts)[-10000:])
+                    if len(self.seen_comments) > 10000:
+                        self.seen_comments = set(list(self.seen_comments)[-10000:])
+                    
+                    # Update health status
+                    health_status['status'] = 'healthy'
+                    health_status['last_successful_cycle'] = datetime.now(timezone.utc).isoformat()
+                    health_status['total_cycles'] += 1
+                    health_status['last_error'] = None
+                    
+                except Exception as e:
+                    logger.error(f"Error in polling cycle: {e}")
+                    health_status['status'] = 'degraded'
+                    health_status['last_error'] = str(e)
                 
                 # Wait for next cycle
                 cycle_duration = time.time() - cycle_start
@@ -318,6 +366,7 @@ class RedditStreamProducer:
                 
         except KeyboardInterrupt:
             logger.info("Shutting down Reddit stream producer...")
+            health_status['status'] = 'stopped'
         finally:
             self.producer.close()
             logger.info("Producer closed")
@@ -337,6 +386,11 @@ def main():
     kafka_bootstrap = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
     
     logger.info("Starting Reddit JSON scraper (no API credentials needed)")
+    
+    # Start health check server in background thread
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    logger.info("Health check server started on port 8080")
     
     # Create and run producer
     producer = RedditStreamProducer(

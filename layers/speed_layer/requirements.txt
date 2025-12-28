@@ -46,6 +46,8 @@ vaderSentiment==3.3.2
 # ---------------------------------------------------------------------
 # requests: HTTP client for TMDB API and Reddit JSON scraping
 requests==2.31.0
+# Flask: Lightweight HTTP server for health endpoints
+flask==3.0.0
 
 # ---------------------------------------------------------------------
 # Configuration & Environment

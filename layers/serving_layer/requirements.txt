@@ -17,6 +17,10 @@ motor==3.6.0  # Async MongoDB driver
 redis==5.2.0
 hiredis==3.0.0  # C parser for better performance
 
+# Database Drivers for Health Checks
+psycopg2-binary==2.9.10  # PostgreSQL driver
+cassandra-driver==3.29.2  # Cassandra driver
+
 # Data processing
 python-dateutil==2.9.0
 numpy==1.26.4  # For cosine similarity calculations

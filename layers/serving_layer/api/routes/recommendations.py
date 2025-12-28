@@ -23,6 +23,7 @@ from query_engine.similarity_engine import (
     build_feature_vector,
     calculate_similarity_score
 )
+from query_engine.cache import cached
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ def normalize_scores(values: List[float]) -> List[float]:
 
 
 @router.get("/dual-success", response_model=DualSuccessResponse)
+@cached(ttl=300, prefix="recommendations")  # Cache for 5 minutes
 async def get_dual_success_recommendations(
     genre: Optional[str] = Query(None, description="Filter by genre"),
     min_rating: float = Query(6.0, ge=0, le=10, description="Minimum TMDB rating"),
@@ -280,6 +282,7 @@ async def get_dual_success_by_genre(
 
 
 @router.get("/similar/{movie_id}", response_model=SimilarMoviesResponse)
+@cached(ttl=600, prefix="recommendations")  # Cache for 10 minutes
 async def get_similar_movies_by_id(
     movie_id: int,
     limit: int = Query(10, ge=1, le=50, description="Number of similar movies to return"),

@@ -9,6 +9,7 @@ import re
 from mongodb.client import get_mongodb_client, get_database
 from mongodb.queries import MovieQueries
 from api.schemas.utilities import GenresResponse, GenreInfo, MovieSearchResponse, MovieSearchResult
+from query_engine.cache import cached
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ router = APIRouter(
 
 
 @router.get("/genres", response_model=GenresResponse)
+@cached(ttl=3600, prefix="utilities")  # Cache for 1 hour
 async def get_genres():
     """
     Get all available genres with movie counts
@@ -55,6 +57,7 @@ async def get_genres():
 
 
 @router.get("/grafana/genres")
+@cached(ttl=3600, prefix="utilities")  # Cache for 1 hour
 async def get_genres_for_grafana():
     """
     Get genres formatted for Grafana variable dropdowns

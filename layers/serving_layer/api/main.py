@@ -5,6 +5,7 @@ Goal-Aligned API Structure (Dec 2025)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from contextlib import asynccontextmanager
 
 # Import routers
 from api.routes import (
@@ -14,10 +15,32 @@ from api.routes import (
     recommendations_router,
     utilities_router
 )
+from query_engine.cache import get_redis, close_redis
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events"""
+    # Startup
+    logger.info("Starting up Movie Data Analysis Pipeline API...")
+    try:
+        # Initialize Redis connection
+        await get_redis()
+        logger.info("Redis cache initialized")
+    except Exception as e:
+        logger.warning(f"Redis initialization failed: {e} - continuing without cache")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Movie Data Analysis Pipeline API...")
+    await close_redis()
+    logger.info("Redis cache closed")
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -25,7 +48,8 @@ app = FastAPI(
     description="Lambda Architecture Serving Layer - Goal-Aligned Endpoints",
     version="2.0.0",
     docs_url="/api/v1/docs",
-    redoc_url="/api/v1/redoc"
+    redoc_url="/api/v1/redoc",
+    lifespan=lifespan
 )
 
 # CORS middleware

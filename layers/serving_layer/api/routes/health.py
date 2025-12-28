@@ -9,9 +9,10 @@ import logging
 import asyncio
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-import redis
+import redis.asyncio as aioredis
 import requests
 import os
+import socket
 
 router = APIRouter(
     prefix="/health",
@@ -48,6 +49,7 @@ class HealthChecker:
             return {
                 "status": "healthy",
                 "response_time_ms": round(response_time, 2),
+                "status_code": 200,
                 "collections_count": len(collections),
                 "data_size_mb": round(stats.get('dataSize', 0) / 1024 / 1024, 2),
                 "storage_size_mb": round(stats.get('storageSize', 0) / 1024 / 1024, 2)
@@ -66,35 +68,193 @@ class HealthChecker:
             }
     
     @staticmethod
-    async def check_redis(host: str = None, port: int = 6379) -> Dict:
-        """Check Redis connection and metrics"""
+    async def check_postgres(host: str = None, port: int = 5432, 
+                            user: str = None, password: str = None, 
+                            database: str = None) -> Dict:
+        """Check PostgreSQL connection"""
         if host is None:
-            host = os.getenv('REDIS_HOST', 'serving-redis')
+            host = os.getenv('POSTGRES_HOST', 'batch-postgres')
+        if user is None:
+            user = os.getenv('POSTGRES_USER', 'airflow')
+        if password is None:
+            password = os.getenv('POSTGRES_PASSWORD', 'airflow')
+        if database is None:
+            database = os.getenv('POSTGRES_DB', 'airflow')
         
         try:
-            r = redis.Redis(host=host, port=port, socket_timeout=5, decode_responses=True)
+            import psycopg2
             
-            # Measure ping time
             start_time = datetime.now()
-            r.ping()
+            conn = psycopg2.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=database,
+                connect_timeout=5
+            )
+            cur = conn.cursor()
+            cur.execute('SELECT version();')
+            version = cur.fetchone()[0]
             response_time = (datetime.now() - start_time).total_seconds() * 1000
             
-            info = r.info()
+            # Get database stats
+            cur.execute('SELECT pg_database_size(current_database());')
+            db_size = cur.fetchone()[0]
             
-            r.close()
+            cur.close()
+            conn.close()
             
             return {
                 "status": "healthy",
                 "response_time_ms": round(response_time, 2),
+                "status_code": 200,
+                "version": version.split(',')[0].replace('PostgreSQL ', ''),
+                "database_size_mb": round(db_size / 1024 / 1024, 2)
+            }
+        except ImportError:
+            logger.warning("psycopg2 not installed, using TCP check for PostgreSQL")
+            return await HealthChecker.check_tcp_port(host, port, "PostgreSQL")
+        except Exception as e:
+            logger.error(f"PostgreSQL health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    
+    @staticmethod
+    async def check_cassandra(hosts: list = None, port: int = 9042, keyspace: str = None) -> Dict:
+        """Check Cassandra connection"""
+        if hosts is None:
+            hosts = [os.getenv('CASSANDRA_HOST', 'speed-cassandra')]
+        if keyspace is None:
+            keyspace = os.getenv('CASSANDRA_KEYSPACE', 'speed_layer')
+        
+        try:
+            from cassandra.cluster import Cluster
+            from cassandra.policies import RoundRobinPolicy
+            
+            start_time = datetime.now()
+            cluster = Cluster(
+                hosts,
+                port=port,
+                load_balancing_policy=RoundRobinPolicy(),
+                connect_timeout=5
+            )
+            session = cluster.connect()
+            
+            # Query cluster metadata
+            result = session.execute("SELECT release_version FROM system.local")
+            version = result.one()[0]
+            
+            # Check if keyspace exists
+            keyspaces = session.execute("SELECT keyspace_name FROM system_schema.keyspaces")
+            keyspace_names = [row.keyspace_name for row in keyspaces]
+            keyspace_exists = keyspace in keyspace_names
+            
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            cluster.shutdown()
+            
+            return {
+                "status": "healthy",
+                "response_time_ms": round(response_time, 2),
+                "status_code": 200,
+                "version": version,
+                "keyspace": keyspace,
+                "keyspace_exists": keyspace_exists
+            }
+        except ImportError:
+            logger.warning("cassandra-driver not installed, using TCP check for Cassandra")
+            return await HealthChecker.check_tcp_port(hosts[0] if hosts else 'speed-cassandra', port, "Cassandra")
+        except Exception as e:
+            logger.error(f"Cassandra health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    
+    @staticmethod
+    async def check_tcp_port(host: str, port: int, service_name: str = None, timeout: int = 5) -> Dict:
+        """Generic TCP port connectivity check"""
+        try:
+            start_time = datetime.now()
+            
+            # Use asyncio for non-blocking socket connection
+            loop = asyncio.get_event_loop()
+            future = loop.run_in_executor(None, socket.create_connection, (host, port), timeout)
+            sock = await asyncio.wait_for(future, timeout=timeout)
+            
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+            sock.close()
+            
+            return {
+                "status": "healthy",
+                "response_time_ms": round(response_time, 2),
+                "status_code": 200,
+                "note": f"TCP port {port} is open"
+            }
+        except asyncio.TimeoutError:
+            return {
+                "status": "unhealthy",
+                "error": f"Connection timeout to {host}:{port}"
+            }
+        except Exception as e:
+            logger.error(f"TCP health check failed for {service_name or host}:{port} - {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    
+    @staticmethod
+    async def check_redis(host: str = None, port: int = 6379) -> Dict:
+        """Check Redis connection and metrics using async client"""
+        if host is None:
+            host = os.getenv('REDIS_HOST', 'serving-redis')
+        
+        try:
+            # Create async Redis client
+            redis_url = f"redis://{host}:{port}/0"
+            client = aioredis.from_url(
+                redis_url,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                decode_responses=True
+            )
+            
+            # Measure ping time
+            start_time = datetime.now()
+            await client.ping()
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            # Get server info
+            info = await client.info()
+            stats = await client.info('stats')
+            
+            # Calculate hit rate
+            hits = stats.get('keyspace_hits', 0)
+            misses = stats.get('keyspace_misses', 0)
+            total_requests = hits + misses
+            hit_rate = round((hits / total_requests * 100) if total_requests > 0 else 0, 2)
+            
+            await client.close()
+            
+            return {
+                "status": "healthy",
+                "response_time_ms": round(response_time, 2),
+                "status_code": 200,
                 "used_memory_mb": round(info.get('used_memory', 0) / 1024 / 1024, 2),
                 "connected_clients": info.get('connected_clients', 0),
-                "uptime_hours": round(info.get('uptime_in_seconds', 0) / 3600, 1)
+                "uptime_hours": round(info.get('uptime_in_seconds', 0) / 3600, 1),
+                "hit_rate_percent": hit_rate,
+                "version": info.get('redis_version', 'unknown')
             }
-        except redis.ConnectionError as e:
+        except aioredis.ConnectionError as e:
             logger.error(f"Redis health check failed: {e}")
             return {
                 "status": "unhealthy",
-                "error": "Connection failed"
+                "error": "Connection failed",
+                "message": str(e)
             }
         except Exception as e:
             logger.error(f"Redis health check error: {e}")
@@ -104,11 +264,11 @@ class HealthChecker:
             }
     
     @staticmethod
-    async def check_http_service(url: str, timeout: int = 5) -> Dict:
+    async def check_http_service(url: str, timeout: int = 5, auth: tuple = None) -> Dict:
         """Generic HTTP health check for web services"""
         try:
             start_time = datetime.now()
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout, auth=auth)
             response_time = (datetime.now() - start_time).total_seconds() * 1000
             
             return {
@@ -222,7 +382,7 @@ async def system_health_overview():
         checker.check_redis(),
         checker.check_http_service("http://serving-prometheus:9090/-/healthy"),
         checker.check_http_service("http://serving-grafana:3000/api/health"),
-        checker.check_http_service("http://serving-mongo-express:8081"),
+        checker.check_http_service("http://serving-mongo-express:8081", auth=("admin", "admin")),
         return_exceptions=True
     )
     
@@ -237,14 +397,79 @@ async def system_health_overview():
     mongo_express_check = safe_check(mongo_express_check)
     
     # Check batch layer services
-    minio_check, airflow_check = await asyncio.gather(
+    minio_check, postgres_check, airflow_check, airflow_scheduler_check = await asyncio.gather(
         checker.check_http_service("http://batch-minio:9000/minio/health/live"),
+        checker.check_postgres(),
         checker.check_http_service("http://batch-airflow-webserver:8080/health"),
+        checker.check_tcp_port("batch-airflow-scheduler", 8793, "Airflow Scheduler"),
         return_exceptions=True
     )
     
     minio_check = safe_check(minio_check)
+    postgres_check = safe_check(postgres_check)
     airflow_check = safe_check(airflow_check)
+    airflow_scheduler_check = safe_check(airflow_scheduler_check)
+    
+    # Check speed layer infrastructure
+    zookeeper_check, schema_registry_check, cassandra_check = await asyncio.gather(
+        checker.check_tcp_port("speed-zookeeper", 2181, "Zookeeper"),
+        checker.check_http_service("http://speed-schema-registry:8081/"),
+        checker.check_cassandra(),
+        return_exceptions=True
+    )
+    
+    zookeeper_check = safe_check(zookeeper_check)
+    schema_registry_check = safe_check(schema_registry_check)
+    cassandra_check = safe_check(cassandra_check)
+    
+    # Check Kafka brokers via TCP
+    kafka1_check, kafka2_check, kafka3_check = await asyncio.gather(
+        checker.check_tcp_port("speed-kafka-1", 29092, "Kafka Broker 1"),
+        checker.check_tcp_port("speed-kafka-2", 29092, "Kafka Broker 2"),
+        checker.check_tcp_port("speed-kafka-3", 29092, "Kafka Broker 3"),
+        return_exceptions=True
+    )
+    
+    kafka1_check = safe_check(kafka1_check)
+    kafka2_check = safe_check(kafka2_check)
+    kafka3_check = safe_check(kafka3_check)
+    
+    # Check speed layer processing services
+    # Note: Some services are pure Python scripts without HTTP endpoints
+    # Only Spark-based jobs expose port 4040
+    sentiment_stream_check, = await asyncio.gather(
+        # Sentiment stream has Spark UI on port 4040
+        checker.check_tcp_port("speed-reddit-sentiment-stream", 4040, "Sentiment Stream Spark UI"),
+        return_exceptions=True
+    )
+    
+    # For services without HTTP endpoints, we'll check their dependencies as a proxy
+    # Reddit producer: Plain Python script (no Spark, no HTTP) - check Kafka connectivity as proxy
+    # Cassandra sync: Plain Python script - check Cassandra connectivity (already done)
+    # PySpark runner: Job-based service - may not always be running, mark as degraded
+    
+    # PySpark runner is a job executor that may not be actively running
+    pyspark_runner_check = {
+        "status": "degraded" if postgres_check.get("status") == "healthy" else "unknown",
+        "note": "⚠️ Job-based service - runs on demand. Cannot directly monitor without health endpoint. PostgreSQL is " + postgres_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or check job execution logs."
+    }
+    
+    # For reddit producer and cassandra sync: mark as degraded if Kafka/Cassandra are healthy
+    # This is an indirect health check - better than hardcoded "healthy"
+    reddit_producer_check = {
+        "status": "degraded" if kafka1_check.get("status") == "healthy" else "unknown",
+        "note": "⚠️ Cannot directly monitor - no health endpoint. Kafka is " + kafka1_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or mount Docker socket for container health checks."
+    }
+    
+    cassandra_sync_check = {
+        "status": "degraded" if cassandra_check.get("status") == "healthy" else "unknown",
+        "note": "⚠️ Cannot directly monitor - no health endpoint. Cassandra is " + cassandra_check.get("status", "unknown") + ". Recommend: Add HTTP health endpoint or mount Docker socket for container health checks."
+    }
+    
+    reddit_producer_check = safe_check(reddit_producer_check)
+    sentiment_stream_check = safe_check(sentiment_stream_check)
+    cassandra_sync_check = safe_check(cassandra_sync_check)
+    pyspark_runner_check = safe_check(pyspark_runner_check)
     
     # Build layer status
     serving_layer = {
@@ -253,27 +478,27 @@ async def system_health_overview():
         "prometheus": prometheus_check,
         "grafana": grafana_check,
         "mongo_express": mongo_express_check,
-        "api": {"status": "healthy", "note": "Self-check"}
+        "api": {"status": "healthy", "status_code": 200, "note": "Self-check"}
     }
     
     batch_layer = {
         "minio": minio_check,
-        "postgres": {"status": "unknown", "note": "No HTTP health endpoint"},
+        "postgres": postgres_check,
         "airflow_webserver": airflow_check,
-        "airflow_scheduler": {"status": "unknown", "note": "No direct health endpoint"},
-        "pyspark_runner": {"status": "unknown", "note": "Job-based service"}
+        "airflow_scheduler": airflow_scheduler_check,
+        "pyspark_runner": pyspark_runner_check
     }
     
     speed_layer = {
-        "zookeeper": {"status": "unknown", "note": "No HTTP health endpoint"},
-        "kafka_broker_1": {"status": "unknown", "note": "Requires JMX exporter"},
-        "kafka_broker_2": {"status": "unknown", "note": "Requires JMX exporter"},
-        "kafka_broker_3": {"status": "unknown", "note": "Requires JMX exporter"},
-        "schema_registry": {"status": "unknown", "note": "No health check implemented"},
-        "cassandra": {"status": "unknown", "note": "Requires cassandra-driver"},
-        "reddit_producer": {"status": "unknown", "note": "No health check implemented"},
-        "sentiment_stream": {"status": "unknown", "note": "No health check implemented"},
-        "cassandra_sync": {"status": "unknown", "note": "No health check implemented"}
+        "zookeeper": zookeeper_check,
+        "kafka_broker_1": kafka1_check,
+        "kafka_broker_2": kafka2_check,
+        "kafka_broker_3": kafka3_check,
+        "schema_registry": schema_registry_check,
+        "cassandra": cassandra_check,
+        "reddit_producer": reddit_producer_check,
+        "sentiment_stream": sentiment_stream_check,
+        "cassandra_sync": cassandra_sync_check
     }
     
     # Calculate layer health

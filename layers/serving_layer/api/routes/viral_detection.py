@@ -24,6 +24,7 @@ from api.schemas.viral_detection import (
     MarketingOpportunity,
     OpportunityFactors
 )
+from query_engine.cache import cached
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,7 @@ async def get_viral_score(movie_id: int):
         )
 
 @router.get("/thresholds")
+@cached(ttl=1800, prefix="viral-detection")  # Cache for 30 minutes
 async def get_viral_thresholds(
     genre: Optional[str] = Query(None, description="Filter by genre"),
     budget_tier: Optional[str] = Query(None, description="Filter by budget tier"),

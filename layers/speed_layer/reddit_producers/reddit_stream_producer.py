@@ -285,6 +285,42 @@ class RedditStreamProducer:
             poll_interval: Seconds between polls (default: 30)
         """
         logger.info(f"Starting Reddit stream with {poll_interval}s poll interval")
+        
+        try:
+            while True:
+                cycle_start = time.time()
+                
+                # Fetch new data
+                posts = self.fetch_new_posts()
+                comments = self.fetch_new_comments()
+                
+                # Publish to Kafka
+                if posts or comments:
+                    self.publish_to_kafka(posts, comments)
+                else:
+                    logger.info("No new posts or comments in this cycle")
+                
+                # Clean up old seen IDs (keep last 10,000)
+                if len(self.seen_posts) > 10000:
+                    self.seen_posts = set(list(self.seen_posts)[-10000:])
+                if len(self.seen_comments) > 10000:
+                    self.seen_comments = set(list(self.seen_comments)[-10000:])
+                
+                # Wait for next cycle
+                cycle_duration = time.time() - cycle_start
+                sleep_time = max(0, poll_interval - cycle_duration)
+                
+                if sleep_time > 0:
+                    logger.info(f"Cycle completed in {cycle_duration:.2f}s. Sleeping {sleep_time:.2f}s until next poll")
+                    time.sleep(sleep_time)
+                else:
+                    logger.warning(f"Cycle took {cycle_duration:.2f}s (longer than {poll_interval}s interval)")
+                
+        except KeyboardInterrupt:
+            logger.info("Shutting down Reddit stream producer...")
+        finally:
+            self.producer.close()
+            logger.info("Producer closed")
 
 
 def main():

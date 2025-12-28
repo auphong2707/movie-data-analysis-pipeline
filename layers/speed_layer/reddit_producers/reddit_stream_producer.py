@@ -285,8 +285,6 @@ class RedditStreamProducer:
             poll_interval: Seconds between polls (default: 30)
         """
         logger.info(f"Starting Reddit stream with {poll_interval}s poll interval")
-        
-ư
 
 
 def main():
